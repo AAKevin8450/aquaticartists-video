@@ -8,7 +8,7 @@ from app.utils.formatters import format_timestamp, format_analysis_type
 bp = Blueprint('history', __name__, url_prefix='/api/history')
 
 
-@bp.route('', methods=['GET'])
+@bp.route('/', methods=['GET'])
 def list_jobs():
     """
     List analysis jobs with optional filters.

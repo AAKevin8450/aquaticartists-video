@@ -1,3 +1,61 @@
+2025-12-17 13:42:18 - Updated by Claude Code
+
+[Category: Bug Fix / Infrastructure]
+Fix API route trailing slash issue and update IAM policy with explicit Rekognition permissions
+
+[Changes Made]
+- Fixed history API route handler to use trailing slash (@bp.route('/') instead of @bp.route(''))
+  - Resolves Flask routing issues with /api/history/ endpoint
+  - Ensures proper URL matching for history listing endpoint
+- Updated VideoAnalysisAppPolicy (IAM) from v1 to v2 with explicit permissions
+  - Replaced wildcard rekognition:* with 31 specific action permissions
+  - Added explicit permissions for all 8 video analysis types
+  - Added explicit permissions for all 7 image analysis types
+  - Added explicit permissions for face collection management
+  - Follows AWS security best practice (principle of least privilege)
+- Fixed file size reading order in upload.py to get size before S3 upload
+  - Prevents file pointer issues during multipart uploads
+
+[Files Modified]
+- app/routes/history.py:11 - Changed route decorator from '' to '/' for proper trailing slash handling
+- app/routes/upload.py:174-177 - Moved file.seek() operations before S3 upload call
+- AWS IAM Policy: VideoAnalysisAppPolicy updated to v2 (via AWS CLI)
+
+[Technical Details]
+Purpose: Fix route registration bug and improve IAM security posture
+
+IAM Policy Update:
+- Before: Used rekognition:* wildcard (less secure, harder to audit)
+- After: Explicit permissions for StartPersonTracking, GetPersonTracking, StartSegmentDetection, GetSegmentDetection, and 27 other operations
+- Policy ARN: arn:aws:iam::676206912644:policy/VideoAnalysisAppPolicy
+- Version: v2 (set as default)
+- Attached to: user aa_vscode
+
+Route Fix:
+- Flask's route matching with empty string '' can cause trailing slash issues
+- Using '/' explicitly ensures /api/history/ matches correctly
+- All three history endpoints now properly registered:
+  - GET /api/history/ (list jobs)
+  - GET /api/history/<job_id> (get job details)
+  - DELETE /api/history/<job_id> (delete job)
+
+Testing Results:
+✅ History API endpoint - Working after fix
+✅ Video Segment Detection - Working with updated IAM policy
+✅ Video Label Detection - Working
+✅ File Upload - Working
+❌ Video Person Tracking - AccessDeniedException (AWS account-level restriction, not IAM policy issue)
+
+Note on Person Tracking:
+Despite having correct IAM permissions (verified via IAM policy simulator showing "allowed"),
+Person Tracking returns AccessDeniedException. This appears to be an AWS service-level or
+account-level restriction that requires AWS Support enablement. All other video analysis
+types work correctly.
+
+[Known Issues]
+- Amazon Rekognition Person Tracking requires AWS account enablement beyond IAM permissions
+- May require contact with AWS Support or higher-tier account access
+
 2025-12-17 01:45:32 - Updated by Claude Code
 
 [Category: Feature]

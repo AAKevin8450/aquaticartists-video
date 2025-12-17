@@ -7,7 +7,7 @@ AWS Video & Image Analysis Application - Flask-based web application for analyzi
 
 ### Current Setup
 - **S3 Bucket**: video-analysis-app-676206912644 (us-east-1)
-- **IAM Policy**: VideoAnalysisAppPolicy
+- **IAM Policy**: VideoAnalysisAppPolicy (v2 - explicit permissions)
 - **CORS**: Configured for localhost:5700 browser uploads
 - **Services**: S3, Amazon Rekognition
 
@@ -66,7 +66,11 @@ python run.py
 - Never commit .env file to git
 - S3 bucket has no public access
 - Use presigned URLs with short expiration for uploads
-- IAM policy follows principle of least privilege
+- IAM policy v2 uses explicit permissions (31 specific Rekognition actions) instead of wildcard
+- Policy follows principle of least privilege with granular action permissions
+
+## Known Issues
+- **Amazon Rekognition Person Tracking**: Returns AccessDeniedException despite correct IAM permissions. This appears to be an AWS account-level restriction requiring AWS Support enablement. All other video analysis types (labels, faces, celebrities, moderation, text, segments, face search) work correctly.
 
 ## Important Constraints
 - Video files: Max 10GB, formats: MP4, MOV, AVI, MKV

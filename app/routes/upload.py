@@ -171,14 +171,14 @@ def upload_file_direct():
         safe_filename = sanitize_filename(file.filename)
         s3_key = f"uploads/{uuid.uuid4()}/{safe_filename}"
 
+        # Get file size BEFORE uploading
+        file.seek(0, 2)  # Seek to end
+        size_bytes = file.tell()
+        file.seek(0)  # Reset to beginning for upload
+
         # Upload to S3
         s3_service = get_s3_service(current_app)
         s3_service.upload_file(file, s3_key, file.content_type)
-
-        # Get file size
-        file.seek(0, 2)  # Seek to end
-        size_bytes = file.tell()
-        file.seek(0)  # Reset
 
         # Record in database
         db = get_db()
