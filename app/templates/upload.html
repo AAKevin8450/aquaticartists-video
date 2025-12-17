@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Files - AWS Video & Image Analysis{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="bi bi-cloud-upload"></i> Upload Files
+        </h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-8 mx-auto">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Upload Video or Image Files</h5>
+            </div>
+            <div class="card-body">
+                <div id="uploadForm">
+                    <!-- File Type Selection -->
+                    <div class="mb-4">
+                        <label class="form-label fw-bold">Select File Type:</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="fileType" id="videoType" value="video" checked>
+                            <label class="btn btn-outline-primary" for="videoType">
+                                <i class="bi bi-play-circle"></i> Video
+                            </label>
+
+                            <input type="radio" class="btn-check" name="fileType" id="imageType" value="image">
+                            <label class="btn btn-outline-success" for="imageType">
+                                <i class="bi bi-image"></i> Image
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- File Selection -->
+                    <div class="mb-4">
+                        <label for="fileInput" class="form-label fw-bold">Choose File:</label>
+                        <input type="file" class="form-control" id="fileInput" accept="video/*,image/*">
+                        <div class="form-text">
+                            <strong>Video:</strong> MP4, MOV, AVI, MKV (Max 10GB)<br>
+                            <strong>Image:</strong> JPEG, PNG (Max 15MB)
+                        </div>
+                    </div>
+
+                    <!-- Upload Progress -->
+                    <div id="uploadProgress" class="mb-3" style="display: none;">
+                        <div class="progress">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                 id="progressBar"
+                                 role="progressbar"
+                                 style="width: 0%">0%</div>
+                        </div>
+                        <small id="uploadStatus" class="text-muted"></small>
+                    </div>
+
+                    <!-- Upload Button -->
+                    <div class="d-grid gap-2">
+                        <button type="button" class="btn btn-primary btn-lg" id="uploadBtn">
+                            <i class="bi bi-cloud-upload"></i> Upload File
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent Uploads -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="bi bi-clock-history"></i> Recent Uploads
+                </h5>
+            </div>
+            <div class="card-body">
+                <div id="recentUploads" class="list-group">
+                    <p class="text-muted">No recent uploads</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module">
+    import { showAlert } from '{{ url_for('static', filename='js/utils.js') }}';
+
+    const fileInput = document.getElementById('fileInput');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const uploadProgress = document.getElementById('uploadProgress');
+    const progressBar = document.getElementById('progressBar');
+    const uploadStatus = document.getElementById('uploadStatus');
+    const videoTypeRadio = document.getElementById('videoType');
+    const imageTypeRadio = document.getElementById('imageType');
+
+    // Update file input accept attribute based on selected type
+    document.querySelectorAll('input[name="fileType"]').forEach(radio => {
+        radio.addEventListener('change', (e) => {
+            if (e.target.value === 'video') {
+                fileInput.accept = 'video/mp4,video/quicktime,video/x-msvideo,video/x-matroska';
+            } else {
+                fileInput.accept = 'image/jpeg,image/png';
+            }
+            fileInput.value = '';
+        });
+    });
+
+    uploadBtn.addEventListener('click', async () => {
+        const file = fileInput.files[0];
+        if (!file) {
+            showAlert('Please select a file', 'warning');
+            return;
+        }
+
+        const fileType = document.querySelector('input[name="fileType"]:checked').value;
+
+        // Validate file type
+        if (fileType === 'video') {
+            if (!file.type.startsWith('video/')) {
+                showAlert('Please select a valid video file', 'danger');
+                return;
+            }
+            if (file.size > 10 * 1024 * 1024 * 1024) { // 10GB
+                showAlert('Video file size must be less than 10GB', 'danger');
+                return;
+            }
+        } else {
+            if (!file.type.startsWith('image/')) {
+                showAlert('Please select a valid image file', 'danger');
+                return;
+            }
+            if (file.size > 15 * 1024 * 1024) { // 15MB
+                showAlert('Image file size must be less than 15MB', 'danger');
+                return;
+            }
+        }
+
+        try {
+            uploadBtn.disabled = true;
+            uploadProgress.style.display = 'block';
+            uploadStatus.textContent = 'Requesting upload URL...';
+
+            // Request presigned URL
+            const response = await fetch('/api/upload/presigned-url', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    filename: file.name,
+                    file_type: fileType
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to get upload URL');
+            }
+
+            const data = await response.json();
+            uploadStatus.textContent = 'Uploading to S3...';
+
+            // Upload to S3
+            const uploadResponse = await fetch(data.upload_url, {
+                method: 'PUT',
+                body: file,
+                headers: {
+                    'Content-Type': file.type
+                }
+            });
+
+            if (!uploadResponse.ok) {
+                throw new Error('Failed to upload file to S3');
+            }
+
+            progressBar.style.width = '100%';
+            progressBar.textContent = '100%';
+            uploadStatus.textContent = 'Upload complete!';
+
+            showAlert(`File "${file.name}" uploaded successfully!`, 'success');
+
+            // Reset form
+            setTimeout(() => {
+                fileInput.value = '';
+                uploadProgress.style.display = 'none';
+                progressBar.style.width = '0%';
+                progressBar.textContent = '0%';
+                uploadBtn.disabled = false;
+                loadRecentUploads();
+            }, 2000);
+
+        } catch (error) {
+            console.error('Upload error:', error);
+            showAlert(`Upload failed: ${error.message}`, 'danger');
+            uploadBtn.disabled = false;
+            uploadProgress.style.display = 'none';
+        }
+    });
+
+    // Load recent uploads
+    async function loadRecentUploads() {
+        try {
+            const response = await fetch('/api/files?limit=5');
+            if (!response.ok) return;
+
+            const files = await response.json();
+            const container = document.getElementById('recentUploads');
+
+            if (files.length === 0) {
+                container.innerHTML = '<p class="text-muted">No recent uploads</p>';
+                return;
+            }
+
+            container.innerHTML = files.map(file => `
+                <div class="list-group-item">
+                    <div class="d-flex w-100 justify-content-between">
+                        <h6 class="mb-1">${file.filename}</h6>
+                        <small class="text-muted">${file.file_type}</small>
+                    </div>
+                    <small class="text-muted">${file.uploaded_at}</small>
+                </div>
+            `).join('');
+        } catch (error) {
+            console.error('Failed to load recent uploads:', error);
+        }
+    }
+
+    // Load on page load
+    loadRecentUploads();
+</script>
+{% endblock %}

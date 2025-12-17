@@ -1,0 +1,404 @@
+{% extends "base.html" %}
+
+{% block title %}Face Collections - AWS Video & Image Analysis{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="bi bi-people"></i> Face Collections
+        </h1>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-8">
+        <!-- Create Collection -->
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">
+                    <i class="bi bi-plus-circle"></i> Create New Collection
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="input-group">
+                    <input type="text" class="form-control" id="newCollectionId" placeholder="Enter collection ID (e.g., my-faces)">
+                    <button class="btn btn-primary" type="button" id="createCollectionBtn">
+                        <i class="bi bi-plus"></i> Create
+                    </button>
+                </div>
+                <small class="form-text text-muted">
+                    Collection ID must be alphanumeric with hyphens, underscores, or periods.
+                </small>
+            </div>
+        </div>
+
+        <!-- Collections List -->
+        <div class="card">
+            <div class="card-header">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="bi bi-list"></i> Your Collections
+                    </h5>
+                    <button class="btn btn-sm btn-secondary" id="refreshBtn">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="collectionsContainer">
+                    <div class="text-center">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <!-- Info Card -->
+        <div class="card mb-4">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0">
+                    <i class="bi bi-info-circle"></i> About Face Collections
+                </h5>
+            </div>
+            <div class="card-body">
+                <p class="small">
+                    Face collections allow you to store and search for faces using Amazon Rekognition.
+                </p>
+                <h6>How it works:</h6>
+                <ol class="small">
+                    <li>Create a collection</li>
+                    <li>Index faces from images</li>
+                    <li>Search for faces in videos/images</li>
+                </ol>
+                <hr>
+                <p class="small text-muted">
+                    Collections are stored in AWS and can be used for face search operations.
+                </p>
+            </div>
+        </div>
+
+        <!-- Add Face to Collection -->
+        <div class="card" id="addFaceCard" style="display: none;">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0">
+                    <i class="bi bi-person-plus"></i> Add Face
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">Collection:</label>
+                    <input type="text" class="form-control" id="selectedCollection" readonly>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Select Image:</label>
+                    <select class="form-select" id="imageFileSelect">
+                        <option value="">-- Select image --</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">External Image ID (optional):</label>
+                    <input type="text" class="form-control" id="externalImageId" placeholder="e.g., person-name">
+                </div>
+                <div class="d-grid">
+                    <button class="btn btn-success" id="indexFaceBtn">
+                        <i class="bi bi-plus-circle"></i> Index Face
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Collection Details Modal -->
+<div class="modal fade" id="collectionModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Collection Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="collectionModalBody">
+                <div class="text-center">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module">
+    import { showAlert } from '{{ url_for('static', filename='js/utils.js') }}';
+
+    const collectionsContainer = document.getElementById('collectionsContainer');
+    const createCollectionBtn = document.getElementById('createCollectionBtn');
+    const newCollectionId = document.getElementById('newCollectionId');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const addFaceCard = document.getElementById('addFaceCard');
+    const selectedCollection = document.getElementById('selectedCollection');
+    const imageFileSelect = document.getElementById('imageFileSelect');
+    const indexFaceBtn = document.getElementById('indexFaceBtn');
+
+    let currentCollectionId = null;
+
+    // Load collections
+    async function loadCollections() {
+        try {
+            collectionsContainer.innerHTML = '<div class="text-center"><div class="spinner-border" role="status"></div></div>';
+
+            const response = await fetch('/api/collections');
+            if (!response.ok) throw new Error('Failed to load collections');
+
+            const collections = await response.json();
+
+            if (collections.length === 0) {
+                collectionsContainer.innerHTML = '<p class="text-muted">No collections yet. Create one to get started!</p>';
+                return;
+            }
+
+            collectionsContainer.innerHTML = collections.map(col => `
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h5 class="mb-1">${col.collection_id}</h5>
+                                <small class="text-muted">
+                                    Faces: ${col.face_count || 0} | Created: ${col.created_at || 'N/A'}
+                                </small>
+                            </div>
+                            <div>
+                                <button class="btn btn-sm btn-success add-face-btn" data-collection="${col.collection_id}">
+                                    <i class="bi bi-person-plus"></i> Add Face
+                                </button>
+                                <button class="btn btn-sm btn-info view-faces-btn" data-collection="${col.collection_id}">
+                                    <i class="bi bi-eye"></i> View
+                                </button>
+                                <button class="btn btn-sm btn-danger delete-collection-btn" data-collection="${col.collection_id}">
+                                    <i class="bi bi-trash"></i> Delete
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            // Attach event listeners
+            document.querySelectorAll('.add-face-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    currentCollectionId = e.target.closest('button').dataset.collection;
+                    selectedCollection.value = currentCollectionId;
+                    await loadImageFiles();
+                    addFaceCard.style.display = 'block';
+                    addFaceCard.scrollIntoView({ behavior: 'smooth' });
+                });
+            });
+
+            document.querySelectorAll('.view-faces-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const collectionId = e.target.closest('button').dataset.collection;
+                    viewCollectionDetails(collectionId);
+                });
+            });
+
+            document.querySelectorAll('.delete-collection-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const collectionId = e.target.closest('button').dataset.collection;
+                    if (confirm(`Delete collection "${collectionId}"?`)) {
+                        await deleteCollection(collectionId);
+                    }
+                });
+            });
+
+        } catch (error) {
+            console.error('Failed to load collections:', error);
+            collectionsContainer.innerHTML = '<p class="text-danger">Failed to load collections</p>';
+        }
+    }
+
+    // Create collection
+    createCollectionBtn.addEventListener('click', async () => {
+        const collectionId = newCollectionId.value.trim();
+        if (!collectionId) {
+            showAlert('Please enter a collection ID', 'warning');
+            return;
+        }
+
+        try {
+            createCollectionBtn.disabled = true;
+            const response = await fetch('/api/collections/create', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ collection_id: collectionId })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to create collection');
+            }
+
+            showAlert(`Collection "${collectionId}" created successfully!`, 'success');
+            newCollectionId.value = '';
+            await loadCollections();
+
+        } catch (error) {
+            console.error('Failed to create collection:', error);
+            showAlert(`Failed to create collection: ${error.message}`, 'danger');
+        } finally {
+            createCollectionBtn.disabled = false;
+        }
+    });
+
+    // Delete collection
+    async function deleteCollection(collectionId) {
+        try {
+            const response = await fetch(`/api/collections/${collectionId}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to delete collection');
+            }
+
+            showAlert(`Collection "${collectionId}" deleted successfully!`, 'success');
+            await loadCollections();
+
+        } catch (error) {
+            console.error('Failed to delete collection:', error);
+            showAlert(`Failed to delete collection: ${error.message}`, 'danger');
+        }
+    }
+
+    // Load image files for indexing
+    async function loadImageFiles() {
+        try {
+            const response = await fetch('/api/files?file_type=image&limit=100');
+            if (!response.ok) throw new Error('Failed to load images');
+
+            const files = await response.json();
+            imageFileSelect.innerHTML = '<option value="">-- Select image --</option>';
+            files.forEach(file => {
+                imageFileSelect.innerHTML += `<option value="${file.id}">${file.filename}</option>`;
+            });
+        } catch (error) {
+            console.error('Failed to load images:', error);
+            showAlert('Failed to load image files', 'warning');
+        }
+    }
+
+    // Index face
+    indexFaceBtn.addEventListener('click', async () => {
+        const fileId = imageFileSelect.value;
+        const externalImageId = document.getElementById('externalImageId').value.trim();
+
+        if (!fileId) {
+            showAlert('Please select an image file', 'warning');
+            return;
+        }
+
+        try {
+            indexFaceBtn.disabled = true;
+            indexFaceBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Indexing...';
+
+            const payload = {
+                collection_id: currentCollectionId,
+                file_id: parseInt(fileId)
+            };
+
+            if (externalImageId) {
+                payload.external_image_id = externalImageId;
+            }
+
+            const response = await fetch('/api/collections/index-face', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to index face');
+            }
+
+            const result = await response.json();
+            showAlert(`Face indexed successfully! ${result.faces_indexed || 0} face(s) added.`, 'success');
+            imageFileSelect.value = '';
+            document.getElementById('externalImageId').value = '';
+            await loadCollections();
+
+        } catch (error) {
+            console.error('Failed to index face:', error);
+            showAlert(`Failed to index face: ${error.message}`, 'danger');
+        } finally {
+            indexFaceBtn.disabled = false;
+            indexFaceBtn.innerHTML = '<i class="bi bi-plus-circle"></i> Index Face';
+        }
+    });
+
+    // View collection details
+    async function viewCollectionDetails(collectionId) {
+        const modal = new bootstrap.Modal(document.getElementById('collectionModal'));
+        const modalBody = document.getElementById('collectionModalBody');
+        modal.show();
+
+        try {
+            modalBody.innerHTML = '<div class="text-center"><div class="spinner-border" role="status"></div></div>';
+
+            const response = await fetch(`/api/collections/${collectionId}/faces`);
+            if (!response.ok) throw new Error('Failed to load faces');
+
+            const faces = await response.json();
+
+            if (faces.length === 0) {
+                modalBody.innerHTML = '<p class="text-muted">No faces in this collection yet.</p>';
+                return;
+            }
+
+            modalBody.innerHTML = `
+                <h6>Collection: ${collectionId}</h6>
+                <p>Total faces: ${faces.length}</p>
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Face ID</th>
+                                <th>External ID</th>
+                                <th>Confidence</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${faces.map(face => `
+                                <tr>
+                                    <td><code>${face.face_id}</code></td>
+                                    <td>${face.external_image_id || 'N/A'}</td>
+                                    <td>${face.confidence ? face.confidence.toFixed(2) + '%' : 'N/A'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        } catch (error) {
+            console.error('Failed to load collection details:', error);
+            modalBody.innerHTML = '<p class="text-danger">Failed to load collection details</p>';
+        }
+    }
+
+    // Refresh button
+    refreshBtn.addEventListener('click', loadCollections);
+
+    // Load collections on page load
+    loadCollections();
+</script>
+{% endblock %}

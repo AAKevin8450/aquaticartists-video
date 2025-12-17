@@ -1,0 +1,395 @@
+{% extends "base.html" %}
+
+{% block title %}Job History - AWS Video & Image Analysis{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="bi bi-clock-history"></i> Job History
+        </h1>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-danger" role="alert">
+    <i class="bi bi-exclamation-triangle"></i> Error: {{ error }}
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-12">
+        <!-- Filters -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label">Status:</label>
+                        <select class="form-select" id="statusFilter">
+                            <option value="">All Statuses</option>
+                            <option value="IN_PROGRESS">In Progress</option>
+                            <option value="COMPLETED">Completed</option>
+                            <option value="FAILED">Failed</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Analysis Type:</label>
+                        <select class="form-select" id="typeFilter">
+                            <option value="">All Types</option>
+                            <option value="label_detection">Label Detection</option>
+                            <option value="face_detection">Face Detection</option>
+                            <option value="celebrity_recognition">Celebrity Recognition</option>
+                            <option value="content_moderation">Content Moderation</option>
+                            <option value="text_detection">Text Detection</option>
+                            <option value="person_tracking">Person Tracking</option>
+                            <option value="face_search">Face Search</option>
+                            <option value="shot_segmentation">Shot Segmentation</option>
+                            <option value="ppe_detection">PPE Detection</option>
+                            <option value="face_comparison">Face Comparison</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">&nbsp;</label>
+                        <div class="d-grid">
+                            <button class="btn btn-primary" id="applyFiltersBtn">
+                                <i class="bi bi-funnel"></i> Apply Filters
+                            </button>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">&nbsp;</label>
+                        <div class="d-grid">
+                            <button class="btn btn-secondary" id="refreshBtn">
+                                <i class="bi bi-arrow-clockwise"></i> Refresh
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Jobs List -->
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Analysis Jobs</h5>
+            </div>
+            <div class="card-body">
+                <div id="jobsContainer">
+                    {% if jobs %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Job ID</th>
+                                    <th>File</th>
+                                    <th>Analysis Type</th>
+                                    <th>Status</th>
+                                    <th>Created</th>
+                                    <th>Updated</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="jobsTableBody">
+                                {% for job in jobs %}
+                                <tr>
+                                    <td><code>{{ job.id }}</code></td>
+                                    <td>{{ job.file_id }}</td>
+                                    <td>{{ job.analysis_type }}</td>
+                                    <td>
+                                        <span class="badge {% if job.status == 'COMPLETED' %}bg-success{% elif job.status == 'FAILED' %}bg-danger{% elif job.status == 'IN_PROGRESS' %}bg-warning{% else %}bg-secondary{% endif %}">
+                                            {{ job.status }}
+                                        </span>
+                                    </td>
+                                    <td>{{ job.created_at }}</td>
+                                    <td>{{ job.updated_at }}</td>
+                                    <td>
+                                        {% if job.status == 'COMPLETED' %}
+                                        <button class="btn btn-sm btn-info view-results-btn" data-job-id="{{ job.id }}">
+                                            <i class="bi bi-eye"></i> View
+                                        </button>
+                                        {% elif job.status == 'IN_PROGRESS' %}
+                                        <button class="btn btn-sm btn-warning check-status-btn" data-job-id="{{ job.id }}">
+                                            <i class="bi bi-arrow-clockwise"></i> Check
+                                        </button>
+                                        {% endif %}
+                                        <button class="btn btn-sm btn-danger delete-job-btn" data-job-id="{{ job.id }}">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p class="text-muted">No analysis jobs yet. Start by analyzing a video or image!</p>
+                    <div class="mt-3">
+                        <a href="/video-analysis" class="btn btn-primary me-2">
+                            <i class="bi bi-play-circle"></i> Video Analysis
+                        </a>
+                        <a href="/image-analysis" class="btn btn-success">
+                            <i class="bi bi-image"></i> Image Analysis
+                        </a>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Results Modal -->
+<div class="modal fade" id="resultsModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Analysis Results</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="resultsModalBody">
+                <div class="text-center">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <button type="button" class="btn btn-primary" id="downloadResultsBtn">
+                    <i class="bi bi-download"></i> Download JSON
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module">
+    import { showAlert } from '{{ url_for('static', filename='js/utils.js') }}';
+
+    let currentJobResults = null;
+
+    // Attach event listeners to dynamically loaded content
+    function attachEventListeners() {
+        document.querySelectorAll('.view-results-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const jobId = e.target.closest('button').dataset.jobId;
+                viewResults(jobId);
+            });
+        });
+
+        document.querySelectorAll('.check-status-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const jobId = e.target.closest('button').dataset.jobId;
+                await checkJobStatus(jobId);
+            });
+        });
+
+        document.querySelectorAll('.delete-job-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const jobId = e.target.closest('button').dataset.jobId;
+                if (confirm('Delete this job and its results?')) {
+                    await deleteJob(jobId);
+                }
+            });
+        });
+    }
+
+    // View results
+    async function viewResults(jobId) {
+        const modal = new bootstrap.Modal(document.getElementById('resultsModal'));
+        const modalBody = document.getElementById('resultsModalBody');
+        modal.show();
+
+        try {
+            modalBody.innerHTML = '<div class="text-center"><div class="spinner-border" role="status"></div></div>';
+
+            const response = await fetch(`/api/analysis/results/${jobId}`);
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to load results');
+            }
+
+            const results = await response.json();
+            currentJobResults = results;
+
+            // Format and display results
+            modalBody.innerHTML = `
+                <div class="mb-3">
+                    <h6>Job ID: <code>${jobId}</code></h6>
+                    <p><strong>Status:</strong> <span class="badge bg-success">${results.status}</span></p>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">Results Data</h6>
+                    </div>
+                    <div class="card-body">
+                        <pre class="bg-light p-3 rounded" style="max-height: 500px; overflow-y: auto;">${JSON.stringify(results.results, null, 2)}</pre>
+                    </div>
+                </div>
+            `;
+        } catch (error) {
+            console.error('Failed to load results:', error);
+            modalBody.innerHTML = `<div class="alert alert-danger">Failed to load results: ${error.message}</div>`;
+        }
+    }
+
+    // Check job status
+    async function checkJobStatus(jobId) {
+        try {
+            const response = await fetch(`/api/analysis/video/status/${jobId}`);
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to check status');
+            }
+
+            const status = await response.json();
+            showAlert(`Job ${jobId} status: ${status.status}`, 'info');
+
+            if (status.status === 'COMPLETED' || status.status === 'FAILED') {
+                await loadJobs();
+            }
+        } catch (error) {
+            console.error('Failed to check status:', error);
+            showAlert(`Failed to check status: ${error.message}`, 'danger');
+        }
+    }
+
+    // Delete job
+    async function deleteJob(jobId) {
+        try {
+            const response = await fetch(`/api/analysis/jobs/${jobId}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to delete job');
+            }
+
+            showAlert('Job deleted successfully', 'success');
+            await loadJobs();
+        } catch (error) {
+            console.error('Failed to delete job:', error);
+            showAlert(`Failed to delete job: ${error.message}`, 'danger');
+        }
+    }
+
+    // Load jobs with filters
+    async function loadJobs() {
+        try {
+            const statusFilter = document.getElementById('statusFilter').value;
+            const typeFilter = document.getElementById('typeFilter').value;
+
+            let url = '/api/analysis/jobs?limit=100';
+            if (statusFilter) url += `&status=${statusFilter}`;
+            if (typeFilter) url += `&analysis_type=${typeFilter}`;
+
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Failed to load jobs');
+
+            const jobs = await response.json();
+            displayJobs(jobs);
+        } catch (error) {
+            console.error('Failed to load jobs:', error);
+            showAlert('Failed to load jobs', 'danger');
+        }
+    }
+
+    // Display jobs
+    function displayJobs(jobs) {
+        const container = document.getElementById('jobsContainer');
+
+        if (jobs.length === 0) {
+            container.innerHTML = `
+                <p class="text-muted">No jobs found matching your filters.</p>
+                <div class="mt-3">
+                    <a href="/video-analysis" class="btn btn-primary me-2">
+                        <i class="bi bi-play-circle"></i> Video Analysis
+                    </a>
+                    <a href="/image-analysis" class="btn btn-success">
+                        <i class="bi bi-image"></i> Image Analysis
+                    </a>
+                </div>
+            `;
+            return;
+        }
+
+        const tableBody = jobs.map(job => `
+            <tr>
+                <td><code>${job.id}</code></td>
+                <td>${job.file_id}</td>
+                <td>${job.analysis_type}</td>
+                <td>
+                    <span class="badge ${job.status === 'COMPLETED' ? 'bg-success' : job.status === 'FAILED' ? 'bg-danger' : job.status === 'IN_PROGRESS' ? 'bg-warning' : 'bg-secondary'}">
+                        ${job.status}
+                    </span>
+                </td>
+                <td>${job.created_at}</td>
+                <td>${job.updated_at}</td>
+                <td>
+                    ${job.status === 'COMPLETED' ? `
+                        <button class="btn btn-sm btn-info view-results-btn" data-job-id="${job.id}">
+                            <i class="bi bi-eye"></i> View
+                        </button>
+                    ` : job.status === 'IN_PROGRESS' ? `
+                        <button class="btn btn-sm btn-warning check-status-btn" data-job-id="${job.id}">
+                            <i class="bi bi-arrow-clockwise"></i> Check
+                        </button>
+                    ` : ''}
+                    <button class="btn btn-sm btn-danger delete-job-btn" data-job-id="${job.id}">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+
+        container.innerHTML = `
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>Job ID</th>
+                            <th>File</th>
+                            <th>Analysis Type</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Updated</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tableBody}
+                    </tbody>
+                </table>
+            </div>
+        `;
+
+        attachEventListeners();
+    }
+
+    // Download results
+    document.getElementById('downloadResultsBtn').addEventListener('click', () => {
+        if (!currentJobResults) return;
+
+        const dataStr = JSON.stringify(currentJobResults, null, 2);
+        const dataBlob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(dataBlob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `job-${currentJobResults.job_id}-results.json`;
+        link.click();
+        URL.revokeObjectURL(url);
+    });
+
+    // Apply filters
+    document.getElementById('applyFiltersBtn').addEventListener('click', loadJobs);
+
+    // Refresh
+    document.getElementById('refreshBtn').addEventListener('click', loadJobs);
+
+    // Attach event listeners on page load
+    attachEventListeners();
+</script>
+{% endblock %}

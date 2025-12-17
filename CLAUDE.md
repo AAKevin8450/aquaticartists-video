@@ -35,6 +35,20 @@ Critical environment variables are stored in .env file (not in git):
 3. **Rekognition Image** (app/services/rekognition_image.py) - Sync image analysis
 4. **Face Collections** (app/services/face_collection_service.py) - Face management
 
+### Frontend Components
+**Templates** (app/templates/):
+- index.html - Landing page with feature overview
+- upload.html - File upload with drag-and-drop and presigned URL support
+- video_analysis.html - Video analysis results with job status tracking
+- image_analysis.html - Image analysis results display
+- collections.html - Face collection management interface
+- history.html - Upload history with filterable table
+- base.html - Base template with navigation and common layout
+
+**Static Assets**:
+- app/static/css/style.css - Application-wide styling with Bootstrap 5 integration
+- app/static/js/utils.js - Shared JavaScript utilities for AJAX and API interactions
+
 ### Running the Application
 ```bash
 cd E:\coding\video

@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+
+{% block title %}Video Analysis - AWS Video & Image Analysis{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="bi bi-play-circle"></i> Video Analysis
+        </h1>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-danger" role="alert">
+    <i class="bi bi-exclamation-triangle"></i> Error: {{ error }}
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-lg-8">
+        <!-- Video File Selection -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Select Video File</h5>
+            </div>
+            <div class="card-body">
+                {% if files %}
+                <select class="form-select" id="videoFileSelect">
+                    <option value="">-- Select a video file --</option>
+                    {% for file in files %}
+                    <option value="{{ file.id }}">{{ file.filename }} ({{ file.uploaded_at }})</option>
+                    {% endfor %}
+                </select>
+                {% else %}
+                <p class="text-muted">No video files uploaded yet.</p>
+                <a href="/upload" class="btn btn-primary">
+                    <i class="bi bi-cloud-upload"></i> Upload Video
+                </a>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Analysis Type Selection -->
+        <div class="card mb-4" id="analysisTypeCard" style="display: none;">
+            <div class="card-header">
+                <h5 class="mb-0">Select Analysis Type</h5>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="analysisType" id="labelDetection" value="label_detection" checked>
+                            <label class="form-check-label" for="labelDetection">
+                                <strong>Label Detection</strong><br>
+                                <small class="text-muted">Identify objects, activities, and scenes</small>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="analysisType" id="faceDetection" value="face_detection">
+                            <label class="form-check-label" for="faceDetection">
+                                <strong>Face Detection</strong><br>
+                                <small class="text-muted">Detect faces and attributes</small>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="analysisType" id="celebrityRecognition" value="celebrity_recognition">
+                            <label class="form-check-label" for="celebrityRecognition">
+                                <strong>Celebrity Recognition</strong><br>
+                                <small class="text-muted">Identify celebrities</small>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="analysisType" id="contentModeration" value="content_moderation">
+                            <label class="form-check-label" for="contentModeration">
+                                <strong>Content Moderation</strong><br>
+                                <small class="text-muted">Detect inappropriate content</small>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="analysisType" id="textDetection" value="text_detection">
+                            <label class="form-check-label" for="textDetection">
+                                <strong>Text Detection</strong><br>
+                                <small class="text-muted">Detect and extract text</small>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="analysisType" id="personTracking" value="person_tracking">
+                            <label class="form-check-label" for="personTracking">
+                                <strong>Person Tracking</strong><br>
+                                <small class="text-muted">Track people in video</small>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="analysisType" id="faceSearch" value="face_search">
+                            <label class="form-check-label" for="faceSearch">
+                                <strong>Face Search</strong><br>
+                                <small class="text-muted">Search faces in collection</small>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="analysisType" id="shotSegmentation" value="shot_segmentation">
+                            <label class="form-check-label" for="shotSegmentation">
+                                <strong>Shot/Segment Detection</strong><br>
+                                <small class="text-muted">Detect scene changes</small>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Collection Selection (for face search) -->
+        <div class="card mb-4" id="collectionCard" style="display: none;">
+            <div class="card-header">
+                <h5 class="mb-0">Select Face Collection</h5>
+            </div>
+            <div class="card-body">
+                <select class="form-select" id="collectionSelect">
+                    <option value="">-- Select a collection --</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Start Analysis Button -->
+        <div class="d-grid gap-2" id="startAnalysisBtn" style="display: none;">
+            <button type="button" class="btn btn-primary btn-lg" id="analyzeBtn">
+                <i class="bi bi-play-circle"></i> Start Analysis
+            </button>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <!-- Info Card -->
+        <div class="card">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0">
+                    <i class="bi bi-info-circle"></i> Information
+                </h5>
+            </div>
+            <div class="card-body">
+                <h6>Video Analysis Types:</h6>
+                <ul class="small">
+                    <li><strong>Label Detection:</strong> Identifies objects, activities, concepts</li>
+                    <li><strong>Face Detection:</strong> Detects faces and facial attributes</li>
+                    <li><strong>Celebrity Recognition:</strong> Identifies famous people</li>
+                    <li><strong>Content Moderation:</strong> Flags inappropriate content</li>
+                    <li><strong>Text Detection:</strong> Extracts text from video</li>
+                    <li><strong>Person Tracking:</strong> Tracks people across frames</li>
+                    <li><strong>Face Search:</strong> Matches faces with collection</li>
+                    <li><strong>Shot Segmentation:</strong> Identifies scene boundaries</li>
+                </ul>
+                <hr>
+                <p class="small text-muted">
+                    Analysis jobs run asynchronously and may take several minutes to complete.
+                    Check the <a href="/history">History</a> page for results.
+                </p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module">
+    import { showAlert } from '{{ url_for('static', filename='js/utils.js') }}';
+
+    const videoFileSelect = document.getElementById('videoFileSelect');
+    const analysisTypeCard = document.getElementById('analysisTypeCard');
+    const collectionCard = document.getElementById('collectionCard');
+    const startAnalysisBtn = document.getElementById('startAnalysisBtn');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    const collectionSelect = document.getElementById('collectionSelect');
+
+    // Show analysis type card when video is selected
+    if (videoFileSelect) {
+        videoFileSelect.addEventListener('change', () => {
+            if (videoFileSelect.value) {
+                analysisTypeCard.style.display = 'block';
+                startAnalysisBtn.style.display = 'block';
+            } else {
+                analysisTypeCard.style.display = 'none';
+                collectionCard.style.display = 'none';
+                startAnalysisBtn.style.display = 'none';
+            }
+        });
+    }
+
+    // Show collection card for face search
+    document.querySelectorAll('input[name="analysisType"]').forEach(radio => {
+        radio.addEventListener('change', async (e) => {
+            if (e.target.value === 'face_search') {
+                await loadCollections();
+                collectionCard.style.display = 'block';
+            } else {
+                collectionCard.style.display = 'none';
+            }
+        });
+    });
+
+    // Load face collections
+    async function loadCollections() {
+        try {
+            const response = await fetch('/api/collections');
+            if (!response.ok) throw new Error('Failed to load collections');
+
+            const collections = await response.json();
+            collectionSelect.innerHTML = '<option value="">-- Select a collection --</option>';
+            collections.forEach(col => {
+                collectionSelect.innerHTML += `<option value="${col.collection_id}">${col.collection_id}</option>`;
+            });
+        } catch (error) {
+            console.error('Failed to load collections:', error);
+            showAlert('Failed to load face collections', 'warning');
+        }
+    }
+
+    // Start analysis
+    if (analyzeBtn) {
+        analyzeBtn.addEventListener('click', async () => {
+            const fileId = videoFileSelect.value;
+            const analysisType = document.querySelector('input[name="analysisType"]:checked').value;
+
+            if (!fileId) {
+                showAlert('Please select a video file', 'warning');
+                return;
+            }
+
+            const payload = {
+                file_id: parseInt(fileId),
+                analysis_type: analysisType
+            };
+
+            // Add collection ID for face search
+            if (analysisType === 'face_search') {
+                const collectionId = collectionSelect.value;
+                if (!collectionId) {
+                    showAlert('Please select a face collection', 'warning');
+                    return;
+                }
+                payload.collection_id = collectionId;
+            }
+
+            try {
+                analyzeBtn.disabled = true;
+                analyzeBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Starting...';
+
+                const response = await fetch('/api/analysis/video/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to start analysis');
+                }
+
+                const result = await response.json();
+                showAlert(`Analysis started successfully! Job ID: ${result.job_id}`, 'success');
+
+                // Redirect to history page after 2 seconds
+                setTimeout(() => {
+                    window.location.href = '/history';
+                }, 2000);
+
+            } catch (error) {
+                console.error('Analysis error:', error);
+                showAlert(`Failed to start analysis: ${error.message}`, 'danger');
+                analyzeBtn.disabled = false;
+                analyzeBtn.innerHTML = '<i class="bi bi-play-circle"></i> Start Analysis';
+            }
+        });
+    }
+</script>
+{% endblock %}
