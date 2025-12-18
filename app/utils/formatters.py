@@ -1,29 +1,54 @@
 """
 Formatting utilities for display and conversion.
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Any
 
+# Try to import zoneinfo, fall back to manual offset if not available
+try:
+    from zoneinfo import ZoneInfo
+    ZONEINFO_AVAILABLE = True
+except ImportError:
+    ZONEINFO_AVAILABLE = False
 
-def format_timestamp(timestamp: Optional[str]) -> str:
+
+def format_timestamp(timestamp: Optional[str], timezone: str = 'America/New_York') -> str:
     """
-    Format ISO timestamp to human-readable string.
+    Format ISO timestamp to human-readable string in specified timezone.
 
     Args:
-        timestamp: ISO format timestamp string
+        timestamp: ISO format timestamp string (UTC)
+        timezone: Target timezone (default: Eastern Time)
 
     Returns:
-        Formatted timestamp string
+        Formatted timestamp string in ET with timezone indicator
     """
     if not timestamp:
         return 'N/A'
 
     try:
-        # Parse ISO format
-        dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-        # Format as: "2024-01-15 14:30:45"
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
-    except (ValueError, AttributeError):
+        # Parse ISO format (assume UTC if no timezone specified)
+        if isinstance(timestamp, str):
+            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+        else:
+            dt = timestamp
+
+        # Convert to Eastern Time
+        if ZONEINFO_AVAILABLE:
+            try:
+                et_tz = ZoneInfo(timezone)
+                dt_et = dt.astimezone(et_tz)
+                return dt_et.strftime('%Y-%m-%d %H:%M:%S ET')
+            except Exception:
+                # Fallback if timezone not found
+                pass
+
+        # Fallback: Manual EST offset (UTC-5)
+        # Note: This doesn't handle DST automatically
+        dt_et = dt - timedelta(hours=5)
+        return dt_et.strftime('%Y-%m-%d %H:%M:%S ET')
+
+    except (ValueError, AttributeError) as e:
         # If parsing fails, return original
         return str(timestamp)
 

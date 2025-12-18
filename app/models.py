@@ -101,6 +101,7 @@ class AnalysisType:
     IMAGE_LABELS = 'image_labels'
     IMAGE_FACES = 'image_faces'
     IMAGE_FACE_COMPARE = 'image_face_compare'
+    IMAGE_FACE_SEARCH = 'image_face_search'
     IMAGE_CELEBRITIES = 'image_celebrities'
     IMAGE_MODERATION = 'image_moderation'
     IMAGE_TEXT = 'image_text'

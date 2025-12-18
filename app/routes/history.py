@@ -1,9 +1,10 @@
 """
 History routes for viewing past analysis jobs.
 """
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, send_file
 from app.database import get_db
 from app.utils.formatters import format_timestamp, format_analysis_type
+from app.utils.excel_exporter import export_to_excel
 
 bp = Blueprint('history', __name__, url_prefix='/api/history')
 
@@ -16,6 +17,7 @@ def list_jobs():
     Query parameters:
         - file_id: Filter by file ID
         - status: Filter by job status
+        - analysis_type: Filter by analysis type
         - limit: Maximum number of jobs (default 100)
         - offset: Pagination offset (default 0)
 
@@ -28,11 +30,12 @@ def list_jobs():
     try:
         file_id = request.args.get('file_id', type=int)
         status = request.args.get('status')
+        analysis_type = request.args.get('analysis_type')
         limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))
 
         db = get_db()
-        jobs = db.list_jobs(file_id=file_id, status=status, limit=limit, offset=offset)
+        jobs = db.list_jobs(file_id=file_id, status=status, analysis_type=analysis_type, limit=limit, offset=offset)
 
         # Format job data
         formatted_jobs = []
@@ -130,3 +133,60 @@ def delete_job(job_id):
     except Exception as e:
         current_app.logger.error(f"Delete job error: {e}")
         return jsonify({'error': 'Failed to delete job'}), 500
+
+
+@bp.route('/<job_id>/download', methods=['GET'])
+def download_job_results(job_id):
+    """
+    Download job results in specified format.
+
+    Query parameters:
+        - format: 'json' or 'excel' (default: 'json')
+
+    Returns:
+        File download (JSON or Excel)
+    """
+    try:
+        format_type = request.args.get('format', 'json').lower()
+
+        db = get_db()
+        job = db.get_job(job_id)
+
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        # Get associated file info
+        file = db.get_file(job['file_id'])
+
+        job_data = {
+            'job_id': job['job_id'],
+            'file_id': job['file_id'],
+            'file_name': file['filename'] if file else 'Unknown',
+            'analysis_type': job['analysis_type'],
+            'analysis_type_display': format_analysis_type(job['analysis_type']),
+            'status': job['status'],
+            'parameters': job.get('parameters'),
+            'results': job.get('results'),
+            'error_message': job.get('error_message'),
+            'started_at': format_timestamp(job['started_at']),
+            'completed_at': format_timestamp(job['completed_at'])
+        }
+
+        if format_type == 'excel':
+            # Generate Excel file
+            excel_file = export_to_excel(job_data)
+            filename = f"job-{job_id}-results.xlsx"
+
+            return send_file(
+                excel_file,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                as_attachment=True,
+                download_name=filename
+            )
+        else:
+            # Return JSON
+            return jsonify(job_data), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Download job results error: {e}")
+        return jsonify({'error': f'Failed to download results: {str(e)}'}), 500

@@ -34,7 +34,7 @@ class S3Service:
     def generate_presigned_post(self, filename: str, content_type: str,
                                max_size_mb: int = 100) -> Dict[str, Any]:
         """
-        Generate presigned POST data for direct browser-to-S3 upload.
+        Generate presigned PUT URL for direct browser-to-S3 upload.
 
         Args:
             filename: Original filename
@@ -42,37 +42,31 @@ class S3Service:
             max_size_mb: Maximum file size in MB
 
         Returns:
-            Dictionary with 'url', 'fields', and 's3_key'
+            Dictionary with 'upload_url' and 's3_key'
         """
         # Generate unique S3 key
         file_ext = Path(filename).suffix
         safe_filename = secure_filename(filename)
         s3_key = f"uploads/{uuid.uuid4()}/{safe_filename}"
 
-        # Define upload conditions
-        conditions = [
-            {"bucket": self.bucket_name},
-            {"key": s3_key},
-            {"Content-Type": content_type},
-            ["content-length-range", 0, max_size_mb * 1024 * 1024]
-        ]
-
         try:
-            response = self.s3_client.generate_presigned_post(
-                Bucket=self.bucket_name,
-                Key=s3_key,
-                Fields={"Content-Type": content_type},
-                Conditions=conditions,
+            # Generate presigned URL for PUT operation
+            upload_url = self.s3_client.generate_presigned_url(
+                'put_object',
+                Params={
+                    'Bucket': self.bucket_name,
+                    'Key': s3_key,
+                    'ContentType': content_type
+                },
                 ExpiresIn=3600  # 1 hour expiration
             )
 
             return {
-                'url': response['url'],
-                'fields': response['fields'],
+                'upload_url': upload_url,
                 's3_key': s3_key
             }
         except ClientError as e:
-            raise S3Error(f"Failed to generate presigned POST: {e}")
+            raise S3Error(f"Failed to generate presigned URL: {e}")
 
     def upload_file(self, file_obj, s3_key: str, content_type: str) -> bool:
         """

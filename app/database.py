@@ -197,7 +197,7 @@ class Database:
                 ''', (status, job_id))
 
     def list_jobs(self, file_id: Optional[int] = None, status: Optional[str] = None,
-                  limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+                  analysis_type: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """List jobs with optional filters."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
@@ -210,6 +210,9 @@ class Database:
             if status:
                 query += ' AND status = ?'
                 params.append(status)
+            if analysis_type:
+                query += ' AND analysis_type = ?'
+                params.append(analysis_type)
 
             query += ' ORDER BY started_at DESC LIMIT ? OFFSET ?'
             params.extend([limit, offset])
