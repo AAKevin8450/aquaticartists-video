@@ -86,6 +86,29 @@ class Database:
                 )
             ''')
 
+            # Transcripts table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS transcripts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT UNIQUE NOT NULL,
+                    file_size_bytes INTEGER NOT NULL,
+                    file_modified_time FLOAT NOT NULL,
+                    duration_seconds FLOAT,
+                    language TEXT,
+                    model_used TEXT NOT NULL,
+                    transcript_text TEXT,
+                    transcript_segments JSON,
+                    word_timestamps JSON,
+                    confidence_score FLOAT,
+                    processing_time_seconds FLOAT,
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    metadata JSON
+                )
+            ''')
+
             # Create indexes for better query performance
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_files_type
@@ -100,6 +123,11 @@ class Database:
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_jobs_file_id
                 ON analysis_jobs(file_id)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_transcripts_status
+                ON transcripts(status)
             ''')
 
     # File operations
@@ -276,6 +304,148 @@ class Database:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM face_collections WHERE collection_id = ?', (collection_id,))
             return cursor.rowcount > 0
+
+    # Transcript operations
+    def create_transcript(self, file_path: str, file_size_bytes: int, file_modified_time: float,
+                         model_used: str, metadata: Optional[Dict] = None) -> int:
+        """Create a new transcript record."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO transcripts (file_path, file_size_bytes, file_modified_time, model_used, status, metadata)
+                VALUES (?, ?, ?, ?, 'PENDING', ?)
+            ''', (file_path, file_size_bytes, file_modified_time, model_used, json.dumps(metadata or {})))
+            return cursor.lastrowid
+
+    def get_transcript(self, transcript_id: int) -> Optional[Dict[str, Any]]:
+        """Get transcript by ID."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM transcripts WHERE id = ?', (transcript_id,))
+            row = cursor.fetchone()
+            if row:
+                transcript = dict(row)
+                # Parse JSON fields
+                for field in ['transcript_segments', 'word_timestamps', 'metadata']:
+                    if transcript.get(field):
+                        transcript[field] = json.loads(transcript[field])
+                return transcript
+            return None
+
+    def get_transcript_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """Get transcript by file path."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM transcripts WHERE file_path = ?', (file_path,))
+            row = cursor.fetchone()
+            if row:
+                transcript = dict(row)
+                # Parse JSON fields
+                for field in ['transcript_segments', 'word_timestamps', 'metadata']:
+                    if transcript.get(field):
+                        transcript[field] = json.loads(transcript[field])
+                return transcript
+            return None
+
+    def get_transcript_by_file_info(self, file_path: str, file_size_bytes: int,
+                                    file_modified_time: float) -> Optional[Dict[str, Any]]:
+        """
+        Get transcript by file path and metadata.
+        Checks if file has been modified since transcription by comparing size and mtime.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM transcripts
+                WHERE file_path = ? AND file_size_bytes = ? AND file_modified_time = ?
+            ''', (file_path, file_size_bytes, file_modified_time))
+            row = cursor.fetchone()
+            if row:
+                transcript = dict(row)
+                # Parse JSON fields
+                for field in ['transcript_segments', 'word_timestamps', 'metadata']:
+                    if transcript.get(field):
+                        transcript[field] = json.loads(transcript[field])
+                return transcript
+            return None
+
+    def update_transcript_status(self, transcript_id: int, status: str,
+                                transcript_text: Optional[str] = None,
+                                transcript_segments: Optional[List] = None,
+                                word_timestamps: Optional[List] = None,
+                                duration_seconds: Optional[float] = None,
+                                language: Optional[str] = None,
+                                confidence_score: Optional[float] = None,
+                                processing_time_seconds: Optional[float] = None,
+                                error_message: Optional[str] = None):
+        """Update transcript status and results."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if status == 'COMPLETED':
+                cursor.execute('''
+                    UPDATE transcripts
+                    SET status = ?, transcript_text = ?, transcript_segments = ?,
+                        word_timestamps = ?, duration_seconds = ?, language = ?,
+                        confidence_score = ?, processing_time_seconds = ?,
+                        completed_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (status, transcript_text,
+                     json.dumps(transcript_segments) if transcript_segments else None,
+                     json.dumps(word_timestamps) if word_timestamps else None,
+                     duration_seconds, language, confidence_score,
+                     processing_time_seconds, transcript_id))
+            elif status == 'FAILED':
+                cursor.execute('''
+                    UPDATE transcripts
+                    SET status = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (status, error_message, transcript_id))
+            else:
+                cursor.execute('''
+                    UPDATE transcripts SET status = ? WHERE id = ?
+                ''', (status, transcript_id))
+
+    def list_transcripts(self, status: Optional[str] = None,
+                        limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """List transcripts with optional status filter."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if status:
+                cursor.execute('''
+                    SELECT * FROM transcripts WHERE status = ?
+                    ORDER BY created_at DESC LIMIT ? OFFSET ?
+                ''', (status, limit, offset))
+            else:
+                cursor.execute('''
+                    SELECT * FROM transcripts ORDER BY created_at DESC LIMIT ? OFFSET ?
+                ''', (limit, offset))
+
+            transcripts = []
+            for row in cursor.fetchall():
+                transcript = dict(row)
+                # Parse JSON fields
+                for field in ['transcript_segments', 'word_timestamps', 'metadata']:
+                    if transcript.get(field):
+                        transcript[field] = json.loads(transcript[field])
+                transcripts.append(transcript)
+            return transcripts
+
+    def delete_transcript(self, transcript_id: int) -> bool:
+        """Delete transcript record."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM transcripts WHERE id = ?', (transcript_id,))
+            return cursor.rowcount > 0
+
+    def count_transcripts(self, status: Optional[str] = None) -> int:
+        """Count transcripts with optional status filter."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if status:
+                cursor.execute('SELECT COUNT(*) FROM transcripts WHERE status = ?', (status,))
+            else:
+                cursor.execute('SELECT COUNT(*) FROM transcripts')
+            return cursor.fetchone()[0]
 
 
 # Global database instance (will be initialized in app factory)

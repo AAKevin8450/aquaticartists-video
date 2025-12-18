@@ -104,8 +104,11 @@
                                     <td>{{ job.completed_at or 'In Progress' }}</td>
                                     <td>
                                         {% if job.status == 'SUCCEEDED' %}
+                                        <a href="/dashboard/{{ job.job_id }}" class="btn btn-sm btn-primary">
+                                            <i class="bi bi-graph-up"></i> View
+                                        </a>
                                         <button class="btn btn-sm btn-info view-results-btn" data-job-id="{{ job.job_id }}">
-                                            <i class="bi bi-eye"></i> View
+                                            <i class="bi bi-file-earmark-code"></i> JSON
                                         </button>
                                         <div class="btn-group" role="group">
                                             <button type="button" class="btn btn-sm btn-success dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
@@ -412,8 +415,11 @@
                 <td>${job.completed_at || 'In Progress'}</td>
                 <td>
                     ${job.status === 'SUCCEEDED' ? `
+                        <a href="/dashboard/${job.job_id || job.id}" class="btn btn-sm btn-primary">
+                            <i class="bi bi-graph-up"></i> View
+                        </a>
                         <button class="btn btn-sm btn-info view-results-btn" data-job-id="${job.job_id || job.id}">
-                            <i class="bi bi-eye"></i> View
+                            <i class="bi bi-file-earmark-code"></i> JSON
                         </button>
                         <div class="btn-group" role="group">
                             <button type="button" class="btn btn-sm btn-success dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">

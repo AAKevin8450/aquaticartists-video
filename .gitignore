@@ -157,3 +157,20 @@ Thumbs.db
 videos/
 output/
 temp/
+
+# Database files
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Test files and results
+tests/
+test_results/
+
+# Sensitive configuration
+.env
+*.key
+*.pem
+credentials.json

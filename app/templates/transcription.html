@@ -1,0 +1,826 @@
+{% extends "base.html" %}
+
+{% block title %}Local Video Transcription - AWS Video & Image Analysis{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <h1 class="mb-4">
+            <i class="bi bi-mic"></i> Local Video Transcription
+        </h1>
+        <p class="text-muted">Extract speech from local video files using faster-whisper (runs completely offline)</p>
+    </div>
+</div>
+
+<!-- Directory Scanner -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-folder"></i> Scan Directory</h5>
+            </div>
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-8">
+                        <label for="directoryPath" class="form-label">Directory Path</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="directoryPath"
+                                   placeholder="E:\videos" required>
+                            <button class="btn btn-outline-secondary" type="button" id="browseBtn"
+                                    data-bs-toggle="modal" data-bs-target="#folderBrowserModal">
+                                <i class="bi bi-folder2-open"></i> Browse
+                            </button>
+                        </div>
+                        <small class="text-muted">Enter the full path or click Browse to select a folder</small>
+                    </div>
+                    <div class="col-md-4">
+                        <label for="modelSize" class="form-label">Model Size</label>
+                        <select class="form-select" id="modelSize">
+                            <option value="tiny">Tiny (fastest, lowest quality)</option>
+                            <option value="base">Base (fast)</option>
+                            <option value="small">Small (balanced)</option>
+                            <option value="medium" selected>Medium (recommended)</option>
+                            <option value="large-v2">Large-v2 (high quality)</option>
+                            <option value="large-v3">Large-v3 (best quality, slowest)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label for="language" class="form-label">Language (optional)</label>
+                        <input type="text" class="form-control" id="language"
+                               placeholder="en" maxlength="2">
+                        <small class="text-muted">2-letter code (en, es, fr) or leave blank for auto-detect</small>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="form-check mt-4">
+                            <input class="form-check-input" type="checkbox" id="recursiveScan" checked>
+                            <label class="form-check-label" for="recursiveScan">
+                                Scan subdirectories recursively
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="form-check mt-4">
+                            <input class="form-check-input" type="checkbox" id="forceReprocess">
+                            <label class="form-check-label" for="forceReprocess">
+                                Force reprocess already transcribed files
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <button class="btn btn-primary" id="scanBtn">
+                            <i class="bi bi-search"></i> Scan Directory
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Scanned Files -->
+<div class="row mb-4" id="scannedFilesSection" style="display: none;">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-file-earmark-play"></i> Scanned Files</h5>
+                <div>
+                    <button class="btn btn-sm btn-success" id="selectAllBtn">
+                        <i class="bi bi-check-all"></i> Select All
+                    </button>
+                    <button class="btn btn-sm btn-secondary" id="deselectAllBtn">
+                        <i class="bi bi-x"></i> Deselect All
+                    </button>
+                    <button class="btn btn-sm btn-primary" id="startBatchBtn">
+                        <i class="bi bi-play-fill"></i> Start Batch Transcription
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="scanResults">
+                    <p class="text-muted">No files scanned yet.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Batch Progress -->
+<div class="row mb-4" id="batchProgressSection" style="display: none;">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Batch Progress</h5>
+                <button class="btn btn-sm btn-danger" id="cancelBatchBtn">
+                    <i class="bi bi-stop-fill"></i> Cancel
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between mb-2">
+                        <span id="progressText">Processing...</span>
+                        <span id="progressPercent">0%</span>
+                    </div>
+                    <div class="progress" style="height: 25px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated"
+                             role="progressbar" id="progressBar" style="width: 0%">
+                        </div>
+                    </div>
+                </div>
+                <div class="row text-center">
+                    <div class="col-md-3">
+                        <h6>Total Files</h6>
+                        <p class="fs-4" id="totalFiles">0</p>
+                    </div>
+                    <div class="col-md-3">
+                        <h6>Completed</h6>
+                        <p class="fs-4 text-success" id="completedFiles">0</p>
+                    </div>
+                    <div class="col-md-3">
+                        <h6>Failed</h6>
+                        <p class="fs-4 text-danger" id="failedFiles">0</p>
+                    </div>
+                    <div class="col-md-3">
+                        <h6>Elapsed Time</h6>
+                        <p class="fs-4" id="elapsedTime">0s</p>
+                    </div>
+                </div>
+                <div id="currentFileContainer" style="display: none;">
+                    <hr>
+                    <p class="mb-0"><strong>Current File:</strong></p>
+                    <p class="text-muted small" id="currentFile"></p>
+                </div>
+                <div id="batchErrors" style="display: none;">
+                    <hr>
+                    <h6 class="text-danger">Errors:</h6>
+                    <ul id="errorsList" class="small"></ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Transcripts List -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="bi bi-list-ul"></i> Transcripts</h5>
+                <div>
+                    <select class="form-select form-select-sm d-inline-block w-auto" id="statusFilter">
+                        <option value="">All Status</option>
+                        <option value="PENDING">Pending</option>
+                        <option value="IN_PROGRESS">In Progress</option>
+                        <option value="COMPLETED">Completed</option>
+                        <option value="FAILED">Failed</option>
+                    </select>
+                    <button class="btn btn-sm btn-secondary" id="refreshTranscriptsBtn">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="transcriptsList">
+                    <div class="text-center">
+                        <div class="spinner-border" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- View Transcript Modal -->
+<div class="modal fade" id="viewTranscriptModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Transcript Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="transcriptModalBody">
+                <div class="text-center">
+                    <div class="spinner-border" role="status"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown">
+                        <i class="bi bi-download"></i> Download
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item download-transcript-btn" href="#" data-format="txt">
+                            <i class="bi bi-file-text"></i> Plain Text (.txt)
+                        </a></li>
+                        <li><a class="dropdown-item download-transcript-btn" href="#" data-format="json">
+                            <i class="bi bi-file-code"></i> JSON (.json)
+                        </a></li>
+                        <li><a class="dropdown-item download-transcript-btn" href="#" data-format="srt">
+                            <i class="bi bi-badge-cc"></i> SubRip (.srt)
+                        </a></li>
+                        <li><a class="dropdown-item download-transcript-btn" href="#" data-format="vtt">
+                            <i class="bi bi-badge-cc"></i> WebVTT (.vtt)
+                        </a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Folder Browser Modal -->
+<div class="modal fade" id="folderBrowserModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-folder2-open"></i> Select Folder</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Current Path Breadcrumb -->
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Current Path:</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="currentBrowsePath" readonly>
+                        <button class="btn btn-outline-secondary" type="button" id="goToPathBtn">
+                            <i class="bi bi-arrow-right"></i> Go
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Drive Selector (Windows only) -->
+                <div class="mb-3" id="driveSelector" style="display: none;">
+                    <label class="form-label fw-bold">Drives:</label>
+                    <div id="driveButtons" class="btn-group flex-wrap" role="group">
+                        <!-- Populated by JavaScript -->
+                    </div>
+                </div>
+
+                <!-- Navigation -->
+                <div class="mb-3">
+                    <button class="btn btn-sm btn-outline-secondary" id="goUpBtn" disabled>
+                        <i class="bi bi-arrow-up"></i> Parent Folder
+                    </button>
+                </div>
+
+                <!-- Folder List -->
+                <div class="border rounded" style="height: 350px; overflow-y: auto;">
+                    <div id="folderList" class="list-group list-group-flush">
+                        <div class="text-center p-4">
+                            <div class="spinner-border" role="status"></div>
+                            <p class="mt-2 mb-0">Loading folders...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="selectFolderBtn">
+                    <i class="bi bi-check-lg"></i> Select This Folder
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module">
+    import { showAlert } from '{{ url_for('static', filename='js/utils.js') }}';
+
+    let scannedFiles = [];
+    let currentBatchJobId = null;
+    let batchPollingInterval = null;
+    let currentTranscriptId = null;
+    let currentBrowsingPath = '';
+    let browserParentPath = null;
+
+    // Folder Browser Functions
+    const folderBrowserModal = document.getElementById('folderBrowserModal');
+
+    folderBrowserModal.addEventListener('show.bs.modal', () => {
+        // Start browsing from current directory path if set, otherwise default
+        const existingPath = document.getElementById('directoryPath').value.trim();
+        browseTo(existingPath || '');
+    });
+
+    async function browseTo(path) {
+        const folderList = document.getElementById('folderList');
+        folderList.innerHTML = `
+            <div class="text-center p-4">
+                <div class="spinner-border" role="status"></div>
+                <p class="mt-2 mb-0">Loading folders...</p>
+            </div>
+        `;
+
+        try {
+            const response = await fetch('/transcription/api/browse', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: path })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to browse directory');
+            }
+
+            const data = await response.json();
+            currentBrowsingPath = data.current_path;
+            browserParentPath = data.parent_path;
+
+            // Update current path display
+            document.getElementById('currentBrowsePath').value = data.current_path;
+
+            // Update parent button
+            const goUpBtn = document.getElementById('goUpBtn');
+            goUpBtn.disabled = !data.parent_path;
+
+            // Show drives on Windows
+            if (data.drives && data.drives.length > 0) {
+                document.getElementById('driveSelector').style.display = 'block';
+                const driveButtons = document.getElementById('driveButtons');
+                driveButtons.innerHTML = data.drives.map(drive =>
+                    `<button type="button" class="btn btn-sm btn-outline-primary drive-btn" data-path="${drive}">
+                        <i class="bi bi-hdd"></i> ${drive}
+                    </button>`
+                ).join('');
+
+                // Add click handlers for drives
+                driveButtons.querySelectorAll('.drive-btn').forEach(btn => {
+                    btn.addEventListener('click', () => browseTo(btn.dataset.path));
+                });
+            } else {
+                document.getElementById('driveSelector').style.display = 'none';
+            }
+
+            // Display folders
+            if (data.directories.length === 0) {
+                folderList.innerHTML = `
+                    <div class="list-group-item text-muted text-center">
+                        <i class="bi bi-folder-x"></i> No subfolders found
+                    </div>
+                `;
+            } else {
+                folderList.innerHTML = data.directories.map(dir =>
+                    `<button type="button" class="list-group-item list-group-item-action folder-item" data-path="${dir.path}">
+                        <i class="bi bi-folder-fill text-warning"></i> ${dir.name}
+                    </button>`
+                ).join('');
+
+                // Add double-click to navigate
+                folderList.querySelectorAll('.folder-item').forEach(item => {
+                    item.addEventListener('dblclick', () => browseTo(item.dataset.path));
+                    item.addEventListener('click', () => {
+                        // Single click selects the folder
+                        folderList.querySelectorAll('.folder-item').forEach(i => i.classList.remove('active'));
+                        item.classList.add('active');
+                        currentBrowsingPath = item.dataset.path;
+                        document.getElementById('currentBrowsePath').value = item.dataset.path;
+                    });
+                });
+            }
+
+        } catch (error) {
+            console.error('Browse error:', error);
+            folderList.innerHTML = `
+                <div class="list-group-item text-danger text-center">
+                    <i class="bi bi-exclamation-triangle"></i> ${error.message}
+                </div>
+            `;
+        }
+    }
+
+    // Go up to parent folder
+    document.getElementById('goUpBtn').addEventListener('click', () => {
+        if (browserParentPath) {
+            browseTo(browserParentPath);
+        }
+    });
+
+    // Go to typed path
+    document.getElementById('goToPathBtn').addEventListener('click', () => {
+        const path = document.getElementById('currentBrowsePath').value.trim();
+        if (path) {
+            browseTo(path);
+        }
+    });
+
+    // Allow editing path and pressing Enter
+    document.getElementById('currentBrowsePath').removeAttribute('readonly');
+    document.getElementById('currentBrowsePath').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            browseTo(e.target.value.trim());
+        }
+    });
+
+    // Select folder button
+    document.getElementById('selectFolderBtn').addEventListener('click', () => {
+        if (currentBrowsingPath) {
+            document.getElementById('directoryPath').value = currentBrowsingPath;
+            bootstrap.Modal.getInstance(folderBrowserModal).hide();
+            showAlert(`Selected folder: ${currentBrowsingPath}`, 'success');
+        }
+    });
+
+    // Scan directory
+    document.getElementById('scanBtn').addEventListener('click', async () => {
+        const directoryPath = document.getElementById('directoryPath').value.trim();
+        const recursive = document.getElementById('recursiveScan').checked;
+
+        if (!directoryPath) {
+            showAlert('Please enter a directory path', 'warning');
+            return;
+        }
+
+        try {
+            showAlert('Scanning directory...', 'info');
+
+            const response = await fetch('/transcription/api/scan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ directory_path: directoryPath, recursive })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to scan directory');
+            }
+
+            const data = await response.json();
+            scannedFiles = data.files;
+
+            displayScannedFiles(data);
+            showAlert(`Found ${data.total_count} video files (${data.already_transcribed_count} already transcribed)`, 'success');
+
+        } catch (error) {
+            console.error('Scan error:', error);
+            showAlert(`Failed to scan directory: ${error.message}`, 'danger');
+        }
+    });
+
+    // Display scanned files
+    function displayScannedFiles(data) {
+        const container = document.getElementById('scanResults');
+        const section = document.getElementById('scannedFilesSection');
+
+        if (data.files.length === 0) {
+            container.innerHTML = '<p class="text-muted">No video files found in the specified directory.</p>';
+            section.style.display = 'block';
+            return;
+        }
+
+        const filesList = data.files.map((file, index) => `
+            <div class="form-check">
+                <input class="form-check-input file-checkbox" type="checkbox"
+                       value="${index}" id="file${index}"
+                       ${!file.already_transcribed ? 'checked' : ''}>
+                <label class="form-check-label d-flex justify-content-between align-items-center w-100" for="file${index}">
+                    <span>
+                        <i class="bi bi-file-earmark-play"></i> ${file.filename}
+                        ${file.already_transcribed ? '<span class="badge bg-success ms-2">Transcribed</span>' : ''}
+                    </span>
+                    <span class="text-muted small">${formatFileSize(file.size_bytes)}</span>
+                </label>
+            </div>
+        `).join('');
+
+        container.innerHTML = `
+            <div class="mb-3">
+                <p><strong>Total:</strong> ${data.total_count} files |
+                   <strong>Already Transcribed:</strong> ${data.already_transcribed_count} |
+                   <strong>New:</strong> ${data.total_count - data.already_transcribed_count}</p>
+            </div>
+            <div style="max-height: 400px; overflow-y: auto;">
+                ${filesList}
+            </div>
+        `;
+
+        section.style.display = 'block';
+    }
+
+    // Select/Deselect all
+    document.getElementById('selectAllBtn').addEventListener('click', () => {
+        document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = true);
+    });
+
+    document.getElementById('deselectAllBtn').addEventListener('click', () => {
+        document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = false);
+    });
+
+    // Start batch transcription
+    document.getElementById('startBatchBtn').addEventListener('click', async () => {
+        const selectedIndexes = Array.from(document.querySelectorAll('.file-checkbox:checked'))
+            .map(cb => parseInt(cb.value));
+
+        if (selectedIndexes.length === 0) {
+            showAlert('Please select at least one file', 'warning');
+            return;
+        }
+
+        const selectedFiles = selectedIndexes.map(i => scannedFiles[i].path);
+        const language = document.getElementById('language').value.trim() || null;
+        const force = document.getElementById('forceReprocess').checked;
+        const modelSize = document.getElementById('modelSize').value;
+
+        try {
+            showAlert(`Starting batch transcription of ${selectedFiles.length} files...`, 'info');
+
+            const response = await fetch('/transcription/api/start-batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file_paths: selectedFiles, language, force, model_size: modelSize })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to start batch');
+            }
+
+            const data = await response.json();
+            currentBatchJobId = data.job_id;
+
+            document.getElementById('batchProgressSection').style.display = 'block';
+            showAlert('Batch transcription started', 'success');
+
+            // Start polling
+            startBatchPolling();
+
+        } catch (error) {
+            console.error('Start batch error:', error);
+            showAlert(`Failed to start batch: ${error.message}`, 'danger');
+        }
+    });
+
+    // Batch polling
+    function startBatchPolling() {
+        if (batchPollingInterval) clearInterval(batchPollingInterval);
+
+        batchPollingInterval = setInterval(async () => {
+            if (!currentBatchJobId) {
+                clearInterval(batchPollingInterval);
+                return;
+            }
+
+            try {
+                const response = await fetch(`/transcription/api/batch-status/${currentBatchJobId}`);
+                if (!response.ok) throw new Error('Failed to get status');
+
+                const status = await response.json();
+                updateBatchProgress(status);
+
+                if (status.status === 'COMPLETED' || status.status === 'CANCELLED' || status.status === 'FAILED') {
+                    clearInterval(batchPollingInterval);
+                    currentBatchJobId = null;
+                    loadTranscripts();
+                }
+
+            } catch (error) {
+                console.error('Polling error:', error);
+            }
+        }, 2000);
+    }
+
+    // Update batch progress
+    function updateBatchProgress(status) {
+        document.getElementById('totalFiles').textContent = status.total_files;
+        document.getElementById('completedFiles').textContent = status.completed_files;
+        document.getElementById('failedFiles').textContent = status.failed_files;
+        document.getElementById('progressPercent').textContent = `${status.progress_percent.toFixed(1)}%`;
+        document.getElementById('progressBar').style.width = `${status.progress_percent}%`;
+
+        if (status.elapsed_time) {
+            document.getElementById('elapsedTime').textContent = `${status.elapsed_time.toFixed(1)}s`;
+        }
+
+        if (status.current_file) {
+            document.getElementById('currentFileContainer').style.display = 'block';
+            document.getElementById('currentFile').textContent = status.current_file;
+        } else {
+            document.getElementById('currentFileContainer').style.display = 'none';
+        }
+
+        if (status.errors && status.errors.length > 0) {
+            document.getElementById('batchErrors').style.display = 'block';
+            const errorsList = document.getElementById('errorsList');
+            errorsList.innerHTML = status.errors.map(e =>
+                `<li><strong>${e.file_path}:</strong> ${e.error}</li>`
+            ).join('');
+        }
+
+        document.getElementById('progressText').textContent =
+            `Processing (${status.completed_files + status.failed_files}/${status.total_files})`;
+    }
+
+    // Cancel batch
+    document.getElementById('cancelBatchBtn').addEventListener('click', async () => {
+        if (!currentBatchJobId) return;
+
+        if (!confirm('Cancel batch transcription?')) return;
+
+        try {
+            const response = await fetch(`/transcription/api/batch-cancel/${currentBatchJobId}`, {
+                method: 'POST'
+            });
+
+            if (!response.ok) throw new Error('Failed to cancel');
+
+            showAlert('Batch cancelled', 'info');
+            clearInterval(batchPollingInterval);
+            currentBatchJobId = null;
+
+        } catch (error) {
+            console.error('Cancel error:', error);
+            showAlert('Failed to cancel batch', 'danger');
+        }
+    });
+
+    // Load transcripts
+    async function loadTranscripts() {
+        const statusFilter = document.getElementById('statusFilter').value;
+        const container = document.getElementById('transcriptsList');
+
+        try {
+            let url = '/transcription/api/transcripts?limit=100';
+            if (statusFilter) url += `&status=${statusFilter}`;
+
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Failed to load transcripts');
+
+            const data = await response.json();
+            displayTranscripts(data.transcripts);
+
+        } catch (error) {
+            console.error('Load transcripts error:', error);
+            container.innerHTML = '<p class="text-danger">Failed to load transcripts</p>';
+        }
+    }
+
+    // Display transcripts
+    function displayTranscripts(transcripts) {
+        const container = document.getElementById('transcriptsList');
+
+        if (transcripts.length === 0) {
+            container.innerHTML = '<p class="text-muted">No transcripts found. Start by scanning a directory!</p>';
+            return;
+        }
+
+        const tableBody = transcripts.map(t => `
+            <tr>
+                <td><code>${t.id}</code></td>
+                <td title="${t.file_path}" style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    ${t.file_path}
+                </td>
+                <td>${t.language || 'N/A'}</td>
+                <td>${t.duration_seconds ? t.duration_seconds.toFixed(1) + 's' : 'N/A'}</td>
+                <td>${t.model_used}</td>
+                <td>
+                    <span class="badge ${getStatusBadge(t.status)}">${t.status}</span>
+                </td>
+                <td>${t.created_at || 'N/A'}</td>
+                <td>
+                    ${t.status === 'COMPLETED' ? `
+                        <button class="btn btn-sm btn-info view-transcript-btn" data-id="${t.id}">
+                            <i class="bi bi-eye"></i> View
+                        </button>
+                    ` : ''}
+                    <button class="btn btn-sm btn-danger delete-transcript-btn" data-id="${t.id}">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+
+        container.innerHTML = `
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>File Path</th>
+                            <th>Language</th>
+                            <th>Duration</th>
+                            <th>Model</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>${tableBody}</tbody>
+                </table>
+            </div>
+        `;
+
+        attachTranscriptEventListeners();
+    }
+
+    // Attach event listeners
+    function attachTranscriptEventListeners() {
+        document.querySelectorAll('.view-transcript-btn').forEach(btn => {
+            btn.addEventListener('click', () => viewTranscript(parseInt(btn.dataset.id)));
+        });
+
+        document.querySelectorAll('.delete-transcript-btn').forEach(btn => {
+            btn.addEventListener('click', () => deleteTranscript(parseInt(btn.dataset.id)));
+        });
+    }
+
+    // View transcript
+    async function viewTranscript(transcriptId) {
+        currentTranscriptId = transcriptId;
+        const modal = new bootstrap.Modal(document.getElementById('viewTranscriptModal'));
+        const modalBody = document.getElementById('transcriptModalBody');
+        modal.show();
+
+        try {
+            modalBody.innerHTML = '<div class="text-center"><div class="spinner-border"></div></div>';
+
+            const response = await fetch(`/transcription/api/transcript/${transcriptId}`);
+            if (!response.ok) throw new Error('Failed to load transcript');
+
+            const transcript = await response.json();
+
+            modalBody.innerHTML = `
+                <div class="mb-3">
+                    <h6>File: ${transcript.file_path}</h6>
+                    <p><strong>Language:</strong> ${transcript.language || 'N/A'} |
+                       <strong>Duration:</strong> ${transcript.duration_seconds ? transcript.duration_seconds.toFixed(2) + 's' : 'N/A'} |
+                       <strong>Confidence:</strong> ${transcript.confidence_score ? (transcript.confidence_score * 100).toFixed(1) + '%' : 'N/A'}</p>
+                </div>
+                <div class="card">
+                    <div class="card-header"><h6 class="mb-0">Transcript Text</h6></div>
+                    <div class="card-body">
+                        <pre class="bg-light p-3 rounded" style="white-space: pre-wrap; max-height: 400px; overflow-y: auto;">${transcript.transcript_text || 'No transcript available'}</pre>
+                    </div>
+                </div>
+            `;
+
+        } catch (error) {
+            console.error('View transcript error:', error);
+            modalBody.innerHTML = '<p class="text-danger">Failed to load transcript</p>';
+        }
+    }
+
+    // Delete transcript
+    async function deleteTranscript(transcriptId) {
+        if (!confirm('Delete this transcript?')) return;
+
+        try {
+            const response = await fetch(`/transcription/api/transcript/${transcriptId}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) throw new Error('Failed to delete');
+
+            showAlert('Transcript deleted', 'success');
+            loadTranscripts();
+
+        } catch (error) {
+            console.error('Delete error:', error);
+            showAlert('Failed to delete transcript', 'danger');
+        }
+    }
+
+    // Download transcript
+    document.querySelectorAll('.download-transcript-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (!currentTranscriptId) return;
+
+            const format = btn.dataset.format;
+            const link = document.createElement('a');
+            link.href = `/transcription/api/transcript/${currentTranscriptId}/download?format=${format}`;
+            link.download = `transcript_${currentTranscriptId}.${format}`;
+            link.click();
+        });
+    });
+
+    // Refresh transcripts
+    document.getElementById('refreshTranscriptsBtn').addEventListener('click', loadTranscripts);
+    document.getElementById('statusFilter').addEventListener('change', loadTranscripts);
+
+    // Helper functions
+    function formatFileSize(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    function getStatusBadge(status) {
+        const badges = {
+            'PENDING': 'bg-secondary',
+            'IN_PROGRESS': 'bg-warning',
+            'COMPLETED': 'bg-success',
+            'FAILED': 'bg-danger'
+        };
+        return badges[status] || 'bg-secondary';
+    }
+
+    // Load transcripts on page load
+    loadTranscripts();
+</script>
+{% endblock %}

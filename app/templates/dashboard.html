@@ -1,0 +1,416 @@
+{% extends "base.html" %}
+
+{% block title %}Analysis Dashboard - AWS Video & Image Analysis{% endblock %}
+
+{% block extra_head %}
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+    /* Dashboard-specific styles */
+    .dashboard-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 2rem;
+        border-radius: 0.5rem;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .stat-card {
+        background: white;
+        border-radius: 0.5rem;
+        padding: 1.5rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        height: 100%;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .stat-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15);
+    }
+
+    .stat-value {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #667eea;
+        margin: 0.5rem 0;
+    }
+
+    .stat-label {
+        color: #6c757d;
+        font-size: 0.875rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .chart-container {
+        position: relative;
+        height: 300px;
+        margin-bottom: 1rem;
+    }
+
+    .timeline-container {
+        position: relative;
+        height: 150px;
+        margin: 1rem 0;
+    }
+
+    .detection-marker {
+        position: absolute;
+        width: 4px;
+        height: 100%;
+        background-color: #667eea;
+        cursor: pointer;
+        transition: width 0.2s ease;
+    }
+
+    .detection-marker:hover {
+        width: 8px;
+        background-color: #764ba2;
+    }
+
+    .section-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 1rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid #e9ecef;
+    }
+
+    .section-icon {
+        font-size: 1.5rem;
+        margin-right: 0.5rem;
+        color: #667eea;
+    }
+
+    .top-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.75rem;
+        background: #f8f9fa;
+        border-radius: 0.375rem;
+        margin-bottom: 0.5rem;
+        transition: background 0.2s ease;
+    }
+
+    .top-item:hover {
+        background: #e9ecef;
+    }
+
+    .confidence-bar {
+        width: 100px;
+        height: 8px;
+        background: #e9ecef;
+        border-radius: 4px;
+        overflow: hidden;
+    }
+
+    .confidence-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #198754 0%, #20c997 100%);
+        transition: width 0.3s ease;
+    }
+
+    .loading-skeleton {
+        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+        background-size: 200% 100%;
+        animation: loading 1.5s infinite;
+        border-radius: 0.375rem;
+        height: 20px;
+        margin-bottom: 0.5rem;
+    }
+
+    @keyframes loading {
+        0% { background-position: 200% 0; }
+        100% { background-position: -200% 0; }
+    }
+
+    .data-table-container {
+        max-height: 500px;
+        overflow-y: auto;
+    }
+
+    .segment-timeline {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    .segment-item {
+        display: flex;
+        align-items: center;
+        padding: 0.75rem;
+        background: #f8f9fa;
+        border-radius: 0.375rem;
+        border-left: 4px solid #667eea;
+    }
+
+    .segment-time {
+        min-width: 120px;
+        font-weight: 600;
+        color: #495057;
+    }
+
+    .segment-info {
+        flex: 1;
+        padding: 0 1rem;
+    }
+
+    .error-state {
+        text-align: center;
+        padding: 3rem 1rem;
+    }
+
+    .empty-state {
+        text-align: center;
+        padding: 3rem 1rem;
+        color: #6c757d;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+{% if error %}
+<div class="alert alert-danger" role="alert">
+    <i class="bi bi-exclamation-triangle"></i> Error: {{ error }}
+</div>
+{% else %}
+
+<!-- Dashboard Header -->
+<div class="dashboard-header">
+    <div class="d-flex justify-content-between align-items-center">
+        <div>
+            <h1 class="mb-2">
+                <i class="bi bi-graph-up"></i> Analysis Dashboard
+            </h1>
+            <p class="mb-0" id="dashboardSubtitle">Loading analysis data...</p>
+        </div>
+        <div>
+            <a href="/history" class="btn btn-light me-2">
+                <i class="bi bi-arrow-left"></i> Back to History
+            </a>
+            <div class="btn-group" role="group">
+                <button type="button" class="btn btn-light dropdown-toggle" data-bs-toggle="dropdown">
+                    <i class="bi bi-download"></i> Export
+                </button>
+                <ul class="dropdown-menu dropdown-menu-end">
+                    <li><a class="dropdown-item" href="#" id="exportExcelBtn">
+                        <i class="bi bi-file-earmark-excel"></i> Excel (.xlsx)
+                    </a></li>
+                    <li><a class="dropdown-item" href="#" id="exportJsonBtn">
+                        <i class="bi bi-file-earmark-code"></i> Raw JSON
+                    </a></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Loading State -->
+<div id="loadingState" class="text-center py-5">
+    <div class="spinner-border text-primary" role="status" style="width: 3rem; height: 3rem;">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+    <p class="mt-3 text-muted">Loading dashboard data...</p>
+</div>
+
+<!-- Error State -->
+<div id="errorState" class="error-state d-none">
+    <i class="bi bi-exclamation-circle text-danger" style="font-size: 4rem;"></i>
+    <h3 class="mt-3">Failed to Load Dashboard</h3>
+    <p class="text-muted" id="errorMessage"></p>
+    <button class="btn btn-primary" onclick="location.reload()">
+        <i class="bi bi-arrow-clockwise"></i> Retry
+    </button>
+</div>
+
+<!-- Main Dashboard Content -->
+<div id="dashboardContent" class="d-none">
+
+    <!-- Overview Stats -->
+    <div class="row mb-4" id="statsSection">
+        <div class="col-md-3 mb-3">
+            <div class="stat-card">
+                <div class="stat-label">Total Detections</div>
+                <div class="stat-value" id="statTotalDetections">0</div>
+                <small class="text-muted" id="statDetectionsLabel">items detected</small>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="stat-card">
+                <div class="stat-label">Average Confidence</div>
+                <div class="stat-value" id="statAvgConfidence">0%</div>
+                <small class="text-muted">across all detections</small>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="stat-card">
+                <div class="stat-label">Video Duration</div>
+                <div class="stat-value" id="statDuration">--</div>
+                <small class="text-muted" id="statDurationLabel">total length</small>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="stat-card">
+                <div class="stat-label">Processing Time</div>
+                <div class="stat-value" id="statProcessingTime">--</div>
+                <small class="text-muted">to complete</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- Top Detected Items Section -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <div class="section-header">
+                        <i class="bi bi-star section-icon"></i>
+                        <h5 class="mb-0" id="topItemsTitle">Top Detected Items</h5>
+                    </div>
+                    <div id="topItemsContent">
+                        <!-- Will be populated by JavaScript -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts Section -->
+    <div class="row mb-4" id="chartsSection">
+        <div class="col-md-6 mb-3">
+            <div class="card">
+                <div class="card-body">
+                    <h6 class="card-title">Detection Distribution</h6>
+                    <div class="chart-container">
+                        <canvas id="distributionChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-6 mb-3">
+            <div class="card">
+                <div class="card-body">
+                    <h6 class="card-title">Confidence Ranges</h6>
+                    <div class="chart-container">
+                        <canvas id="confidenceChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Timeline Section -->
+    <div class="row mb-4" id="timelineSection">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <div class="section-header">
+                        <i class="bi bi-clock-history section-icon"></i>
+                        <h5 class="mb-0">Detection Timeline</h5>
+                    </div>
+                    <div class="chart-container" style="height: 200px;">
+                        <canvas id="timelineChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detailed Results Table -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-body">
+                    <div class="section-header">
+                        <i class="bi bi-table section-icon"></i>
+                        <h5 class="mb-0">Detailed Results</h5>
+                    </div>
+
+                    <!-- Search and filter controls -->
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <input type="text" class="form-control" id="searchInput" placeholder="Search results...">
+                        </div>
+                        <div class="col-md-6 text-end">
+                            <button class="btn btn-sm btn-outline-secondary" id="sortByConfidenceBtn">
+                                <i class="bi bi-sort-down"></i> Sort by Confidence
+                            </button>
+                            <button class="btn btn-sm btn-outline-secondary" id="sortByTimeBtn">
+                                <i class="bi bi-sort-down"></i> Sort by Time
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="data-table-container">
+                        <table class="table table-hover" id="detailsTable">
+                            <thead class="table-light">
+                                <tr id="tableHeaders">
+                                    <!-- Will be populated by JavaScript -->
+                                </tr>
+                            </thead>
+                            <tbody id="tableBody">
+                                <!-- Will be populated by JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="mt-3">
+                        <small class="text-muted">
+                            Showing <span id="displayedRows">0</span> of <span id="totalRows">0</span> results
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script type="module">
+    import { showAlert } from '{{ url_for('static', filename='js/utils.js') }}';
+    import * as Dashboard from '{{ url_for('static', filename='js/dashboard.js') }}';
+
+    // Initialize dashboard with job ID
+    const jobId = '{{ job_id }}';
+
+    if (jobId && jobId !== 'None') {
+        Dashboard.initDashboard(jobId);
+    } else {
+        document.getElementById('loadingState').classList.add('d-none');
+        document.getElementById('errorState').classList.remove('d-none');
+        document.getElementById('errorMessage').textContent = 'Invalid job ID';
+    }
+
+    // Export button handlers
+    document.getElementById('exportExcelBtn').addEventListener('click', (e) => {
+        e.preventDefault();
+        Dashboard.exportResults(jobId, 'excel');
+    });
+
+    document.getElementById('exportJsonBtn').addEventListener('click', (e) => {
+        e.preventDefault();
+        Dashboard.exportResults(jobId, 'json');
+    });
+
+    // Search functionality
+    document.getElementById('searchInput').addEventListener('input', (e) => {
+        Dashboard.filterTable(e.target.value);
+    });
+
+    // Sort buttons
+    document.getElementById('sortByConfidenceBtn').addEventListener('click', () => {
+        Dashboard.sortTable('confidence');
+    });
+
+    document.getElementById('sortByTimeBtn').addEventListener('click', () => {
+        Dashboard.sortTable('time');
+    });
+</script>
+{% endblock %}
