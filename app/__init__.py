@@ -48,7 +48,7 @@ def create_app(config_name=None):
         app.logger.warning("Some features may not work without proper AWS configuration")
 
     # Register blueprints
-    from app.routes import main, upload, video_analysis, image_analysis, collections, history, analysis
+    from app.routes import main, upload, video_analysis, image_analysis, collections, history, analysis, transcription, dashboard
 
     app.register_blueprint(main.bp)
     app.register_blueprint(upload.bp)
@@ -57,6 +57,8 @@ def create_app(config_name=None):
     app.register_blueprint(collections.bp)
     app.register_blueprint(history.bp)
     app.register_blueprint(analysis.bp)
+    app.register_blueprint(transcription.bp)
+    app.register_blueprint(dashboard.bp)
 
     app.logger.info("All blueprints registered")
 

@@ -3,7 +3,7 @@ Data models for the application.
 """
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import json
 
 
@@ -84,6 +84,41 @@ class FaceCollection:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
+@dataclass
+class Transcript:
+    """Transcript model for local video transcription."""
+    id: Optional[int] = None
+    file_path: str = ''
+    file_size_bytes: int = 0
+    file_modified_time: float = 0.0
+    duration_seconds: Optional[float] = None
+    language: Optional[str] = None
+    model_used: str = ''
+    transcript_text: Optional[str] = None
+    transcript_segments: Optional[List[Dict[str, Any]]] = None
+    word_timestamps: Optional[List[Dict[str, Any]]] = None
+    confidence_score: Optional[float] = None
+    processing_time_seconds: Optional[float] = None
+    status: str = 'PENDING'  # PENDING, IN_PROGRESS, COMPLETED, FAILED
+    error_message: Optional[str] = None
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Transcript':
+        """Create from dictionary."""
+        # Handle JSON string conversion
+        for field in ['transcript_segments', 'word_timestamps', 'metadata']:
+            if isinstance(data.get(field), str):
+                data[field] = json.loads(data[field])
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
 # Analysis type constants
 class AnalysisType:
     """Analysis type constants."""
@@ -113,6 +148,15 @@ class AnalysisType:
     STATUS_IN_PROGRESS = 'IN_PROGRESS'
     STATUS_SUCCEEDED = 'SUCCEEDED'
     STATUS_FAILED = 'FAILED'
+
+
+# Transcript status constants
+class TranscriptStatus:
+    """Transcript status constants."""
+    PENDING = 'PENDING'
+    IN_PROGRESS = 'IN_PROGRESS'
+    COMPLETED = 'COMPLETED'
+    FAILED = 'FAILED'
 
 
 # Rekognition API method mappings

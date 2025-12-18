@@ -1,7 +1,7 @@
 # Project-Specific Instructions for Claude Code
 
 ## Project Overview
-AWS Video & Image Analysis Application - Flask-based web application for analyzing videos and images using Amazon Rekognition. Supports 8 video analysis types, 8 image analysis types, face collection management, and comprehensive file upload/history tracking.
+AWS Video & Image Analysis Application - Flask-based web application for analyzing videos and images using Amazon Rekognition. Supports 8 video analysis types, 8 image analysis types, face collection management, local video transcription, and comprehensive file upload/history tracking.
 
 ## AWS Configuration
 
@@ -34,7 +34,8 @@ Critical environment variables are stored in .env file (not in git):
 2. **Rekognition Video** (app/services/rekognition_video.py) - Async video analysis
 3. **Rekognition Image** (app/services/rekognition_image.py) - Sync image analysis
 4. **Face Collections** (app/services/face_collection_service.py) - Face management
-5. **Analysis API** (app/routes/analysis.py) - Multi-select analysis endpoint (supports arrays of analysis types)
+5. **Transcription Service** (app/services/transcription_service.py) - Local video transcription using faster-whisper
+6. **Analysis API** (app/routes/analysis.py) - Multi-select analysis endpoint (supports arrays of analysis types)
 
 ### Frontend Components
 **Templates** (app/templates/):
@@ -43,12 +44,15 @@ Critical environment variables are stored in .env file (not in git):
 - video_analysis.html - Multi-select analysis types (checkboxes) with job status tracking
 - image_analysis.html - Multi-select analysis types (checkboxes) with aggregated results display
 - collections.html - Face collection management interface
+- transcription.html - Local video transcription interface with directory scanning and batch processing
 - history.html - Job history with auto-load and download buttons for completed jobs
+- dashboard.html - Visual analytics dashboard with charts and insights for video analysis results
 - base.html - Base template with navigation and common layout
 
 **Static Assets**:
 - app/static/css/style.css - Application-wide styling with Bootstrap 5 integration
 - app/static/js/utils.js - Shared JavaScript utilities for AJAX and API interactions
+- app/static/js/dashboard.js - Dashboard functionality with Chart.js visualizations and data processors
 
 **Key Features**:
 - Multi-select analysis: Users can select 1-8 analysis types simultaneously (checkboxes replace radio buttons)
@@ -57,6 +61,7 @@ Critical environment variables are stored in .env file (not in git):
 - Download results: Excel (.xlsx) or JSON download for completed jobs with dropdown buttons
 - Auto-polling: History page automatically polls running jobs every 15 seconds until completion
 - Excel export: Professional formatted Excel files with Summary and Data sheets using openpyxl
+- Visual dashboard: Interactive charts, graphs, and insights for video analysis results (accessible via /dashboard/<job_id>)
 
 ### Running the Application
 ```bash
@@ -88,9 +93,187 @@ python run.py
 - **History Auto-Refresh**: Added automatic 15-second polling for running jobs (IN_PROGRESS/SUBMITTED status) with automatic start/stop based on job states.
 - **Excel Export**: Implemented professional Excel export functionality with openpyxl library, supporting all analysis types with custom formatting per type.
 
+## Local Video Transcription Feature
+
+### Overview
+Completely local video transcription system using faster-whisper (CTranslate2-based Whisper implementation). No data is sent to cloud services. Designed for processing large video libraries (~10TB+) with efficient batch processing and deduplication.
+
+### System Requirements
+- **FFmpeg**: Must be installed and accessible in PATH (required for audio extraction)
+- **Python Dependencies**: faster-whisper>=1.0.0, ffmpeg-python>=0.2.0
+- **Optional**: CUDA-capable GPU for 4x faster processing (auto-detected)
+
+### Key Features
+1. **Directory Scanning**: Recursively scan directories for video files with deduplication
+2. **Batch Processing**: Process multiple files with progress tracking and resumable operations
+3. **Smart Deduplication**: Filesystem metadata (path + size + modified time) for instant identification
+4. **Model Selection**: 6 model sizes (tiny, base, small, medium, large-v2, large-v3)
+5. **GPU Acceleration**: Automatic CUDA detection and utilization when available
+6. **Multiple Export Formats**: TXT, JSON, SRT (SubRip), VTT (WebVTT)
+7. **Database Storage**: Full transcripts with word-level timestamps stored in SQLite
+8. **Language Support**: Auto-detection or specify language (100+ languages supported)
+
+### Database Schema
+**transcripts** table stores:
+- File path, size, and modified time (for efficient file identification)
+- Full transcript text and segmented data
+- Word-level timestamps with confidence scores
+- Processing metadata (model used, language, processing time)
+- Status tracking (PENDING, IN_PROGRESS, COMPLETED, FAILED)
+
+### Architecture
+- **Service Layer** (app/services/transcription_service.py): Core transcription logic with model caching
+- **Routes** (app/routes/transcription.py): RESTful API endpoints for scanning, batch processing, status tracking
+- **UI** (app/templates/transcription.html): Bootstrap 5 interface with real-time progress updates
+- **Database** (app/database.py): CRUD operations for transcript records with JSON field handling
+
+### API Endpoints
+- POST `/transcription/api/scan` - Scan directory for videos
+- POST `/transcription/api/transcribe-single` - Transcribe single file
+- POST `/transcription/api/start-batch` - Start batch transcription job
+- GET `/transcription/api/batch-status/<job_id>` - Get batch progress
+- POST `/transcription/api/batch-cancel/<job_id>` - Cancel running batch
+- GET `/transcription/api/transcripts` - List all transcripts (paginated)
+- GET `/transcription/api/transcript/<id>` - Get single transcript
+- DELETE `/transcription/api/transcript/<id>` - Delete transcript
+- GET `/transcription/api/transcript/<id>/download?format=txt|json|srt|vtt` - Download transcript
+
+### Performance Considerations
+- **Model Loading**: Model loaded once and cached in memory for batch operations
+- **Audio Extraction**: Temporary WAV files (16kHz mono) auto-cleaned after processing
+- **Concurrent Processing**: Single-threaded batch processing (safer for large models)
+- **Memory Usage**: Depends on model size (tiny: ~1GB RAM, large-v3: ~10GB VRAM/RAM)
+- **Processing Speed**:
+  - GPU (CUDA): ~5-10x realtime (1 hour video = 6-12 minutes)
+  - CPU: ~1-2x realtime (1 hour video = 30-60 minutes)
+
+### Best Practices
+1. **Model Selection**: Use 'medium' for balanced quality/speed, 'large-v3' for best accuracy
+2. **GPU Usage**: Ensure CUDA toolkit installed for GPU acceleration
+3. **Batch Size**: Process 10-50 files per batch for optimal progress tracking
+4. **Force Reprocess**: Use sparingly - system automatically skips transcribed files using filesystem metadata
+5. **Error Handling**: Check batch errors list for failed files and reasons
+6. **Network Performance**: Optimized for network shares - uses instant filesystem metadata (no file reading during scan)
+
+### Workflow Example
+```python
+# 1. Scan directory
+POST /transcription/api/scan
+{
+  "directory_path": "E:\\videos",
+  "recursive": true
+}
+
+# 2. Start batch transcription
+POST /transcription/api/start-batch
+{
+  "file_paths": ["E:\\videos\\movie1.mp4", "E:\\videos\\movie2.mp4"],
+  "language": "en",  # optional
+  "force": false
+}
+
+# 3. Poll status every 2-5 seconds
+GET /transcription/api/batch-status/<job_id>
+
+# 4. Download completed transcripts
+GET /transcription/api/transcript/1/download?format=srt
+```
+
+### Troubleshooting
+- **FFmpeg not found**: Install FFmpeg and add to PATH, or specify path in system environment
+- **CUDA not available**: Install NVIDIA CUDA Toolkit (11.x or 12.x) for GPU support
+- **Out of memory**: Use smaller model size (medium or small) or CPU device
+- **Slow processing**: Ensure GPU acceleration is working (check logs for device: cuda)
+- **Files skipped**: Check file hash - system prevents reprocessing by default
+
+## Video Analysis Dashboard Feature
+
+### Overview
+Visual analytics dashboard that transforms raw AWS Rekognition JSON results into interactive charts, graphs, and insights. Provides professional presentation of video analysis results with analysis-type-specific visualizations.
+
+### Access
+- **URL Pattern**: `/dashboard/<job_id>`
+- **Navigation**: Click "View" button (graph icon) next to completed jobs in history page
+- **Raw JSON Access**: Click "JSON" button (code icon) to view raw JSON in modal
+
+### Dashboard Components
+
+**1. Statistics Cards**
+- Total Detections: Count of all detected items
+- Average Confidence: Mean confidence score across all detections
+- Video Duration: Extracted from VideoMetadata (handles dict/list formats)
+- Processing Time: Analysis job duration
+
+**2. Top Detected Items**
+- Analysis-type-specific top 10 items
+- Visual confidence bars with percentages
+- Color-coded by confidence level
+
+**3. Interactive Charts (Chart.js 4.4.0)**
+- **Distribution Chart** (Bar): Frequency of detected items by category
+- **Confidence Chart** (Doughnut): Confidence ranges or category breakdown
+- **Timeline Chart** (Line): Detection frequency over video duration with bucketing
+
+**4. Detailed Results Table**
+- Dynamic columns based on analysis type
+- Search functionality across all fields
+- Sort by confidence (descending) or timestamp (ascending)
+- Shows "Displaying X of Y results" count
+
+**5. Export Options**
+- Excel (.xlsx): Professional formatted spreadsheet
+- JSON: Raw analysis results
+
+### Analysis Type Support
+
+| Analysis Type | Dashboard Features |
+|--------------|-------------------|
+| Label Detection | Top labels by count, category aggregation, temporal distribution |
+| Face Detection | Emotion distribution, age groups (0-100), gender statistics |
+| Celebrity Recognition | Celebrity names with Wikipedia URLs and confidence scores |
+| Text Detection | OCR text categorized by type (LINE/WORD) |
+| Content Moderation | Flagged content grouped by parent category |
+| Person Tracking | Person indices with appearance counts |
+| Segment Detection | Scene/shot breakdown with timestamps and durations |
+| Face Search | Face matches with similarity percentages |
+
+### Technical Architecture
+
+**Backend**:
+- Route: `app/routes/dashboard.py`
+- Blueprint: Renders dashboard template with job data
+- API: Reuses existing `/api/history/<job_id>` endpoint
+
+**Frontend**:
+- Template: `app/templates/dashboard.html` (416 lines)
+- JavaScript: `app/static/js/dashboard.js` (927 lines, ES6 modules)
+- Charts: Chart.js 4.4.0 via CDN
+- No jQuery dependency (vanilla JavaScript)
+
+**Data Processing**:
+- Client-side processing with modular processor functions
+- 9 data processors (one per analysis type + generic fallback)
+- Timeline bucketing: Divides video into 20 time segments for smooth visualization
+- XSS prevention with escapeHtml() function
+
+**Design**:
+- Purple gradient header (#667eea to #764ba2)
+- Bootstrap 5 responsive grid layout
+- Desktop: Multi-column layout
+- Tablet: 2-column layout
+- Mobile: Single-column with collapsible sections
+
+### Best Practices
+1. **Use dashboard for presentations**: Professional charts suitable for reports
+2. **Use JSON view for debugging**: Raw data access for technical troubleshooting
+3. **Search table for specific items**: Find particular detections quickly
+4. **Export to Excel for analysis**: Further analysis in spreadsheet software
+5. **Timeline chart shows patterns**: Identify when events occur in video
+
 ## Important Constraints
 - Video files: Max 10GB, formats: MP4, MOV, AVI, MKV
 - Image files: Max 15MB, formats: JPEG, PNG
 - Rekognition available in us-east-1 region
 - CORS configured for localhost:5700 and 127.0.0.1:5700 (update for production)
 - Timezone display: Eastern Time (requires tzdata package on Windows)
+- **Transcription**: Requires FFmpeg installed on system, GPU optional but recommended for large batches
