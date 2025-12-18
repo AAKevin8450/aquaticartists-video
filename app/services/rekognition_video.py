@@ -389,13 +389,20 @@ class RekognitionVideoService:
 
             # Save video metadata from first response
             if video_metadata is None:
+                vm = response.get('VideoMetadata', {})
+                # Handle case where VideoMetadata is a list (segment detection) or dict (other types)
+                if isinstance(vm, list) and len(vm) > 0:
+                    vm = vm[0]
+                elif not isinstance(vm, dict):
+                    vm = {}
+
                 video_metadata = {
-                    'codec': response.get('VideoMetadata', {}).get('Codec'),
-                    'duration_millis': response.get('VideoMetadata', {}).get('DurationMillis'),
-                    'format': response.get('VideoMetadata', {}).get('Format'),
-                    'frame_rate': response.get('VideoMetadata', {}).get('FrameRate'),
-                    'frame_height': response.get('VideoMetadata', {}).get('FrameHeight'),
-                    'frame_width': response.get('VideoMetadata', {}).get('FrameWidth'),
+                    'codec': vm.get('Codec'),
+                    'duration_millis': vm.get('DurationMillis'),
+                    'format': vm.get('Format'),
+                    'frame_rate': vm.get('FrameRate'),
+                    'frame_height': vm.get('FrameHeight'),
+                    'frame_width': vm.get('FrameWidth'),
                 }
 
             # Check for more results

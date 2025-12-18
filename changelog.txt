@@ -1,3 +1,250 @@
+2025-12-17 23:15:00 - Updated by Claude Code
+
+[Category: Bug Fix / Feature]
+Fix segment detection bug, add Excel export, auto-polling, and collections page fix
+
+[Changes Made]
+- Fixed VideoMetadata handling bug in segment detection results
+  - Amazon Rekognition returns VideoMetadata as list for segment detection (not dict like other types)
+  - Added type checking to handle both list and dict formats safely
+  - Extracts first element if list, uses dict directly if dict format
+  - Prevents AttributeError crashes when accessing video metadata fields
+
+- Added automatic 15-second polling for running jobs in history page
+  - Jobs with status IN_PROGRESS or SUBMITTED trigger automatic polling
+  - Polls every 15 seconds until all jobs complete or fail
+  - Stops polling automatically when no running jobs remain
+  - Provides real-time job status updates without manual refresh
+
+- Implemented Excel export functionality for analysis results
+  - Added dropdown download buttons (Excel .xlsx or Raw JSON)
+  - Created app/utils/excel_exporter.py with openpyxl integration
+  - Generates formatted Excel files with Summary and Data sheets
+  - Supports all analysis types with custom formatting per type
+  - Color-coded headers, auto-sized columns, professional layout
+  - Download endpoint: GET /api/history/<job_id>/download?format=excel|json
+
+- Fixed Face Collections page JavaScript error
+  - Changed collections.length check to handle API response structure
+  - Extracts data.collections array from response before length check
+  - Prevents "undefined length" errors on page load
+
+- Added openpyxl dependency for Excel generation
+  - Version: openpyxl>=3.1.0
+  - Required for .xlsx file creation and styling
+
+[Files Modified]
+- app/services/rekognition_video.py:389-406 - Fixed VideoMetadata list vs dict handling
+  - Added isinstance() check for list/dict type detection
+  - Extracts vm[0] if list, uses vm directly if dict
+  - Prevents crashes when processing segment detection results
+
+- app/templates/history.html - Added auto-polling and Excel download
+  - Added pollingInterval variable and startPolling() function
+  - Download dropdown buttons with Excel and JSON options
+  - Check for running jobs after displayJobs() and start/stop polling accordingly
+  - Excel download uses window.location for direct file download
+  - JSON download uses Blob API for client-side file generation
+
+- app/routes/history.py - Added download endpoint and Excel export integration
+  - GET /api/history/<job_id>/download with format query parameter
+  - Calls export_to_excel() for Excel format
+  - Returns send_file() with proper MIME type for .xlsx files
+  - JSON format returns job data directly
+
+- app/templates/collections.html:163 - Fixed collections.length bug
+  - Changed: const collections = await response.json()
+  - To: const data = await response.json(); const collections = data.collections || []
+  - Handles API response wrapper structure correctly
+
+- app/utils/excel_exporter.py (created) - Excel export utility with openpyxl
+  - export_to_excel() main function returns BytesIO
+  - Summary sheet with job metadata and styling
+  - Data sheet with analysis-specific formatters
+  - Supports: labels, faces, celebrities, text, moderation, persons, segments
+  - Professional formatting with headers, fonts, colors, alignment
+
+- app/database.py:200-215 - Added analysis_type filter to list_jobs()
+  - New parameter: analysis_type (optional)
+  - Filters jobs by analysis type when provided
+  - Enables history filtering by analysis type
+
+- app/models.py:104 - Added IMAGE_FACE_SEARCH constant
+  - Added missing analysis type for face search in collections
+
+- app/__init__.py:51 - Registered analysis blueprint
+  - Import analysis module from app.routes
+  - Register analysis.bp for multi-select API routes
+
+- app/routes/main.py:73-81 - Simplified history page route
+  - Removed pre-loading jobs from server-side
+  - Jobs now loaded via AJAX for consistent formatting
+  - Ensures timestamps and formatting match between loads and refreshes
+
+- requirements.txt - Added openpyxl>=3.1.0 dependency
+
+[Technical Details]
+Purpose: Fix critical segment detection bug, improve UX with auto-updates and Excel export
+
+Segment Detection Bug:
+- Root cause: AWS Rekognition API inconsistency
+- GetSegmentDetection returns VideoMetadata as list: [{"Codec": "h264", ...}]
+- Other analysis types return VideoMetadata as dict: {"Codec": "h264", ...}
+- Solution: Type checking with isinstance() before accessing fields
+- Impact: Prevents crashes when viewing segment detection results
+
+Auto-Polling Implementation:
+- Uses setInterval() with 15-second interval
+- Checks for jobs with status IN_PROGRESS or SUBMITTED
+- Starts polling when hasRunningJobs = true
+- Stops polling when hasRunningJobs = false
+- Prevents multiple polling intervals with pollingInterval variable
+- Updates UI automatically when job status changes
+
+Excel Export Architecture:
+- openpyxl library for .xlsx file creation
+- Two-sheet structure: Summary (metadata) + Data (results)
+- Analysis-type-specific formatters for optimal data presentation
+- BytesIO for in-memory file generation (no disk I/O)
+- send_file() with proper MIME type and download_name
+- Color-coded headers (blue #4472C4) with white text
+- Auto-sized columns based on content width
+
+Collections Page Fix:
+- API returns: {"collections": [...], "count": N}
+- Previous code expected: [{...}, {...}] (array directly)
+- Fixed by extracting .collections property before length check
+- Added fallback to empty array if collections undefined
+
+[Testing Results]
+✅ Segment Detection - VideoMetadata extracted correctly from list format
+✅ Auto-Polling - Jobs update every 15 seconds, stops when complete
+✅ Excel Download - .xlsx files generate with proper formatting
+✅ JSON Download - Raw JSON files download successfully
+✅ Collections Page - Loads without JavaScript errors
+✅ History Filtering - analysis_type filter working correctly
+
+[Breaking Changes]
+None - All changes are backward compatible
+
+[Dependencies Added]
+- openpyxl>=3.1.0 - Excel file generation and styling
+
+2025-12-17 22:29:20 - Updated by Claude Code
+
+[Category: Feature / UX Improvements]
+Implement multi-select analysis types and major UX enhancements across the application
+
+[Changes Made]
+- Implemented multi-select analysis types using checkboxes (replacing radio buttons)
+  - Users can now select 1-8 analysis types simultaneously
+  - Added "Select All" / "Deselect All" convenience buttons
+  - Video analysis creates separate jobs for each selected type
+  - Image analysis returns aggregated results for all selected types
+  - Validation ensures at least one analysis type is selected
+
+- Fixed upload progress tracking to show real-time progress
+  - Replaced fetch() with XMLHttpRequest for progress event support
+  - Progress bar now updates smoothly from 0% to 100%
+  - Status text shows upload percentage in real-time
+
+- Fixed recent uploads list not updating after file upload
+  - Corrected API response parsing (data.files instead of treating response as array)
+  - List now refreshes immediately after successful upload
+
+- Fixed job history page initial load issue
+  - Added automatic loadJobs() call on page load
+  - Jobs now display immediately when navigating to history page
+  - No manual refresh required after starting analysis jobs
+
+- Implemented Eastern Time (ET) display for all timestamps
+  - Added zoneinfo support with tzdata package for Windows
+  - All timestamps converted from UTC to America/New_York timezone
+  - Added " ET" suffix to clearly indicate timezone
+  - Includes fallback to UTC-5 offset if zoneinfo unavailable
+
+- Added download buttons for completed job results
+  - Download button appears next to each SUCCEEDED job in history list
+  - Downloads results as formatted JSON file (job-{id}-results.json)
+  - Works from both job list and results modal
+  - Client-side file generation using Blob API
+
+- Updated S3 CORS configuration for proper browser upload support
+  - Added all required headers (*) to AllowedHeaders
+  - Added DELETE and HEAD methods to AllowedMethods
+  - Added 127.0.0.1:5700 to AllowedOrigins
+  - Exposed x-amz-request-id and x-amz-id-2 headers
+  - Created fix_s3_cors.py utility script for CORS management
+
+[Files Modified]
+- app/routes/analysis.py (created) - New unified multi-type analysis API endpoints
+  - POST /api/analysis/video/start - Accepts analysis_types array, creates multiple jobs
+  - POST /api/analysis/image/analyze - Accepts analysis_types array, returns aggregated results
+- app/templates/video_analysis.html - Converted radio to checkbox, added Select All/Deselect All
+- app/templates/image_analysis.html - Converted radio to checkbox, enhanced results display
+- app/templates/upload.html - Real-time progress tracking with XMLHttpRequest, fixed recent uploads parsing
+- app/templates/history.html - Auto-load jobs on page load, added download buttons and downloadResults()
+- app/utils/formatters.py - Updated format_timestamp() for ET conversion with zoneinfo/tzdata
+- app/models.py - Added IMAGE_FACE_SEARCH analysis type constant
+- app/__init__.py - Registered analysis blueprint
+- requirements.txt - Added tzdata>=2024.1 for Windows timezone support
+- fix_s3_cors.py (created) - S3 CORS configuration utility script
+
+[Technical Details]
+Purpose: Improve user experience with multi-select analysis, real-time feedback, and proper timezone display
+
+Multi-Select Implementation:
+- Frontend: Changed <input type="radio"> to <input type="checkbox">
+- Backend: Updated API endpoints to accept analysis_types array instead of single analysis_type string
+- Video: Creates separate Rekognition jobs for each type (API limitation requires individual jobs)
+- Image: Runs all analyses synchronously and aggregates results
+- Graceful error handling: partial failures don't block successful analyses
+
+Upload Progress Tracking:
+- XMLHttpRequest provides xhr.upload.addEventListener('progress') events
+- Calculates percentage: Math.round((e.loaded / e.total) * 100)
+- Updates progress bar width, text content, and status message in real-time
+- fetch() API doesn't support progress events, hence the switch to XHR
+
+Timezone Conversion:
+- Uses Python's zoneinfo module (Python 3.9+) with ZoneInfo('America/New_York')
+- tzdata package required on Windows (Linux/Mac have IANA database built-in)
+- Automatically handles EST/EDT transitions
+- Fallback to manual UTC-5 offset if zoneinfo fails
+- Format: "2025-12-17 17:06:51 ET"
+
+Download Functionality:
+- Client-side JSON generation using Blob API
+- URL.createObjectURL() for temporary download link
+- Automatic cleanup with URL.revokeObjectURL()
+- No server roundtrip required for downloads
+
+S3 CORS Update:
+- Previous config only had GET, POST, PUT methods
+- Added DELETE, HEAD for complete REST API support
+- Exposed additional headers for proper browser compatibility
+- AllowedHeaders: "*" for flexibility with presigned URLs
+
+[Testing Results]
+✅ Multi-select analysis - Multiple checkboxes selectable, validation working
+✅ Upload progress - Real-time percentage display from 0% to 100%
+✅ Recent uploads - List updates immediately after upload
+✅ Job history - Jobs load automatically on page navigation
+✅ Timestamps - Displaying in ET with proper timezone conversion
+✅ Download buttons - JSON files download successfully
+✅ S3 CORS - Browser uploads working without CORS errors
+
+[Documentation Created]
+- MULTI_SELECT_TESTING.md - Comprehensive testing guide for multi-select feature
+- UX_IMPROVEMENTS_SUMMARY.md - Detailed summary of all UX improvements
+- test_multiselect.py - Automated test script for multi-select functionality
+
+[Breaking Changes]
+None - All changes are backward compatible. Existing single-type analysis still works.
+
+[Dependencies Added]
+- tzdata>=2024.1 - Required for Windows timezone support with zoneinfo module
+
 2025-12-17 13:42:18 - Updated by Claude Code
 
 [Category: Bug Fix / Infrastructure]

@@ -92,27 +92,40 @@
                             <tbody id="jobsTableBody">
                                 {% for job in jobs %}
                                 <tr>
-                                    <td><code>{{ job.id }}</code></td>
+                                    <td><code>{{ job.job_id }}</code></td>
                                     <td>{{ job.file_id }}</td>
-                                    <td>{{ job.analysis_type }}</td>
+                                    <td>{{ job.analysis_type_display or job.analysis_type }}</td>
                                     <td>
-                                        <span class="badge {% if job.status == 'COMPLETED' %}bg-success{% elif job.status == 'FAILED' %}bg-danger{% elif job.status == 'IN_PROGRESS' %}bg-warning{% else %}bg-secondary{% endif %}">
+                                        <span class="badge {% if job.status == 'SUCCEEDED' %}bg-success{% elif job.status == 'FAILED' %}bg-danger{% elif job.status == 'IN_PROGRESS' or job.status == 'SUBMITTED' %}bg-warning{% else %}bg-secondary{% endif %}">
                                             {{ job.status }}
                                         </span>
                                     </td>
-                                    <td>{{ job.created_at }}</td>
-                                    <td>{{ job.updated_at }}</td>
+                                    <td>{{ job.started_at or 'N/A' }}</td>
+                                    <td>{{ job.completed_at or 'In Progress' }}</td>
                                     <td>
-                                        {% if job.status == 'COMPLETED' %}
-                                        <button class="btn btn-sm btn-info view-results-btn" data-job-id="{{ job.id }}">
+                                        {% if job.status == 'SUCCEEDED' %}
+                                        <button class="btn btn-sm btn-info view-results-btn" data-job-id="{{ job.job_id }}">
                                             <i class="bi bi-eye"></i> View
                                         </button>
-                                        {% elif job.status == 'IN_PROGRESS' %}
-                                        <button class="btn btn-sm btn-warning check-status-btn" data-job-id="{{ job.id }}">
+                                        <div class="btn-group" role="group">
+                                            <button type="button" class="btn btn-sm btn-success dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                                                <i class="bi bi-download"></i> Download
+                                            </button>
+                                            <ul class="dropdown-menu">
+                                                <li><a class="dropdown-item download-excel-btn" href="#" data-job-id="{{ job.job_id }}">
+                                                    <i class="bi bi-file-earmark-excel"></i> Excel (.xlsx)
+                                                </a></li>
+                                                <li><a class="dropdown-item download-json-btn" href="#" data-job-id="{{ job.job_id }}">
+                                                    <i class="bi bi-file-earmark-code"></i> Raw JSON
+                                                </a></li>
+                                            </ul>
+                                        </div>
+                                        {% elif job.status == 'IN_PROGRESS' or job.status == 'SUBMITTED' %}
+                                        <button class="btn btn-sm btn-warning check-status-btn" data-job-id="{{ job.job_id }}">
                                             <i class="bi bi-arrow-clockwise"></i> Check
                                         </button>
                                         {% endif %}
-                                        <button class="btn btn-sm btn-danger delete-job-btn" data-job-id="{{ job.id }}">
+                                        <button class="btn btn-sm btn-danger delete-job-btn" data-job-id="{{ job.job_id }}">
                                             <i class="bi bi-trash"></i>
                                         </button>
                                     </td>
@@ -155,9 +168,19 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary" id="downloadResultsBtn">
-                    <i class="bi bi-download"></i> Download JSON
-                </button>
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-download"></i> Download
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" href="#" id="downloadExcelBtn">
+                            <i class="bi bi-file-earmark-excel"></i> Excel (.xlsx)
+                        </a></li>
+                        <li><a class="dropdown-item" href="#" id="downloadJsonBtn">
+                            <i class="bi bi-file-earmark-code"></i> Raw JSON
+                        </a></li>
+                    </ul>
+                </div>
             </div>
         </div>
     </div>
@@ -179,6 +202,22 @@
             });
         });
 
+        document.querySelectorAll('.download-excel-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const jobId = e.target.closest('a').dataset.jobId;
+                await downloadResults(jobId, 'excel');
+            });
+        });
+
+        document.querySelectorAll('.download-json-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const jobId = e.target.closest('a').dataset.jobId;
+                await downloadResults(jobId, 'json');
+            });
+        });
+
         document.querySelectorAll('.check-status-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 const jobId = e.target.closest('button').dataset.jobId;
@@ -196,6 +235,46 @@
         });
     }
 
+    // Download results
+    async function downloadResults(jobId, format = 'json') {
+        try {
+            showAlert(`Downloading ${format.toUpperCase()} results...`, 'info');
+
+            if (format === 'excel') {
+                // Direct download for Excel files
+                const link = document.createElement('a');
+                link.href = `/api/history/${jobId}/download?format=excel`;
+                link.download = `job-${jobId}-results.xlsx`;
+                link.click();
+                showAlert('Excel file download started', 'success');
+            } else {
+                // JSON download
+                const response = await fetch(`/api/history/${jobId}/download?format=json`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Failed to load results');
+                }
+
+                const results = await response.json();
+
+                // Create download
+                const dataStr = JSON.stringify(results, null, 2);
+                const dataBlob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(dataBlob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `job-${jobId}-results.json`;
+                link.click();
+                URL.revokeObjectURL(url);
+
+                showAlert('JSON download complete', 'success');
+            }
+        } catch (error) {
+            console.error('Failed to download results:', error);
+            showAlert(`Failed to download results: ${error.message}`, 'danger');
+        }
+    }
+
     // View results
     async function viewResults(jobId) {
         const modal = new bootstrap.Modal(document.getElementById('resultsModal'));
@@ -205,7 +284,7 @@
         try {
             modalBody.innerHTML = '<div class="text-center"><div class="spinner-border" role="status"></div></div>';
 
-            const response = await fetch(`/api/analysis/results/${jobId}`);
+            const response = await fetch(`/api/history/${jobId}`);
             if (!response.ok) {
                 const error = await response.json();
                 throw new Error(error.error || 'Failed to load results');
@@ -238,7 +317,7 @@
     // Check job status
     async function checkJobStatus(jobId) {
         try {
-            const response = await fetch(`/api/analysis/video/status/${jobId}`);
+            const response = await fetch(`/api/video/job/${jobId}/status`);
             if (!response.ok) {
                 const error = await response.json();
                 throw new Error(error.error || 'Failed to check status');
@@ -259,7 +338,7 @@
     // Delete job
     async function deleteJob(jobId) {
         try {
-            const response = await fetch(`/api/analysis/jobs/${jobId}`, {
+            const response = await fetch(`/api/history/${jobId}`, {
                 method: 'DELETE'
             });
 
@@ -282,15 +361,15 @@
             const statusFilter = document.getElementById('statusFilter').value;
             const typeFilter = document.getElementById('typeFilter').value;
 
-            let url = '/api/analysis/jobs?limit=100';
+            let url = '/api/history/?limit=100';
             if (statusFilter) url += `&status=${statusFilter}`;
             if (typeFilter) url += `&analysis_type=${typeFilter}`;
 
             const response = await fetch(url);
             if (!response.ok) throw new Error('Failed to load jobs');
 
-            const jobs = await response.json();
-            displayJobs(jobs);
+            const data = await response.json();
+            displayJobs(data.jobs || []);
         } catch (error) {
             console.error('Failed to load jobs:', error);
             showAlert('Failed to load jobs', 'danger');
@@ -300,6 +379,9 @@
     // Display jobs
     function displayJobs(jobs) {
         const container = document.getElementById('jobsContainer');
+
+        // Update current jobs list for polling
+        currentJobs = jobs;
 
         if (jobs.length === 0) {
             container.innerHTML = `
@@ -318,27 +400,40 @@
 
         const tableBody = jobs.map(job => `
             <tr>
-                <td><code>${job.id}</code></td>
+                <td><code>${job.job_id || job.id}</code></td>
                 <td>${job.file_id}</td>
-                <td>${job.analysis_type}</td>
+                <td>${job.analysis_type_display || job.analysis_type}</td>
                 <td>
-                    <span class="badge ${job.status === 'COMPLETED' ? 'bg-success' : job.status === 'FAILED' ? 'bg-danger' : job.status === 'IN_PROGRESS' ? 'bg-warning' : 'bg-secondary'}">
+                    <span class="badge ${job.status === 'SUCCEEDED' ? 'bg-success' : job.status === 'FAILED' ? 'bg-danger' : job.status === 'IN_PROGRESS' ? 'bg-warning' : 'bg-secondary'}">
                         ${job.status}
                     </span>
                 </td>
-                <td>${job.created_at}</td>
-                <td>${job.updated_at}</td>
+                <td>${job.started_at || 'N/A'}</td>
+                <td>${job.completed_at || 'In Progress'}</td>
                 <td>
-                    ${job.status === 'COMPLETED' ? `
-                        <button class="btn btn-sm btn-info view-results-btn" data-job-id="${job.id}">
+                    ${job.status === 'SUCCEEDED' ? `
+                        <button class="btn btn-sm btn-info view-results-btn" data-job-id="${job.job_id || job.id}">
                             <i class="bi bi-eye"></i> View
                         </button>
-                    ` : job.status === 'IN_PROGRESS' ? `
-                        <button class="btn btn-sm btn-warning check-status-btn" data-job-id="${job.id}">
+                        <div class="btn-group" role="group">
+                            <button type="button" class="btn btn-sm btn-success dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+                                <i class="bi bi-download"></i> Download
+                            </button>
+                            <ul class="dropdown-menu">
+                                <li><a class="dropdown-item download-excel-btn" href="#" data-job-id="${job.job_id || job.id}">
+                                    <i class="bi bi-file-earmark-excel"></i> Excel (.xlsx)
+                                </a></li>
+                                <li><a class="dropdown-item download-json-btn" href="#" data-job-id="${job.job_id || job.id}">
+                                    <i class="bi bi-file-earmark-code"></i> Raw JSON
+                                </a></li>
+                            </ul>
+                        </div>
+                    ` : job.status === 'IN_PROGRESS' || job.status === 'SUBMITTED' ? `
+                        <button class="btn btn-sm btn-warning check-status-btn" data-job-id="${job.job_id || job.id}">
                             <i class="bi bi-arrow-clockwise"></i> Check
                         </button>
                     ` : ''}
-                    <button class="btn btn-sm btn-danger delete-job-btn" data-job-id="${job.id}">
+                    <button class="btn btn-sm btn-danger delete-job-btn" data-job-id="${job.job_id || job.id}">
                         <i class="bi bi-trash"></i>
                     </button>
                 </td>
@@ -367,20 +462,35 @@
         `;
 
         attachEventListeners();
+
+        // Check if we need to start/stop polling
+        const hasRunningJobs = jobs.some(job =>
+            job.status === 'IN_PROGRESS' ||
+            job.status === 'SUBMITTED'
+        );
+
+        if (hasRunningJobs && !pollingInterval) {
+            console.log('Starting auto-polling for running jobs...');
+            startPolling();
+        } else if (!hasRunningJobs && pollingInterval) {
+            console.log('No running jobs, stopping polling');
+            clearInterval(pollingInterval);
+            pollingInterval = null;
+        }
     }
 
-    // Download results
-    document.getElementById('downloadResultsBtn').addEventListener('click', () => {
+    // Download from modal - Excel
+    document.getElementById('downloadExcelBtn').addEventListener('click', (e) => {
+        e.preventDefault();
         if (!currentJobResults) return;
+        downloadResults(currentJobResults.job_id, 'excel');
+    });
 
-        const dataStr = JSON.stringify(currentJobResults, null, 2);
-        const dataBlob = new Blob([dataStr], { type: 'application/json' });
-        const url = URL.createObjectURL(dataBlob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `job-${currentJobResults.job_id}-results.json`;
-        link.click();
-        URL.revokeObjectURL(url);
+    // Download from modal - JSON
+    document.getElementById('downloadJsonBtn').addEventListener('click', (e) => {
+        e.preventDefault();
+        if (!currentJobResults) return;
+        downloadResults(currentJobResults.job_id, 'json');
     });
 
     // Apply filters
@@ -391,5 +501,73 @@
 
     // Attach event listeners on page load
     attachEventListeners();
+
+    // Load jobs automatically on page load
+    loadJobs();
+
+    // Auto-polling for running jobs
+    let pollingInterval = null;
+    let currentJobs = [];
+
+    function startPolling() {
+        // Clear existing interval if any
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+        }
+
+        // Poll every 15 seconds
+        pollingInterval = setInterval(async () => {
+            await checkRunningJobs();
+        }, 15000);
+    }
+
+    async function checkRunningJobs() {
+        // Get list of running jobs
+        const runningJobs = currentJobs.filter(job =>
+            job.status === 'IN_PROGRESS' ||
+            job.status === 'SUBMITTED'
+        );
+
+        if (runningJobs.length === 0) {
+            // No running jobs, stop polling
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+            return;
+        }
+
+        console.log(`Checking status of ${runningJobs.length} running job(s)...`);
+
+        // Check each running job
+        let anyCompleted = false;
+        for (const job of runningJobs) {
+            try {
+                const response = await fetch(`/api/video/job/${job.job_id || job.id}/status`);
+                if (response.ok) {
+                    const status = await response.json();
+
+                    if (status.status === 'SUCCEEDED' || status.status === 'FAILED') {
+                        console.log(`Job ${job.job_id || job.id} completed with status: ${status.status}`);
+                        anyCompleted = true;
+                    }
+                }
+            } catch (error) {
+                console.error(`Failed to check status for job ${job.job_id || job.id}:`, error);
+            }
+        }
+
+        // Reload jobs if any completed
+        if (anyCompleted) {
+            await loadJobs();
+        }
+    }
+
+    // Clean up polling on page unload
+    window.addEventListener('beforeunload', () => {
+        if (pollingInterval) {
+            clearInterval(pollingInterval);
+        }
+    });
 </script>
 {% endblock %}

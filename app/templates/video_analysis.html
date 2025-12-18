@@ -43,14 +43,18 @@
 
         <!-- Analysis Type Selection -->
         <div class="card mb-4" id="analysisTypeCard" style="display: none;">
-            <div class="card-header">
-                <h5 class="mb-0">Select Analysis Type</h5>
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Select Analysis Types</h5>
+                <div>
+                    <button type="button" class="btn btn-sm btn-outline-primary me-2" id="selectAllBtn">Select All</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="deselectAllBtn">Deselect All</button>
+                </div>
             </div>
             <div class="card-body">
                 <div class="row g-3">
                     <div class="col-md-6">
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="analysisType" id="labelDetection" value="label_detection" checked>
+                            <input class="form-check-input analysis-type-checkbox" type="checkbox" name="analysisType" id="labelDetection" value="label_detection">
                             <label class="form-check-label" for="labelDetection">
                                 <strong>Label Detection</strong><br>
                                 <small class="text-muted">Identify objects, activities, and scenes</small>
@@ -59,7 +63,7 @@
                     </div>
                     <div class="col-md-6">
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="analysisType" id="faceDetection" value="face_detection">
+                            <input class="form-check-input analysis-type-checkbox" type="checkbox" name="analysisType" id="faceDetection" value="face_detection">
                             <label class="form-check-label" for="faceDetection">
                                 <strong>Face Detection</strong><br>
                                 <small class="text-muted">Detect faces and attributes</small>
@@ -68,7 +72,7 @@
                     </div>
                     <div class="col-md-6">
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="analysisType" id="celebrityRecognition" value="celebrity_recognition">
+                            <input class="form-check-input analysis-type-checkbox" type="checkbox" name="analysisType" id="celebrityRecognition" value="celebrity_recognition">
                             <label class="form-check-label" for="celebrityRecognition">
                                 <strong>Celebrity Recognition</strong><br>
                                 <small class="text-muted">Identify celebrities</small>
@@ -77,7 +81,7 @@
                     </div>
                     <div class="col-md-6">
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="analysisType" id="contentModeration" value="content_moderation">
+                            <input class="form-check-input analysis-type-checkbox" type="checkbox" name="analysisType" id="contentModeration" value="content_moderation">
                             <label class="form-check-label" for="contentModeration">
                                 <strong>Content Moderation</strong><br>
                                 <small class="text-muted">Detect inappropriate content</small>
@@ -86,7 +90,7 @@
                     </div>
                     <div class="col-md-6">
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="analysisType" id="textDetection" value="text_detection">
+                            <input class="form-check-input analysis-type-checkbox" type="checkbox" name="analysisType" id="textDetection" value="text_detection">
                             <label class="form-check-label" for="textDetection">
                                 <strong>Text Detection</strong><br>
                                 <small class="text-muted">Detect and extract text</small>
@@ -95,7 +99,7 @@
                     </div>
                     <div class="col-md-6">
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="analysisType" id="personTracking" value="person_tracking">
+                            <input class="form-check-input analysis-type-checkbox" type="checkbox" name="analysisType" id="personTracking" value="person_tracking">
                             <label class="form-check-label" for="personTracking">
                                 <strong>Person Tracking</strong><br>
                                 <small class="text-muted">Track people in video</small>
@@ -104,7 +108,7 @@
                     </div>
                     <div class="col-md-6">
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="analysisType" id="faceSearch" value="face_search">
+                            <input class="form-check-input analysis-type-checkbox" type="checkbox" name="analysisType" id="faceSearch" value="face_search">
                             <label class="form-check-label" for="faceSearch">
                                 <strong>Face Search</strong><br>
                                 <small class="text-muted">Search faces in collection</small>
@@ -113,7 +117,7 @@
                     </div>
                     <div class="col-md-6">
                         <div class="form-check">
-                            <input class="form-check-input" type="radio" name="analysisType" id="shotSegmentation" value="shot_segmentation">
+                            <input class="form-check-input analysis-type-checkbox" type="checkbox" name="analysisType" id="shotSegmentation" value="shot_segmentation">
                             <label class="form-check-label" for="shotSegmentation">
                                 <strong>Shot/Segment Detection</strong><br>
                                 <small class="text-muted">Detect scene changes</small>
@@ -165,6 +169,9 @@
                     <li><strong>Shot Segmentation:</strong> Identifies scene boundaries</li>
                 </ul>
                 <hr>
+                <p class="small">
+                    <strong>Multi-Select:</strong> You can now select multiple analysis types to run simultaneously! Each analysis will create a separate job.
+                </p>
                 <p class="small text-muted">
                     Analysis jobs run asynchronously and may take several minutes to complete.
                     Check the <a href="/history">History</a> page for results.
@@ -200,16 +207,37 @@
         });
     }
 
-    // Show collection card for face search
-    document.querySelectorAll('input[name="analysisType"]').forEach(radio => {
-        radio.addEventListener('change', async (e) => {
-            if (e.target.value === 'face_search') {
-                await loadCollections();
-                collectionCard.style.display = 'block';
-            } else {
-                collectionCard.style.display = 'none';
-            }
+    // Select All / Deselect All buttons
+    const selectAllBtn = document.getElementById('selectAllBtn');
+    const deselectAllBtn = document.getElementById('deselectAllBtn');
+
+    if (selectAllBtn) {
+        selectAllBtn.addEventListener('click', () => {
+            document.querySelectorAll('.analysis-type-checkbox').forEach(cb => cb.checked = true);
+            updateCollectionCardVisibility();
         });
+    }
+
+    if (deselectAllBtn) {
+        deselectAllBtn.addEventListener('click', () => {
+            document.querySelectorAll('.analysis-type-checkbox').forEach(cb => cb.checked = false);
+            updateCollectionCardVisibility();
+        });
+    }
+
+    // Show collection card if face_search is selected
+    function updateCollectionCardVisibility() {
+        const faceSearchChecked = document.getElementById('faceSearch').checked;
+        if (faceSearchChecked) {
+            loadCollections();
+            collectionCard.style.display = 'block';
+        } else {
+            collectionCard.style.display = 'none';
+        }
+    }
+
+    document.querySelectorAll('input[name="analysisType"]').forEach(checkbox => {
+        checkbox.addEventListener('change', updateCollectionCardVisibility);
     });
 
     // Load face collections
@@ -233,23 +261,31 @@
     if (analyzeBtn) {
         analyzeBtn.addEventListener('click', async () => {
             const fileId = videoFileSelect.value;
-            const analysisType = document.querySelector('input[name="analysisType"]:checked').value;
+
+            // Collect all checked analysis types
+            const analysisTypes = Array.from(document.querySelectorAll('input[name="analysisType"]:checked'))
+                .map(cb => cb.value);
 
             if (!fileId) {
                 showAlert('Please select a video file', 'warning');
                 return;
             }
 
+            if (analysisTypes.length === 0) {
+                showAlert('Please select at least one analysis type', 'warning');
+                return;
+            }
+
             const payload = {
                 file_id: parseInt(fileId),
-                analysis_type: analysisType
+                analysis_types: analysisTypes
             };
 
-            // Add collection ID for face search
-            if (analysisType === 'face_search') {
+            // Add collection ID for face search if selected
+            if (analysisTypes.includes('face_search')) {
                 const collectionId = collectionSelect.value;
                 if (!collectionId) {
-                    showAlert('Please select a face collection', 'warning');
+                    showAlert('Please select a face collection for Face Search', 'warning');
                     return;
                 }
                 payload.collection_id = collectionId;
@@ -271,7 +307,8 @@
                 }
 
                 const result = await response.json();
-                showAlert(`Analysis started successfully! Job ID: ${result.job_id}`, 'success');
+                const jobCount = result.job_ids ? result.job_ids.length : 1;
+                showAlert(`Analysis started successfully! ${jobCount} job(s) submitted.`, 'success');
 
                 // Redirect to history page after 2 seconds
                 setTimeout(() => {

@@ -160,7 +160,8 @@
             const response = await fetch('/api/collections');
             if (!response.ok) throw new Error('Failed to load collections');
 
-            const collections = await response.json();
+            const data = await response.json();
+            const collections = data.collections || [];
 
             if (collections.length === 0) {
                 collectionsContainer.innerHTML = '<p class="text-muted">No collections yet. Create one to get started!</p>';

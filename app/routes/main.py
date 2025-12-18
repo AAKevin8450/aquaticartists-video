@@ -73,10 +73,6 @@ def collections_page():
 @bp.route('/history')
 def history_page():
     """Job history page."""
-    try:
-        db = get_db()
-        jobs = db.list_jobs(limit=100)
-        return render_template('history.html', jobs=jobs)
-    except Exception as e:
-        current_app.logger.error(f"History page error: {e}")
-        return render_template('history.html', jobs=[], error=str(e))
+    # Don't pre-load jobs - let the frontend fetch them via AJAX
+    # This ensures consistent formatting between initial page load and refreshes
+    return render_template('history.html', jobs=[])
