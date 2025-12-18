@@ -39,6 +39,8 @@ class TranscriptionProgress:
     errors: List[Dict[str, str]] = field(default_factory=list)
     start_time: Optional[float] = None
     end_time: Optional[float] = None
+    total_batch_size: int = 0  # Total size of all files in batch (bytes)
+    processed_files_sizes: List[int] = field(default_factory=list)  # Sizes of processed files (bytes)
 
     @property
     def progress_percent(self) -> float:
@@ -55,12 +57,56 @@ class TranscriptionProgress:
         end = self.end_time if self.end_time else time.time()
         return end - self.start_time
 
+    @property
+    def avg_video_size_total(self) -> Optional[float]:
+        """Calculate average video size for entire batch."""
+        if self.total_files == 0:
+            return None
+        return self.total_batch_size / self.total_files
+
+    @property
+    def avg_video_size_processed(self) -> Optional[float]:
+        """Calculate average video size for processed files only."""
+        if len(self.processed_files_sizes) == 0:
+            return None
+        return sum(self.processed_files_sizes) / len(self.processed_files_sizes)
+
 
 class TranscriptionService:
     """Service for local video transcription using faster-whisper."""
 
     # Supported video extensions
     VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg'}
+
+    @staticmethod
+    def calculate_text_metrics(text: str) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Calculate character count and word count from transcript text.
+        Returns (None, None) for empty or whitespace-only text (no speech).
+
+        Args:
+            text: Transcript text
+
+        Returns:
+            Tuple of (character_count, word_count) or (None, None) if no speech
+        """
+        if not text or not text.strip():
+            return (None, None)
+
+        # Remove leading/trailing whitespace
+        cleaned_text = text.strip()
+
+        # Character count (excluding whitespace)
+        char_count = len(cleaned_text.replace(' ', '').replace('\n', '').replace('\t', ''))
+
+        # Word count (split by whitespace)
+        word_count = len(cleaned_text.split())
+
+        # If no actual content, return None
+        if char_count == 0 or word_count == 0:
+            return (None, None)
+
+        return (char_count, word_count)
 
     def __init__(self, model_size: str = 'medium', device: str = 'auto', compute_type: str = 'default'):
         """
@@ -293,8 +339,14 @@ class TranscriptionService:
             # Get audio duration (from last segment)
             duration_seconds = transcript_segments[-1]['end'] if transcript_segments else 0.0
 
+            # Calculate character and word counts
+            full_text = ' '.join(full_text_parts)
+            character_count, word_count = self.calculate_text_metrics(full_text)
+
             return {
-                'transcript_text': ' '.join(full_text_parts),
+                'transcript_text': full_text,
+                'character_count': character_count,
+                'word_count': word_count,
                 'segments': transcript_segments,
                 'word_timestamps': word_timestamps_list if word_timestamps else None,
                 'language': info.language,
@@ -378,10 +430,19 @@ class TranscriptionService:
         if model_size:
             self.set_model_size(model_size)
 
+        # Calculate total batch size
+        total_batch_size = 0
+        for file_path in file_paths:
+            try:
+                total_batch_size += os.path.getsize(file_path)
+            except OSError:
+                pass  # Skip files that can't be accessed
+
         progress = TranscriptionProgress(
             total_files=len(file_paths),
             status='RUNNING',
-            start_time=time.time()
+            start_time=time.time(),
+            total_batch_size=total_batch_size
         )
         self._batch_jobs[job_id] = progress
         self._cancel_flags[job_id] = False
@@ -399,6 +460,12 @@ class TranscriptionService:
                 progress_callback(progress)
 
             try:
+                # Get file size for tracking
+                try:
+                    file_size = os.path.getsize(file_path)
+                except OSError:
+                    file_size = 0
+
                 # Transcribe file
                 result = self.transcribe_file(file_path, **transcribe_kwargs)
 
@@ -407,8 +474,16 @@ class TranscriptionService:
                     db_callback(file_path, result)
 
                 progress.completed_files += 1
+                progress.processed_files_sizes.append(file_size)
 
             except Exception as e:
+                # Track failed file size too
+                try:
+                    file_size = os.path.getsize(file_path)
+                    progress.processed_files_sizes.append(file_size)
+                except OSError:
+                    pass
+
                 progress.failed_files += 1
                 progress.errors.append({
                     'file_path': file_path,

@@ -97,6 +97,9 @@ class Database:
                     model_name TEXT NOT NULL,
                     language TEXT,
                     transcript_text TEXT,
+                    character_count INTEGER,
+                    word_count INTEGER,
+                    duration_seconds REAL,
                     segments TEXT,
                     word_timestamps TEXT,
                     confidence_score REAL,
@@ -108,6 +111,22 @@ class Database:
                     UNIQUE(file_path, file_size, modified_time, model_name)
                 )
             ''')
+
+            # Add character_count and word_count columns if they don't exist (migration for existing databases)
+            try:
+                cursor.execute('ALTER TABLE transcripts ADD COLUMN character_count INTEGER')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+            try:
+                cursor.execute('ALTER TABLE transcripts ADD COLUMN word_count INTEGER')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
+            try:
+                cursor.execute('ALTER TABLE transcripts ADD COLUMN duration_seconds REAL')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
             # Create indexes for better query performance
             cursor.execute('''
@@ -372,6 +391,9 @@ class Database:
 
     def update_transcript_status(self, transcript_id: int, status: str,
                                 transcript_text: Optional[str] = None,
+                                character_count: Optional[int] = None,
+                                word_count: Optional[int] = None,
+                                duration_seconds: Optional[float] = None,
                                 segments: Optional[List] = None,
                                 word_timestamps: Optional[List] = None,
                                 language: Optional[str] = None,
@@ -385,12 +407,12 @@ class Database:
             if status == 'COMPLETED':
                 cursor.execute('''
                     UPDATE transcripts
-                    SET status = ?, transcript_text = ?, segments = ?,
-                        word_timestamps = ?, language = ?,
+                    SET status = ?, transcript_text = ?, character_count = ?, word_count = ?,
+                        duration_seconds = ?, segments = ?, word_timestamps = ?, language = ?,
                         confidence_score = ?, processing_time = ?,
                         completed_at = ?
                     WHERE id = ?
-                ''', (status, transcript_text,
+                ''', (status, transcript_text, character_count, word_count, duration_seconds,
                      json.dumps(segments) if segments else None,
                      json.dumps(word_timestamps) if word_timestamps else None,
                      language, confidence_score, processing_time,

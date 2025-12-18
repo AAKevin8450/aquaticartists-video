@@ -290,6 +290,9 @@ def transcribe_single():
                 transcript_id=transcript_id,
                 status=TranscriptStatus.COMPLETED,
                 transcript_text=result['transcript_text'],
+                character_count=result.get('character_count'),
+                word_count=result.get('word_count'),
+                duration_seconds=result.get('duration_seconds'),
                 segments=result['segments'],
                 word_timestamps=result['word_timestamps'],
                 language=result['language'],
@@ -402,6 +405,9 @@ def start_batch():
                         transcript_id=transcript_id,
                         status=TranscriptStatus.COMPLETED,
                         transcript_text=result['transcript_text'],
+                        character_count=result.get('character_count'),
+                        word_count=result.get('word_count'),
+                        duration_seconds=result.get('duration_seconds'),
                         segments=result['segments'],
                         word_timestamps=result['word_timestamps'],
                         language=result['language'],
@@ -480,6 +486,8 @@ def batch_status(job_id: str):
             'current_file': progress.current_file,
             'progress_percent': progress.progress_percent,
             'elapsed_time': progress.elapsed_time,
+            'avg_video_size_total': progress.avg_video_size_total,
+            'avg_video_size_processed': progress.avg_video_size_processed,
             'errors': progress.errors
         }), 200
 

@@ -114,12 +114,14 @@ Completely local video transcription system using faster-whisper (CTranslate2-ba
 8. **Database Storage**: Full transcripts with word-level timestamps stored in SQLite
 9. **Language Support**: Auto-detection or specify language (100+ languages supported)
 10. **Search & Filter**: Full-text search across transcripts with filters by model, status, language, date range
-11. **Enhanced Progress UI**: Solid completion bar, real-time statistics (avg size, avg time, ETA, success rate)
+11. **Enhanced Progress UI**: Solid completion bar, real-time statistics (dual avg size metrics, avg time, ETA, success rate)
+12. **Transcript Metrics**: Duration tracking, character/word counts, processing speed (Xrealtime), words per minute
 
 ### Database Schema (Redesigned 2025-12-18)
-**transcripts** table (16 fields, no legacy fields):
+**transcripts** table (19 fields, no legacy fields):
 - **Identity**: file_path, file_name, file_size, modified_time, model_name
 - **Transcript Data**: language, transcript_text, segments (JSON), word_timestamps (JSON)
+- **Content Metrics**: character_count, word_count, duration_seconds (all nullable, NULL for videos without speech)
 - **Quality Metrics**: confidence_score, processing_time
 - **Status Tracking**: status, error_message, created_at, completed_at
 - **Unique Constraint**: (file_path, file_size, modified_time, model_name) - allows multi-model storage
