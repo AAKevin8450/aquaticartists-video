@@ -105,21 +105,25 @@ Completely local video transcription system using faster-whisper (CTranslate2-ba
 
 ### Key Features
 1. **Directory Scanning**: Recursively scan directories for video files with deduplication
-2. **Batch Processing**: Process multiple files with progress tracking and resumable operations
-3. **Smart Deduplication**: Filesystem metadata (path + size + modified time) for instant identification
-4. **Model Selection**: 6 model sizes (tiny, base, small, medium, large-v2, large-v3)
-5. **GPU Acceleration**: Automatic CUDA detection and utilization when available
-6. **Multiple Export Formats**: TXT, JSON, SRT (SubRip), VTT (WebVTT)
-7. **Database Storage**: Full transcripts with word-level timestamps stored in SQLite
-8. **Language Support**: Auto-detection or specify language (100+ languages supported)
+2. **Batch Processing**: Process multiple files with progress tracking, resumable operations, and real-time statistics
+3. **Multi-Model Support**: Store multiple transcripts per video (same file transcribed with different Whisper models)
+4. **Smart Deduplication**: Filesystem metadata (path + size + modified time + model) for instant identification
+5. **Model Selection**: 6 model sizes (tiny, base, small, medium, large-v2, large-v3)
+6. **GPU Acceleration**: Automatic CUDA detection and utilization when available
+7. **Multiple Export Formats**: TXT, JSON, SRT (SubRip), VTT (WebVTT)
+8. **Database Storage**: Full transcripts with word-level timestamps stored in SQLite
+9. **Language Support**: Auto-detection or specify language (100+ languages supported)
+10. **Search & Filter**: Full-text search across transcripts with filters by model, status, language, date range
+11. **Enhanced Progress UI**: Solid completion bar, real-time statistics (avg size, avg time, ETA, success rate)
 
-### Database Schema
-**transcripts** table stores:
-- File path, size, and modified time (for efficient file identification)
-- Full transcript text and segmented data
-- Word-level timestamps with confidence scores
-- Processing metadata (model used, language, processing time)
-- Status tracking (PENDING, IN_PROGRESS, COMPLETED, FAILED)
+### Database Schema (Redesigned 2025-12-18)
+**transcripts** table (16 fields, no legacy fields):
+- **Identity**: file_path, file_name, file_size, modified_time, model_name
+- **Transcript Data**: language, transcript_text, segments (JSON), word_timestamps (JSON)
+- **Quality Metrics**: confidence_score, processing_time
+- **Status Tracking**: status, error_message, created_at, completed_at
+- **Unique Constraint**: (file_path, file_size, modified_time, model_name) - allows multi-model storage
+- **Indexes**: model_name, language, file_name (for search/filter performance)
 
 ### Architecture
 - **Service Layer** (app/services/transcription_service.py): Core transcription logic with model caching
@@ -133,7 +137,8 @@ Completely local video transcription system using faster-whisper (CTranslate2-ba
 - POST `/transcription/api/start-batch` - Start batch transcription job
 - GET `/transcription/api/batch-status/<job_id>` - Get batch progress
 - POST `/transcription/api/batch-cancel/<job_id>` - Cancel running batch
-- GET `/transcription/api/transcripts` - List all transcripts (paginated)
+- GET `/transcription/api/transcripts` - List transcripts (supports search/filter/sort/pagination)
+  - Query params: ?search, ?status, ?model, ?language, ?from_date, ?to_date, ?sort_by, ?sort_order, ?page, ?per_page
 - GET `/transcription/api/transcript/<id>` - Get single transcript
 - DELETE `/transcription/api/transcript/<id>` - Delete transcript
 - GET `/transcription/api/transcript/<id>/download?format=txt|json|srt|vtt` - Download transcript
@@ -149,11 +154,13 @@ Completely local video transcription system using faster-whisper (CTranslate2-ba
 
 ### Best Practices
 1. **Model Selection**: Use 'medium' for balanced quality/speed, 'large-v3' for best accuracy
-2. **GPU Usage**: Ensure CUDA toolkit installed for GPU acceleration
-3. **Batch Size**: Process 10-50 files per batch for optimal progress tracking
-4. **Force Reprocess**: Use sparingly - system automatically skips transcribed files using filesystem metadata
-5. **Error Handling**: Check batch errors list for failed files and reasons
-6. **Network Performance**: Optimized for network shares - uses instant filesystem metadata (no file reading during scan)
+2. **Multi-Model Comparison**: Transcribe same video with different models to compare accuracy vs speed tradeoffs
+3. **GPU Usage**: Ensure CUDA toolkit installed for GPU acceleration
+4. **Batch Size**: Process 10-50 files per batch for optimal progress tracking
+5. **Force Reprocess**: Use sparingly - system automatically skips transcribed files per model
+6. **Search & Filter**: Use search for finding specific content, filters for narrowing by model/status/language
+7. **Error Handling**: Check batch errors list for failed files and reasons
+8. **Network Performance**: Optimized for network shares - uses instant filesystem metadata (no file reading during scan)
 
 ### Workflow Example
 ```python
@@ -184,7 +191,8 @@ GET /transcription/api/transcript/1/download?format=srt
 - **CUDA not available**: Install NVIDIA CUDA Toolkit (11.x or 12.x) for GPU support
 - **Out of memory**: Use smaller model size (medium or small) or CPU device
 - **Slow processing**: Ensure GPU acceleration is working (check logs for device: cuda)
-- **Files skipped**: Check file hash - system prevents reprocessing by default
+- **Files skipped**: System prevents reprocessing same video with same model (use different model or force flag)
+- **Database errors**: Database was recreated 2025-12-18 - old data/app.db deleted, fresh schema created
 
 ## Video Analysis Dashboard Feature
 

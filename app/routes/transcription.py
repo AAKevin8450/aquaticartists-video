@@ -179,11 +179,18 @@ def scan_directory():
         files_info = []
         already_transcribed_count = 0
 
+        # Get current model for checking existing transcripts
+        service = get_transcription_service()
+        current_model = service.model_size
+
         for file_path in video_files:
             file_stat = os.stat(file_path)
+            file_name = os.path.basename(file_path)
 
-            # Check if already transcribed by file path (fast)
-            existing_transcript = db.get_transcript_by_path(file_path)
+            # Check if already transcribed with current model
+            existing_transcript = db.get_transcript_by_file_info(
+                file_path, file_stat.st_size, file_stat.st_mtime, current_model
+            )
             already_transcribed = existing_transcript is not None and existing_transcript['status'] == TranscriptStatus.COMPLETED
 
             if already_transcribed:
@@ -191,7 +198,7 @@ def scan_directory():
 
             files_info.append({
                 'path': file_path,
-                'filename': os.path.basename(file_path),
+                'filename': file_name,
                 'size_bytes': file_stat.st_size,
                 'already_transcribed': already_transcribed,
                 'transcript_id': existing_transcript['id'] if already_transcribed else None
@@ -247,15 +254,18 @@ def transcribe_single():
 
         # Get file metadata (instant - no file reading)
         file_size, file_mtime = service.get_file_metadata(file_path)
+        file_name = os.path.basename(file_path)
 
-        # Check if already transcribed
-        existing_transcript = db.get_transcript_by_file_info(file_path, file_size, file_mtime)
+        # Check if already transcribed with current model
+        existing_transcript = db.get_transcript_by_file_info(
+            file_path, file_size, file_mtime, service.model_size
+        )
         if existing_transcript and existing_transcript['status'] == TranscriptStatus.COMPLETED and not force:
             return jsonify({
                 'transcript_id': existing_transcript['id'],
                 'status': 'COMPLETED',
                 'transcript': existing_transcript,
-                'message': 'File already transcribed (use force=true to reprocess)'
+                'message': 'File already transcribed with this model (use force=true to reprocess)'
             }), 200
 
         # Create or update transcript record
@@ -265,9 +275,10 @@ def transcribe_single():
         else:
             transcript_id = db.create_transcript(
                 file_path=file_path,
-                file_size_bytes=file_size,
-                file_modified_time=file_mtime,
-                model_used=service.model_size
+                file_name=file_name,
+                file_size=file_size,
+                modified_time=file_mtime,
+                model_name=service.model_size
             )
 
         try:
@@ -279,12 +290,11 @@ def transcribe_single():
                 transcript_id=transcript_id,
                 status=TranscriptStatus.COMPLETED,
                 transcript_text=result['transcript_text'],
-                transcript_segments=result['segments'],
+                segments=result['segments'],
                 word_timestamps=result['word_timestamps'],
-                duration_seconds=result['duration_seconds'],
                 language=result['language'],
                 confidence_score=result['confidence_score'],
-                processing_time_seconds=result['processing_time_seconds']
+                processing_time=result['processing_time_seconds']
             )
 
             # Get updated transcript
@@ -347,7 +357,6 @@ def start_batch():
         job_id = str(uuid.uuid4())
 
         # Start batch transcription in background thread
-        db = get_db()
         service = get_transcription_service()
 
         # Get app reference for background thread
@@ -356,39 +365,55 @@ def start_batch():
         def db_callback(file_path: str, result: Dict[str, Any]):
             """Callback to save transcription results to database."""
             try:
+                print(f"[DB_CALLBACK] Starting save for: {os.path.basename(file_path)}")
+
+                # Get db instance inside app context (thread-safe)
+                db = get_db()
+                print(f"[DB_CALLBACK] Got database instance")
+
                 # Get file metadata (instant - no file reading)
                 file_size, file_mtime = service.get_file_metadata(file_path)
+                file_name = os.path.basename(file_path)
+                print(f"[DB_CALLBACK] Got file metadata: size={file_size}, mtime={file_mtime}")
 
-                # Check if already exists
-                existing = db.get_transcript_by_file_info(file_path, file_size, file_mtime)
+                # Check if already exists with current model
+                existing = db.get_transcript_by_file_info(file_path, file_size, file_mtime, service.model_size)
+                print(f"[DB_CALLBACK] Checked existing: {existing is not None}")
 
                 if existing and not force:
                     transcript_id = existing['id']
+                    print(f"[DB_CALLBACK] Using existing transcript ID: {transcript_id}")
                 else:
                     if existing:
                         transcript_id = existing['id']
+                        print(f"[DB_CALLBACK] Updating existing transcript ID: {transcript_id}")
                     else:
                         transcript_id = db.create_transcript(
                             file_path=file_path,
-                            file_size_bytes=file_size,
-                            file_modified_time=file_mtime,
-                            model_used=service.model_size
+                            file_name=file_name,
+                            file_size=file_size,
+                            modified_time=file_mtime,
+                            model_name=service.model_size
                         )
+                        print(f"[DB_CALLBACK] Created new transcript ID: {transcript_id}")
 
                     # Update with results
                     db.update_transcript_status(
                         transcript_id=transcript_id,
                         status=TranscriptStatus.COMPLETED,
                         transcript_text=result['transcript_text'],
-                        transcript_segments=result['segments'],
+                        segments=result['segments'],
                         word_timestamps=result['word_timestamps'],
-                        duration_seconds=result['duration_seconds'],
                         language=result['language'],
                         confidence_score=result['confidence_score'],
-                        processing_time_seconds=result['processing_time_seconds']
+                        processing_time=result['processing_time_seconds']
                     )
+                    print(f"[DB_CALLBACK] Successfully saved transcript ID: {transcript_id}")
 
             except Exception as e:
+                print(f"[DB_CALLBACK] ERROR saving {os.path.basename(file_path)}: {e}")
+                import traceback
+                traceback.print_exc()
                 app.logger.error(f"Failed to save transcript for {file_path}: {e}")
 
         def run_batch():
@@ -487,10 +512,17 @@ def cancel_batch(job_id: str):
 @bp.route('/api/transcripts', methods=['GET'])
 def list_transcripts():
     """
-    List all transcripts with pagination.
+    List all transcripts with pagination and filtering.
 
     Query params:
         - status: Filter by status (PENDING, IN_PROGRESS, COMPLETED, FAILED)
+        - model: Filter by model name
+        - language: Filter by language code
+        - search: Search in file name, path, and transcript text
+        - from_date: Filter from date (ISO format)
+        - to_date: Filter to date (ISO format)
+        - sort_by: Sort field (created_at, file_name, file_size, processing_time, model_name)
+        - sort_order: Sort order (asc, desc)
         - limit: Max results (default 100)
         - offset: Pagination offset (default 0)
 
@@ -499,23 +531,56 @@ def list_transcripts():
             "transcripts": [...],
             "total_count": 150,
             "limit": 100,
-            "offset": 0
+            "offset": 0,
+            "available_models": [...],
+            "available_languages": [...]
         }
     """
     try:
         status = request.args.get('status')
+        model = request.args.get('model')
+        language = request.args.get('language')
+        search = request.args.get('search')
+        from_date = request.args.get('from_date')
+        to_date = request.args.get('to_date')
+        sort_by = request.args.get('sort_by', 'created_at')
+        sort_order = request.args.get('sort_order', 'desc')
         limit = int(request.args.get('limit', 100))
         offset = int(request.args.get('offset', 0))
 
         db = get_db()
-        transcripts = db.list_transcripts(status=status, limit=limit, offset=offset)
-        total_count = db.count_transcripts(status=status)
+        transcripts = db.list_transcripts(
+            status=status,
+            model=model,
+            language=language,
+            search=search,
+            from_date=from_date,
+            to_date=to_date,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+            offset=offset
+        )
+        total_count = db.count_transcripts(
+            status=status,
+            model=model,
+            language=language,
+            search=search,
+            from_date=from_date,
+            to_date=to_date
+        )
+
+        # Get available filter options
+        available_models = db.get_available_models()
+        available_languages = db.get_available_languages()
 
         return jsonify({
             'transcripts': transcripts,
             'total_count': total_count,
             'limit': limit,
-            'offset': offset
+            'offset': offset,
+            'available_models': available_models,
+            'available_languages': available_languages
         }), 200
 
     except Exception as e:
@@ -597,7 +662,7 @@ def download_transcript(transcript_id: int):
 
         elif format_type == 'srt':
             # SubRip subtitle format
-            srt_content = _generate_srt(transcript['transcript_segments'])
+            srt_content = _generate_srt(transcript.get('segments') or [])
             return send_file(
                 io.BytesIO(srt_content.encode('utf-8')),
                 mimetype='text/plain',
@@ -607,7 +672,7 @@ def download_transcript(transcript_id: int):
 
         elif format_type == 'vtt':
             # WebVTT subtitle format
-            vtt_content = _generate_vtt(transcript['transcript_segments'])
+            vtt_content = _generate_vtt(transcript.get('segments') or [])
             return send_file(
                 io.BytesIO(vtt_content.encode('utf-8')),
                 mimetype='text/vtt',

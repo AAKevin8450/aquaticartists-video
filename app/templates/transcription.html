@@ -126,7 +126,7 @@
                         </div>
                     </div>
                 </div>
-                <div class="row text-center">
+                <div class="row text-center mb-3">
                     <div class="col-md-3">
                         <h6>Total Files</h6>
                         <p class="fs-4" id="totalFiles">0</p>
@@ -142,6 +142,25 @@
                     <div class="col-md-3">
                         <h6>Elapsed Time</h6>
                         <p class="fs-4" id="elapsedTime">0s</p>
+                    </div>
+                </div>
+                <!-- Statistics Section -->
+                <div class="row text-center border-top pt-3" id="batchStats" style="display: none;">
+                    <div class="col-md-3">
+                        <h6 class="text-muted small">Avg Video Size</h6>
+                        <p class="fs-6" id="avgVideoSize">-</p>
+                    </div>
+                    <div class="col-md-3">
+                        <h6 class="text-muted small">Avg Processing Time</h6>
+                        <p class="fs-6" id="avgProcessingTime">-</p>
+                    </div>
+                    <div class="col-md-3">
+                        <h6 class="text-muted small">Est. Time Remaining</h6>
+                        <p class="fs-6" id="estimatedTimeRemaining">-</p>
+                    </div>
+                    <div class="col-md-3">
+                        <h6 class="text-muted small">Success Rate</h6>
+                        <p class="fs-6" id="successRate">-</p>
                     </div>
                 </div>
                 <div id="currentFileContainer" style="display: none;">
@@ -163,22 +182,58 @@
 <div class="row">
     <div class="col-12">
         <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
+            <div class="card-header">
                 <h5 class="mb-0"><i class="bi bi-list-ul"></i> Transcripts</h5>
-                <div>
-                    <select class="form-select form-select-sm d-inline-block w-auto" id="statusFilter">
-                        <option value="">All Status</option>
-                        <option value="PENDING">Pending</option>
-                        <option value="IN_PROGRESS">In Progress</option>
-                        <option value="COMPLETED">Completed</option>
-                        <option value="FAILED">Failed</option>
-                    </select>
-                    <button class="btn btn-sm btn-secondary" id="refreshTranscriptsBtn">
-                        <i class="bi bi-arrow-clockwise"></i> Refresh
-                    </button>
-                </div>
             </div>
             <div class="card-body">
+                <!-- Search and Filters -->
+                <div class="row g-2 mb-3">
+                    <div class="col-md-3">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text"><i class="bi bi-search"></i></span>
+                            <input type="text" class="form-control" id="searchInput" placeholder="Search transcripts...">
+                            <button class="btn btn-outline-secondary" type="button" id="clearSearchBtn" title="Clear search">
+                                <i class="bi bi-x"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select form-select-sm" id="statusFilter">
+                            <option value="">All Status</option>
+                            <option value="PENDING">Pending</option>
+                            <option value="IN_PROGRESS">In Progress</option>
+                            <option value="COMPLETED">Completed</option>
+                            <option value="FAILED">Failed</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select form-select-sm" id="modelFilter">
+                            <option value="">All Models</option>
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select form-select-sm" id="languageFilter">
+                            <option value="">All Languages</option>
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <select class="form-select form-select-sm" id="sortByFilter">
+                            <option value="created_at">Sort by Date</option>
+                            <option value="file_name">Sort by Name</option>
+                            <option value="file_size">Sort by Size</option>
+                            <option value="processing_time">Sort by Time</option>
+                            <option value="model_name">Sort by Model</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1">
+                        <button class="btn btn-sm btn-outline-secondary w-100" id="sortOrderBtn" title="Toggle sort order">
+                            <i class="bi bi-sort-down" id="sortOrderIcon"></i>
+                        </button>
+                    </div>
+                </div>
+
                 <div id="transcriptsList">
                     <div class="text-center">
                         <div class="spinner-border" role="status">
@@ -296,6 +351,11 @@
     let currentTranscriptId = null;
     let currentBrowsingPath = '';
     let browserParentPath = null;
+    let searchDebounceTimer = null;
+    let sortOrder = 'desc';
+    let batchStartTime = null;
+    let batchFileSizes = [];
+    let batchProcessingTimes = [];
 
     // Folder Browser Functions
     const folderBrowserModal = document.getElementById('folderBrowserModal');
@@ -585,14 +645,55 @@
 
     // Update batch progress
     function updateBatchProgress(status) {
+        const progressBar = document.getElementById('progressBar');
+        const processed = status.completed_files + status.failed_files;
+        const isComplete = status.progress_percent >= 100 || status.status === 'COMPLETED';
+
         document.getElementById('totalFiles').textContent = status.total_files;
         document.getElementById('completedFiles').textContent = status.completed_files;
         document.getElementById('failedFiles').textContent = status.failed_files;
         document.getElementById('progressPercent').textContent = `${status.progress_percent.toFixed(1)}%`;
-        document.getElementById('progressBar').style.width = `${status.progress_percent}%`;
+        progressBar.style.width = `${status.progress_percent}%`;
+
+        // Make progress bar solid when complete
+        if (isComplete) {
+            progressBar.classList.remove('progress-bar-striped', 'progress-bar-animated');
+            progressBar.classList.add('bg-success');
+        } else {
+            progressBar.classList.add('progress-bar-striped', 'progress-bar-animated');
+            progressBar.classList.remove('bg-success');
+        }
 
         if (status.elapsed_time) {
-            document.getElementById('elapsedTime').textContent = `${status.elapsed_time.toFixed(1)}s`;
+            document.getElementById('elapsedTime').textContent = formatDuration(status.elapsed_time);
+        }
+
+        // Calculate and display statistics
+        if (processed > 0) {
+            document.getElementById('batchStats').style.display = 'flex';
+
+            // Average video size (from scanned files)
+            const selectedIndexes = Array.from(document.querySelectorAll('.file-checkbox:checked'))
+                .map(cb => parseInt(cb.value));
+            if (selectedIndexes.length > 0) {
+                const totalSize = selectedIndexes.reduce((sum, i) => sum + (scannedFiles[i]?.size_bytes || 0), 0);
+                const avgSize = totalSize / selectedIndexes.length;
+                document.getElementById('avgVideoSize').textContent = formatFileSize(avgSize);
+            }
+
+            // Average processing time (estimate from elapsed time)
+            const avgTime = status.elapsed_time / processed;
+            document.getElementById('avgProcessingTime').textContent = formatDuration(avgTime);
+
+            // Estimated time remaining
+            const remaining = status.total_files - processed;
+            const estRemaining = remaining * avgTime;
+            document.getElementById('estimatedTimeRemaining').textContent =
+                remaining > 0 ? formatDuration(estRemaining) : 'Complete';
+
+            // Success rate
+            const successRate = (status.completed_files / processed) * 100;
+            document.getElementById('successRate').textContent = `${successRate.toFixed(1)}%`;
         }
 
         if (status.current_file) {
@@ -611,7 +712,18 @@
         }
 
         document.getElementById('progressText').textContent =
-            `Processing (${status.completed_files + status.failed_files}/${status.total_files})`;
+            `Processing (${processed}/${status.total_files})`;
+    }
+
+    // Format duration in human-readable format
+    function formatDuration(seconds) {
+        if (seconds < 60) return `${seconds.toFixed(1)}s`;
+        const minutes = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        if (minutes < 60) return `${minutes}m ${secs}s`;
+        const hours = Math.floor(minutes / 60);
+        const mins = minutes % 60;
+        return `${hours}h ${mins}m`;
     }
 
     // Cancel batch
@@ -637,20 +749,35 @@
         }
     });
 
-    // Load transcripts
+    // Load transcripts with filters
     async function loadTranscripts() {
-        const statusFilter = document.getElementById('statusFilter').value;
         const container = document.getElementById('transcriptsList');
 
         try {
-            let url = '/transcription/api/transcripts?limit=100';
-            if (statusFilter) url += `&status=${statusFilter}`;
+            const params = new URLSearchParams();
+            params.append('limit', '100');
 
-            const response = await fetch(url);
+            const statusFilter = document.getElementById('statusFilter').value;
+            const modelFilter = document.getElementById('modelFilter').value;
+            const languageFilter = document.getElementById('languageFilter').value;
+            const searchInput = document.getElementById('searchInput').value.trim();
+            const sortBy = document.getElementById('sortByFilter').value;
+
+            if (statusFilter) params.append('status', statusFilter);
+            if (modelFilter) params.append('model', modelFilter);
+            if (languageFilter) params.append('language', languageFilter);
+            if (searchInput) params.append('search', searchInput);
+            if (sortBy) params.append('sort_by', sortBy);
+            params.append('sort_order', sortOrder);
+
+            const response = await fetch(`/transcription/api/transcripts?${params.toString()}`);
             if (!response.ok) throw new Error('Failed to load transcripts');
 
             const data = await response.json();
-            displayTranscripts(data.transcripts);
+            displayTranscripts(data.transcripts, data.total_count);
+
+            // Update filter dropdowns with available options
+            updateFilterOptions(data.available_models, data.available_languages);
 
         } catch (error) {
             console.error('Load transcripts error:', error);
@@ -658,32 +785,50 @@
         }
     }
 
+    // Update filter dropdown options
+    function updateFilterOptions(models, languages) {
+        const modelFilter = document.getElementById('modelFilter');
+        const languageFilter = document.getElementById('languageFilter');
+
+        // Update models (preserve current selection)
+        const currentModel = modelFilter.value;
+        modelFilter.innerHTML = '<option value="">All Models</option>' +
+            models.map(m => `<option value="${m}" ${m === currentModel ? 'selected' : ''}>${m}</option>`).join('');
+
+        // Update languages (preserve current selection)
+        const currentLang = languageFilter.value;
+        languageFilter.innerHTML = '<option value="">All Languages</option>' +
+            languages.map(l => `<option value="${l}" ${l === currentLang ? 'selected' : ''}>${l.toUpperCase()}</option>`).join('');
+    }
+
     // Display transcripts
-    function displayTranscripts(transcripts) {
+    function displayTranscripts(transcripts, totalCount) {
         const container = document.getElementById('transcriptsList');
 
         if (transcripts.length === 0) {
-            container.innerHTML = '<p class="text-muted">No transcripts found. Start by scanning a directory!</p>';
+            container.innerHTML = '<p class="text-muted">No transcripts found. Try adjusting your filters or scan a directory!</p>';
             return;
         }
 
         const tableBody = transcripts.map(t => `
             <tr>
                 <td><code>${t.id}</code></td>
-                <td title="${t.file_path}" style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    ${t.file_path}
+                <td title="${t.file_path}">
+                    <strong>${t.file_name || 'N/A'}</strong><br>
+                    <small class="text-muted" style="font-size: 0.75rem;">${truncatePath(t.file_path, 50)}</small>
                 </td>
-                <td>${t.language || 'N/A'}</td>
-                <td>${t.duration_seconds ? t.duration_seconds.toFixed(1) + 's' : 'N/A'}</td>
-                <td>${t.model_used}</td>
+                <td><span class="badge bg-primary">${t.model_name}</span></td>
+                <td>${t.language ? t.language.toUpperCase() : 'N/A'}</td>
+                <td>${formatFileSize(t.file_size)}</td>
+                <td>${t.processing_time ? t.processing_time.toFixed(1) + 's' : 'N/A'}</td>
                 <td>
                     <span class="badge ${getStatusBadge(t.status)}">${t.status}</span>
                 </td>
-                <td>${t.created_at || 'N/A'}</td>
+                <td>${formatDate(t.created_at)}</td>
                 <td>
                     ${t.status === 'COMPLETED' ? `
                         <button class="btn btn-sm btn-info view-transcript-btn" data-id="${t.id}">
-                            <i class="bi bi-eye"></i> View
+                            <i class="bi bi-eye"></i>
                         </button>
                     ` : ''}
                     <button class="btn btn-sm btn-danger delete-transcript-btn" data-id="${t.id}">
@@ -694,15 +839,19 @@
         `).join('');
 
         container.innerHTML = `
+            <div class="mb-2">
+                <small class="text-muted">Displaying ${transcripts.length} of ${totalCount} results</small>
+            </div>
             <div class="table-responsive">
-                <table class="table table-hover">
+                <table class="table table-hover table-sm">
                     <thead>
                         <tr>
                             <th>ID</th>
-                            <th>File Path</th>
-                            <th>Language</th>
-                            <th>Duration</th>
+                            <th>File</th>
                             <th>Model</th>
+                            <th>Lang</th>
+                            <th>Size</th>
+                            <th>Time</th>
                             <th>Status</th>
                             <th>Created</th>
                             <th>Actions</th>
@@ -714,6 +863,25 @@
         `;
 
         attachTranscriptEventListeners();
+    }
+
+    // Truncate path for display
+    function truncatePath(path, maxLength) {
+        if (path.length <= maxLength) return path;
+        const half = Math.floor(maxLength / 2);
+        return path.substring(0, half) + '...' + path.substring(path.length - half);
+    }
+
+    // Format date
+    function formatDate(isoDate) {
+        if (!isoDate) return 'N/A';
+        const date = new Date(isoDate);
+        return date.toLocaleString('en-US', {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
     }
 
     // Attach event listeners
@@ -744,10 +912,30 @@
 
             modalBody.innerHTML = `
                 <div class="mb-3">
-                    <h6>File: ${transcript.file_path}</h6>
-                    <p><strong>Language:</strong> ${transcript.language || 'N/A'} |
-                       <strong>Duration:</strong> ${transcript.duration_seconds ? transcript.duration_seconds.toFixed(2) + 's' : 'N/A'} |
-                       <strong>Confidence:</strong> ${transcript.confidence_score ? (transcript.confidence_score * 100).toFixed(1) + '%' : 'N/A'}</p>
+                    <h6><i class="bi bi-file-earmark-play"></i> ${transcript.file_name}</h6>
+                    <p class="text-muted small mb-2">${transcript.file_path}</p>
+                    <div class="row">
+                        <div class="col-md-3">
+                            <strong>Model:</strong> <span class="badge bg-primary">${transcript.model_name}</span>
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Language:</strong> ${transcript.language ? transcript.language.toUpperCase() : 'N/A'}
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Size:</strong> ${formatFileSize(transcript.file_size)}
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Processing Time:</strong> ${transcript.processing_time ? transcript.processing_time.toFixed(1) + 's' : 'N/A'}
+                        </div>
+                    </div>
+                    <div class="row mt-2">
+                        <div class="col-md-6">
+                            <strong>Confidence:</strong> ${transcript.confidence_score ? (transcript.confidence_score * 100).toFixed(1) + '%' : 'N/A'}
+                        </div>
+                        <div class="col-md-6">
+                            <strong>Created:</strong> ${formatDate(transcript.created_at)}
+                        </div>
+                    </div>
                 </div>
                 <div class="card">
                     <div class="card-header"><h6 class="mb-0">Transcript Text</h6></div>
@@ -797,13 +985,35 @@
         });
     });
 
-    // Refresh transcripts
-    document.getElementById('refreshTranscriptsBtn').addEventListener('click', loadTranscripts);
+    // Search with debounce
+    document.getElementById('searchInput').addEventListener('input', () => {
+        if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(loadTranscripts, 300);
+    });
+
+    // Clear search
+    document.getElementById('clearSearchBtn').addEventListener('click', () => {
+        document.getElementById('searchInput').value = '';
+        loadTranscripts();
+    });
+
+    // Filter changes
     document.getElementById('statusFilter').addEventListener('change', loadTranscripts);
+    document.getElementById('modelFilter').addEventListener('change', loadTranscripts);
+    document.getElementById('languageFilter').addEventListener('change', loadTranscripts);
+    document.getElementById('sortByFilter').addEventListener('change', loadTranscripts);
+
+    // Sort order toggle
+    document.getElementById('sortOrderBtn').addEventListener('click', () => {
+        sortOrder = sortOrder === 'desc' ? 'asc' : 'desc';
+        const icon = document.getElementById('sortOrderIcon');
+        icon.className = sortOrder === 'desc' ? 'bi bi-sort-down' : 'bi bi-sort-up';
+        loadTranscripts();
+    });
 
     // Helper functions
     function formatFileSize(bytes) {
-        if (bytes === 0) return '0 B';
+        if (bytes === 0 || !bytes) return '0 B';
         const k = 1024;
         const sizes = ['B', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
