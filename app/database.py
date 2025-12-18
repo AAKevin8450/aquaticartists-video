@@ -86,26 +86,26 @@ class Database:
                 )
             ''')
 
-            # Transcripts table
+            # Transcripts table (redesigned for multi-model support)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS transcripts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_path TEXT UNIQUE NOT NULL,
-                    file_size_bytes INTEGER NOT NULL,
-                    file_modified_time FLOAT NOT NULL,
-                    duration_seconds FLOAT,
+                    file_path TEXT NOT NULL,
+                    file_name TEXT NOT NULL,
+                    file_size INTEGER NOT NULL,
+                    modified_time REAL NOT NULL,
+                    model_name TEXT NOT NULL,
                     language TEXT,
-                    model_used TEXT NOT NULL,
                     transcript_text TEXT,
-                    transcript_segments JSON,
-                    word_timestamps JSON,
-                    confidence_score FLOAT,
-                    processing_time_seconds FLOAT,
+                    segments TEXT,
+                    word_timestamps TEXT,
+                    confidence_score REAL,
+                    processing_time REAL,
                     status TEXT NOT NULL DEFAULT 'PENDING',
                     error_message TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    completed_at TIMESTAMP,
-                    metadata JSON
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    UNIQUE(file_path, file_size, modified_time, model_name)
                 )
             ''')
 
@@ -128,6 +128,21 @@ class Database:
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_transcripts_status
                 ON transcripts(status)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_transcripts_model_name
+                ON transcripts(model_name)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_transcripts_language
+                ON transcripts(language)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_transcripts_file_name
+                ON transcripts(file_name)
             ''')
 
     # File operations
@@ -306,15 +321,16 @@ class Database:
             return cursor.rowcount > 0
 
     # Transcript operations
-    def create_transcript(self, file_path: str, file_size_bytes: int, file_modified_time: float,
-                         model_used: str, metadata: Optional[Dict] = None) -> int:
+    def create_transcript(self, file_path: str, file_name: str, file_size: int,
+                         modified_time: float, model_name: str) -> int:
         """Create a new transcript record."""
+        from datetime import datetime
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO transcripts (file_path, file_size_bytes, file_modified_time, model_used, status, metadata)
-                VALUES (?, ?, ?, ?, 'PENDING', ?)
-            ''', (file_path, file_size_bytes, file_modified_time, model_used, json.dumps(metadata or {})))
+                INSERT INTO transcripts (file_path, file_name, file_size, modified_time, model_name, status, created_at)
+                VALUES (?, ?, ?, ?, ?, 'PENDING', ?)
+            ''', (file_path, file_name, file_size, modified_time, model_name, datetime.now().isoformat()))
             return cursor.lastrowid
 
     def get_transcript(self, transcript_id: int) -> Optional[Dict[str, Any]]:
@@ -326,44 +342,29 @@ class Database:
             if row:
                 transcript = dict(row)
                 # Parse JSON fields
-                for field in ['transcript_segments', 'word_timestamps', 'metadata']:
+                for field in ['segments', 'word_timestamps']:
                     if transcript.get(field):
                         transcript[field] = json.loads(transcript[field])
                 return transcript
             return None
 
-    def get_transcript_by_path(self, file_path: str) -> Optional[Dict[str, Any]]:
-        """Get transcript by file path."""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT * FROM transcripts WHERE file_path = ?', (file_path,))
-            row = cursor.fetchone()
-            if row:
-                transcript = dict(row)
-                # Parse JSON fields
-                for field in ['transcript_segments', 'word_timestamps', 'metadata']:
-                    if transcript.get(field):
-                        transcript[field] = json.loads(transcript[field])
-                return transcript
-            return None
-
-    def get_transcript_by_file_info(self, file_path: str, file_size_bytes: int,
-                                    file_modified_time: float) -> Optional[Dict[str, Any]]:
+    def get_transcript_by_file_info(self, file_path: str, file_size: int,
+                                    modified_time: float, model_name: str) -> Optional[Dict[str, Any]]:
         """
-        Get transcript by file path and metadata.
-        Checks if file has been modified since transcription by comparing size and mtime.
+        Get transcript by file info and model name.
+        Allows multiple transcripts for same file with different models.
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT * FROM transcripts
-                WHERE file_path = ? AND file_size_bytes = ? AND file_modified_time = ?
-            ''', (file_path, file_size_bytes, file_modified_time))
+                WHERE file_path = ? AND file_size = ? AND modified_time = ? AND model_name = ?
+            ''', (file_path, file_size, modified_time, model_name))
             row = cursor.fetchone()
             if row:
                 transcript = dict(row)
                 # Parse JSON fields
-                for field in ['transcript_segments', 'word_timestamps', 'metadata']:
+                for field in ['segments', 'word_timestamps']:
                     if transcript.get(field):
                         transcript[field] = json.loads(transcript[field])
                 return transcript
@@ -371,60 +372,96 @@ class Database:
 
     def update_transcript_status(self, transcript_id: int, status: str,
                                 transcript_text: Optional[str] = None,
-                                transcript_segments: Optional[List] = None,
+                                segments: Optional[List] = None,
                                 word_timestamps: Optional[List] = None,
-                                duration_seconds: Optional[float] = None,
                                 language: Optional[str] = None,
                                 confidence_score: Optional[float] = None,
-                                processing_time_seconds: Optional[float] = None,
+                                processing_time: Optional[float] = None,
                                 error_message: Optional[str] = None):
         """Update transcript status and results."""
+        from datetime import datetime
         with self.get_connection() as conn:
             cursor = conn.cursor()
             if status == 'COMPLETED':
                 cursor.execute('''
                     UPDATE transcripts
-                    SET status = ?, transcript_text = ?, transcript_segments = ?,
-                        word_timestamps = ?, duration_seconds = ?, language = ?,
-                        confidence_score = ?, processing_time_seconds = ?,
-                        completed_at = CURRENT_TIMESTAMP
+                    SET status = ?, transcript_text = ?, segments = ?,
+                        word_timestamps = ?, language = ?,
+                        confidence_score = ?, processing_time = ?,
+                        completed_at = ?
                     WHERE id = ?
                 ''', (status, transcript_text,
-                     json.dumps(transcript_segments) if transcript_segments else None,
+                     json.dumps(segments) if segments else None,
                      json.dumps(word_timestamps) if word_timestamps else None,
-                     duration_seconds, language, confidence_score,
-                     processing_time_seconds, transcript_id))
+                     language, confidence_score, processing_time,
+                     datetime.now().isoformat(), transcript_id))
             elif status == 'FAILED':
                 cursor.execute('''
                     UPDATE transcripts
-                    SET status = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP
+                    SET status = ?, error_message = ?, completed_at = ?
                     WHERE id = ?
-                ''', (status, error_message, transcript_id))
+                ''', (status, error_message, datetime.now().isoformat(), transcript_id))
             else:
                 cursor.execute('''
                     UPDATE transcripts SET status = ? WHERE id = ?
                 ''', (status, transcript_id))
 
-    def list_transcripts(self, status: Optional[str] = None,
+    def list_transcripts(self, status: Optional[str] = None, model: Optional[str] = None,
+                        language: Optional[str] = None, search: Optional[str] = None,
+                        from_date: Optional[str] = None, to_date: Optional[str] = None,
+                        sort_by: str = 'created_at', sort_order: str = 'desc',
                         limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
-        """List transcripts with optional status filter."""
+        """List transcripts with advanced filtering and search."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
+
+            # Build query dynamically with filters
+            query = 'SELECT * FROM transcripts WHERE 1=1'
+            params = []
+
             if status:
-                cursor.execute('''
-                    SELECT * FROM transcripts WHERE status = ?
-                    ORDER BY created_at DESC LIMIT ? OFFSET ?
-                ''', (status, limit, offset))
+                query += ' AND status = ?'
+                params.append(status)
+
+            if model:
+                query += ' AND model_name = ?'
+                params.append(model)
+
+            if language:
+                query += ' AND language = ?'
+                params.append(language)
+
+            if search:
+                query += ' AND (file_name LIKE ? OR file_path LIKE ? OR transcript_text LIKE ?)'
+                search_pattern = f'%{search}%'
+                params.extend([search_pattern, search_pattern, search_pattern])
+
+            if from_date:
+                query += ' AND created_at >= ?'
+                params.append(from_date)
+
+            if to_date:
+                query += ' AND created_at <= ?'
+                params.append(to_date)
+
+            # Add sorting
+            valid_sort_fields = ['created_at', 'file_name', 'file_size', 'processing_time', 'model_name']
+            if sort_by in valid_sort_fields:
+                sort_direction = 'ASC' if sort_order.lower() == 'asc' else 'DESC'
+                query += f' ORDER BY {sort_by} {sort_direction}'
             else:
-                cursor.execute('''
-                    SELECT * FROM transcripts ORDER BY created_at DESC LIMIT ? OFFSET ?
-                ''', (limit, offset))
+                query += ' ORDER BY created_at DESC'
+
+            query += ' LIMIT ? OFFSET ?'
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
 
             transcripts = []
             for row in cursor.fetchall():
                 transcript = dict(row)
                 # Parse JSON fields
-                for field in ['transcript_segments', 'word_timestamps', 'metadata']:
+                for field in ['segments', 'word_timestamps']:
                     if transcript.get(field):
                         transcript[field] = json.loads(transcript[field])
                 transcripts.append(transcript)
@@ -437,15 +474,58 @@ class Database:
             cursor.execute('DELETE FROM transcripts WHERE id = ?', (transcript_id,))
             return cursor.rowcount > 0
 
-    def count_transcripts(self, status: Optional[str] = None) -> int:
-        """Count transcripts with optional status filter."""
+    def count_transcripts(self, status: Optional[str] = None, model: Optional[str] = None,
+                         language: Optional[str] = None, search: Optional[str] = None,
+                         from_date: Optional[str] = None, to_date: Optional[str] = None) -> int:
+        """Count transcripts with filtering support."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
+
+            # Build query dynamically with filters
+            query = 'SELECT COUNT(*) FROM transcripts WHERE 1=1'
+            params = []
+
             if status:
-                cursor.execute('SELECT COUNT(*) FROM transcripts WHERE status = ?', (status,))
-            else:
-                cursor.execute('SELECT COUNT(*) FROM transcripts')
+                query += ' AND status = ?'
+                params.append(status)
+
+            if model:
+                query += ' AND model_name = ?'
+                params.append(model)
+
+            if language:
+                query += ' AND language = ?'
+                params.append(language)
+
+            if search:
+                query += ' AND (file_name LIKE ? OR file_path LIKE ? OR transcript_text LIKE ?)'
+                search_pattern = f'%{search}%'
+                params.extend([search_pattern, search_pattern, search_pattern])
+
+            if from_date:
+                query += ' AND created_at >= ?'
+                params.append(from_date)
+
+            if to_date:
+                query += ' AND created_at <= ?'
+                params.append(to_date)
+
+            cursor.execute(query, params)
             return cursor.fetchone()[0]
+
+    def get_available_models(self) -> List[str]:
+        """Get list of all model names that have transcripts."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT DISTINCT model_name FROM transcripts ORDER BY model_name')
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_available_languages(self) -> List[str]:
+        """Get list of all languages that have transcripts."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT DISTINCT language FROM transcripts WHERE language IS NOT NULL ORDER BY language')
+            return [row[0] for row in cursor.fetchall()]
 
 
 # Global database instance (will be initialized in app factory)

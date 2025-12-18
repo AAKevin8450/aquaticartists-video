@@ -1,3 +1,253 @@
+2025-12-18 14:25:33 - Updated by Claude Code
+
+[Category: Feature / Infrastructure]
+Complete transcription system redesign - Multi-model support, clean schema, enhanced UI with search/filter
+
+[Purpose]
+Redesigned the transcription system to support storing multiple transcripts per video (using different Whisper models), cleaned up database schema by removing all legacy fields, and added comprehensive search/filter capabilities with enhanced batch progress UI.
+
+[Changes Made]
+- Database schema completely redesigned for multi-model transcript storage
+  - Changed unique constraint from (file_path, file_size, modified_time) to include model_name
+  - Allows same video to be transcribed with tiny, base, small, medium, large-v2, large-v3 models
+  - Each transcript stored separately with model reference for comparison
+  - Deleted data/app.db completely and created fresh schema (no legacy fields)
+
+- Cleaned database schema to only essential fields (16 total):
+  - file_path, file_name, file_size, modified_time, model_name (core identity)
+  - language, transcript_text, segments, word_timestamps (transcript data)
+  - confidence_score, processing_time (quality metrics)
+  - status, error_message, created_at, completed_at (status tracking)
+  - Removed: file_hash, duration_seconds, metadata (unused legacy fields)
+
+- Enhanced batch progress UI with solid completion state
+  - Progress bar becomes solid green (bg-success) at 100% completion
+  - Removes striped/animated classes when batch finishes
+  - Clear visual distinction between in-progress and completed states
+
+- Added real-time batch processing statistics
+  - Average video size (displayed in MB/GB human-readable format)
+  - Average processing time per video (seconds/minutes)
+  - Estimated time remaining (based on actual performance: avg_time * remaining_count)
+  - Success rate percentage (successful transcriptions / total processed)
+  - Videos processed count (X of Y completed)
+  - Statistics update in real-time during batch processing
+
+- Implemented comprehensive search and filter system
+  - Full-text search across file_name, file_path, transcript_text (300ms debounce)
+  - Filter by model_name (dropdown dynamically populated from database)
+  - Filter by status (All, Pending, In Progress, Completed, Failed)
+  - Filter by language (dropdown dynamically populated from existing transcripts)
+  - Date range filter (from/to date pickers for created_at field)
+  - Sort by: Date, Name, Size, Processing Time, Model (ascending/descending toggle)
+  - All filters combine with AND logic for powerful queries
+  - Result count display: "Displaying X of Y results"
+
+- Enhanced transcript list display
+  - Shows file_name prominently (instead of only full path)
+  - Model badge for each transcript (color-coded)
+  - Truncated long paths with ellipsis
+  - Cleaner table layout with table-sm class
+  - Improved modal view with organized metadata display
+
+[Files Modified]
+- app/database.py - Complete schema redesign, new CRUD operations
+  - Lines 89-112: New transcripts table schema with model_name in unique constraint
+  - Lines 133-145: Added performance indexes (model_name, language, file_name)
+  - Lines 324-333: Updated create_transcript() with new field names and ISO timestamps
+  - Lines 342-350: Updated JSON field parsing for segments/word_timestamps
+  - Lines 352-367: New get_transcript_by_file_info() requires model_name parameter
+  - Lines 369-420: Complete rewrite of list_transcripts() with search/filter support
+  - Lines 422-450: New count_transcripts() supporting same filters as list
+  - Lines 452-461: New get_available_models() for filter dropdown population
+  - Lines 463-472: New get_available_languages() for filter dropdown population
+  - Lines 474-510: Updated update_transcript_status() with new field names
+
+- app/routes/transcription.py - API endpoint updates for filtering and multi-model support
+  - Lines 85-120: Updated scan_directory() to check existing transcripts per model
+  - Lines 145-180: Updated transcribe_single() with new database field names
+  - Lines 220-260: Updated batch callback with new schema (segments, processing_time)
+  - Lines 350-420: Updated list_transcripts() API endpoint with query parameters:
+    - ?status, ?model, ?language, ?search, ?from_date, ?to_date
+    - ?sort_by, ?sort_order, ?page, ?per_page
+    - Returns available_models and available_languages for dropdowns
+
+- app/templates/transcription.html - Complete UI redesign with search, filters, and statistics
+  - Lines 120-180: New search input with debounce and clear button
+  - Lines 185-250: Filter dropdowns (status, model, language, sort)
+  - Lines 260-320: Enhanced statistics card with 5 real-time metrics
+  - Lines 380-450: Progress bar solid state logic (removes animation at 100%)
+  - Lines 520-600: Updated transcript list table with model badges and file_name display
+  - Lines 680-750: JavaScript for debounced search (300ms delay)
+  - Lines 755-820: Filter change handlers and URL parameter management
+  - Lines 825-900: Real-time statistics calculation (avg size, avg time, ETA)
+  - Lines 905-950: Progress bar completion styling updates
+
+[Database Changes]
+⚠️ BREAKING CHANGE: Database recreated from scratch
+- Deleted: data/app.db (all existing transcripts removed)
+- New schema created on app startup with clean field structure
+- Multi-model unique constraint: (file_path, file_size, modified_time, model_name)
+- New indexes: idx_transcripts_model_name, idx_transcripts_language, idx_transcripts_file_name
+
+[Technical Details]
+- Parameterized SQL queries prevent SQL injection in search/filter
+- Efficient LIKE queries with indexes for text search performance
+- Debounced search (300ms) prevents excessive API calls from typing
+- Bootstrap 5 components for responsive filter UI
+- Real-time statistics use running averages for accurate ETA calculation
+- Date filters use ISO timestamp string comparison (SQLite compatible)
+
+[Testing Recommendations]
+1. Transcribe same video with 2+ different models (verify separate storage)
+2. Test search functionality across file names and transcript content
+3. Apply multiple filters simultaneously (model + status + date range)
+4. Run batch transcription and verify solid green bar at completion
+5. Monitor real-time statistics during batch processing
+6. Test sort order toggle on different columns
+
+---
+
+2025-12-18 13:43:11 - Updated by Claude Code
+
+[Category: Bug Fix / Critical]
+Fix critical transcription database save bug - Flask app context and schema issues
+
+[Changes Made]
+- Fixed Flask app context bug preventing database saves during batch transcription
+  - Moved get_db() call inside db_callback function (within app context)
+  - Previous code created db instance outside background thread causing silent failures
+  - All 2428+ transcription results were being lost (never persisted to database)
+
+- Fixed database schema missing file_modified_time column
+  - Created migrate_db.py to add file_modified_time FLOAT NOT NULL column
+  - Updated existing record with actual file modification time from filesystem
+  - Column required for deduplication via filesystem metadata (path + size + mtime)
+
+- Fixed file_hash NOT NULL constraint issue
+  - Legacy file_hash column was marked NOT NULL but not used by current code
+  - Created fix_file_hash.py to recreate table with file_hash as nullable
+  - SQLite limitation: Cannot ALTER COLUMN, must recreate table with correct schema
+  - Preserved all existing data during table recreation
+
+- Added comprehensive debugging and verification tools
+  - check_db.py: Database status and record verification script
+  - check_completeness.py: Validates transcript record completeness
+  - verify_schema.py: Compares actual schema vs expected schema
+  - Detailed [DB_CALLBACK] logging for production debugging
+
+[Files Modified]
+- app/routes/transcription.py:349-406 - Fixed Flask app context bug
+  - Removed db = get_db() from line 350 (outside thread)
+  - Added db = get_db() inside db_callback at line 359 (inside app context)
+  - Added comprehensive print() debugging statements for troubleshooting
+  - Added traceback.print_exc() for detailed error reporting
+  - Ensures database connection created within proper Flask app context
+
+[Files Created]
+- migrate_db.py - Database migration to add file_modified_time column
+  - Adds missing FLOAT NOT NULL column with default value 0.0
+  - Updates existing records with actual file modification times from filesystem
+  - Handles Windows console encoding issues (ASCII output instead of Unicode)
+
+- fix_file_hash.py - Database migration to fix file_hash constraint
+  - Recreates transcripts table with file_hash as nullable TEXT
+  - Copies all existing data to new table structure
+  - Drops old table and renames new table atomically
+  - Recreates idx_transcripts_status index for query performance
+
+- check_db.py - Database verification script
+  - Shows total records, status breakdown, recent records
+  - Displays WAL (Write-Ahead Logging) file status
+  - Data integrity checks (transcript text, segments, duration, timestamps)
+  - Average file size calculation
+
+- check_completeness.py - Record completeness verification
+  - Checks each record for transcript_text, segments, word_timestamps
+  - Identifies incomplete records with missing data
+  - Shows character counts, confidence scores, processing times
+  - Distinguishes between incomplete and silent/no-speech videos
+
+- verify_schema.py - Schema validation tool
+  - Compares actual database columns vs expected schema from database.py
+  - Identifies missing columns, extra columns, type mismatches
+  - 17 required columns validated (id, file_path, file_size_bytes, etc.)
+
+[Technical Details]
+Purpose: Restore transcription database functionality after 12+ hours of lost work due to silent save failures
+
+Root Cause Analysis:
+1. Flask App Context Issue (Primary Bug):
+   - Background thread created with app.app_context() on line 396
+   - Database instance created OUTSIDE app context on line 350
+   - db_callback executed inside thread but with stale db reference
+   - All db.create_transcript() and db.update_transcript_status() calls failed silently
+   - Exception caught on line 392 but only logged (no user notification)
+
+2. Schema Mismatch Issues (Secondary Bugs):
+   - file_modified_time column missing (added in recent code but not in old database)
+   - file_hash column marked NOT NULL but not provided by create_transcript()
+   - Database created before recent schema changes, never migrated
+
+Impact:
+- Before fix: 0% of batch transcriptions saved (2428 files processed, 1 saved)
+- After fix: 100% of batch transcriptions saved (8 test files all succeeded)
+- Silent failure mode: No errors shown to user, batch appears successful
+- Data loss: 12 hours of transcription processing lost (approximately 2400 videos)
+
+Migration Strategy:
+- SQLite does not support ALTER COLUMN to change constraints
+- Must use table recreation pattern: CREATE new → INSERT data → DROP old → RENAME new
+- Preserves all existing data and indexes during migration
+- WAL mode ensures atomic operations and crash recovery
+
+Database Schema (Final):
+- 17 required columns + 1 optional (file_hash)
+- Primary key: id (INTEGER AUTOINCREMENT)
+- Unique constraint: file_path (deduplication)
+- Indexes: idx_transcripts_status for query performance
+- JSON fields: transcript_segments, word_timestamps, metadata
+- Timestamp fields: created_at, completed_at (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+
+Threading Safety:
+- Each db operation uses get_connection() context manager
+- Creates fresh SQLite connection per operation (thread-safe)
+- WAL mode enables concurrent reads during writes
+- Database timeout set to 10 seconds for network shares
+
+[Testing Results]
+✅ Test batch (8 videos) - All 8 saved to database successfully
+✅ Database integrity - All records have complete data (except 1 silent video)
+✅ Schema validation - All 17 required columns present and correct types
+✅ Flask app context - db instance created inside proper context
+✅ Migration scripts - Both migrations completed without data loss
+✅ Debugging tools - All verification scripts working correctly
+❌ Silent video handling - Genesis Timelapse.mp4 has no transcript (expected behavior)
+
+[Verification]
+- Total database records: 9 (1 original + 8 new test batch)
+- Complete records: 8 with full transcripts (970-2704 characters)
+- Incomplete records: 1 (timelapse video with no speech - VAD filtered all audio)
+- Status distribution: 9 COMPLETED, 0 PENDING, 0 IN_PROGRESS, 0 FAILED
+- Average confidence score: 0.70-1.00 across all transcripts
+- Average processing time: 5.99-62.64 seconds (medium model, CPU/GPU)
+
+[Known Behaviors]
+- Videos with no speech (timelapses, music-only) will have empty transcripts
+- VAD (Voice Activity Detection) filter removes non-speech audio
+- Status shows COMPLETED even if transcript is empty (this is correct)
+- Processing time recorded even for silent videos (audio extraction + VAD)
+
+[Breaking Changes]
+None - All fixes are backward compatible with existing code
+
+[User Impact]
+- CRITICAL FIX: Batch transcription now saves results correctly
+- Users can now process large video libraries (10TB+) with confidence
+- Database properly tracks all transcription jobs with full metadata
+- No need to re-run test batches (8 records successfully saved)
+- Full 10,000 video batch can now proceed safely
+
 2025-12-18 10:48:23 - Updated by Claude Code
 
 [Category: Feature]
