@@ -146,15 +146,19 @@
                 </div>
                 <!-- Statistics Section -->
                 <div class="row text-center border-top pt-3" id="batchStats" style="display: none;">
-                    <div class="col-md-3">
-                        <h6 class="text-muted small">Avg Video Size</h6>
-                        <p class="fs-6" id="avgVideoSize">-</p>
+                    <div class="col-md-2">
+                        <h6 class="text-muted small">Avg Size (All)</h6>
+                        <p class="fs-6" id="avgVideoSizeTotal">-</p>
+                    </div>
+                    <div class="col-md-2">
+                        <h6 class="text-muted small">Avg Size (Processed)</h6>
+                        <p class="fs-6" id="avgVideoSizeProcessed">-</p>
                     </div>
                     <div class="col-md-3">
                         <h6 class="text-muted small">Avg Processing Time</h6>
                         <p class="fs-6" id="avgProcessingTime">-</p>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <h6 class="text-muted small">Est. Time Remaining</h6>
                         <p class="fs-6" id="estimatedTimeRemaining">-</p>
                     </div>
@@ -672,13 +676,18 @@
         if (processed > 0) {
             document.getElementById('batchStats').style.display = 'flex';
 
-            // Average video size (from scanned files)
-            const selectedIndexes = Array.from(document.querySelectorAll('.file-checkbox:checked'))
-                .map(cb => parseInt(cb.value));
-            if (selectedIndexes.length > 0) {
-                const totalSize = selectedIndexes.reduce((sum, i) => sum + (scannedFiles[i]?.size_bytes || 0), 0);
-                const avgSize = totalSize / selectedIndexes.length;
-                document.getElementById('avgVideoSize').textContent = formatFileSize(avgSize);
+            // Average video size for entire batch (from backend)
+            if (status.avg_video_size_total !== null && status.avg_video_size_total !== undefined) {
+                document.getElementById('avgVideoSizeTotal').textContent = formatFileSize(status.avg_video_size_total);
+            } else {
+                document.getElementById('avgVideoSizeTotal').textContent = '-';
+            }
+
+            // Average video size for processed files only (from backend)
+            if (status.avg_video_size_processed !== null && status.avg_video_size_processed !== undefined) {
+                document.getElementById('avgVideoSizeProcessed').textContent = formatFileSize(status.avg_video_size_processed);
+            } else {
+                document.getElementById('avgVideoSizeProcessed').textContent = '-';
             }
 
             // Average processing time (estimate from elapsed time)
@@ -820,6 +829,9 @@
                 <td><span class="badge bg-primary">${t.model_name}</span></td>
                 <td>${t.language ? t.language.toUpperCase() : 'N/A'}</td>
                 <td>${formatFileSize(t.file_size)}</td>
+                <td>${formatDurationUI(t.duration_seconds)}</td>
+                <td>${formatCount(t.character_count)}</td>
+                <td>${formatCount(t.word_count)}</td>
                 <td>${t.processing_time ? t.processing_time.toFixed(1) + 's' : 'N/A'}</td>
                 <td>
                     <span class="badge ${getStatusBadge(t.status)}">${t.status}</span>
@@ -851,6 +863,9 @@
                             <th>Model</th>
                             <th>Lang</th>
                             <th>Size</th>
+                            <th>Duration</th>
+                            <th>Chars</th>
+                            <th>Words</th>
                             <th>Time</th>
                             <th>Status</th>
                             <th>Created</th>
@@ -922,18 +937,35 @@
                             <strong>Language:</strong> ${transcript.language ? transcript.language.toUpperCase() : 'N/A'}
                         </div>
                         <div class="col-md-3">
-                            <strong>Size:</strong> ${formatFileSize(transcript.file_size)}
+                            <strong>File Size:</strong> ${formatFileSize(transcript.file_size)}
                         </div>
                         <div class="col-md-3">
-                            <strong>Processing Time:</strong> ${transcript.processing_time ? transcript.processing_time.toFixed(1) + 's' : 'N/A'}
+                            <strong>Duration:</strong> ${formatDurationUI(transcript.duration_seconds)}
                         </div>
                     </div>
                     <div class="row mt-2">
-                        <div class="col-md-6">
+                        <div class="col-md-3">
+                            <strong>Processing Time:</strong> ${transcript.processing_time ? transcript.processing_time.toFixed(1) + 's' : 'N/A'}
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Speed:</strong> ${transcript.duration_seconds && transcript.processing_time ? (transcript.duration_seconds / transcript.processing_time).toFixed(1) + 'x' : 'N/A'}
+                        </div>
+                        <div class="col-md-3">
                             <strong>Confidence:</strong> ${transcript.confidence_score ? (transcript.confidence_score * 100).toFixed(1) + '%' : 'N/A'}
                         </div>
-                        <div class="col-md-6">
+                        <div class="col-md-3">
                             <strong>Created:</strong> ${formatDate(transcript.created_at)}
+                        </div>
+                    </div>
+                    <div class="row mt-2">
+                        <div class="col-md-4">
+                            <strong>Characters:</strong> ${formatCount(transcript.character_count)}
+                        </div>
+                        <div class="col-md-4">
+                            <strong>Words:</strong> ${formatCount(transcript.word_count)}
+                        </div>
+                        <div class="col-md-4">
+                            <strong>Words per Minute:</strong> ${transcript.word_count && transcript.duration_seconds ? Math.round((transcript.word_count / transcript.duration_seconds) * 60) : 'N/A'}
                         </div>
                     </div>
                 </div>
@@ -1018,6 +1050,34 @@
         const sizes = ['B', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+    }
+
+    function formatCount(count) {
+        // Return 'N/A' for null, undefined, or 0 (no speech)
+        if (count === null || count === undefined || count === 0) {
+            return 'N/A';
+        }
+        // Format numbers with thousands separator
+        return count.toLocaleString();
+    }
+
+    function formatDurationUI(seconds) {
+        // Return 'N/A' for null, undefined, or 0
+        if (seconds === null || seconds === undefined || seconds === 0) {
+            return 'N/A';
+        }
+
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+
+        if (hours > 0) {
+            return `${hours}h ${minutes}m ${secs}s`;
+        } else if (minutes > 0) {
+            return `${minutes}m ${secs}s`;
+        } else {
+            return `${secs}s`;
+        }
     }
 
     function getStatusBadge(status) {

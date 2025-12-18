@@ -1,3 +1,158 @@
+2025-12-18 16:49:06 - Updated by Claude Code
+
+[Category: Feature / Enhancement]
+Add transcript metrics and enhanced batch statistics - Duration, character/word counts, processing speed insights
+
+[Purpose]
+Enhanced transcription system with comprehensive video and transcript metrics including duration tracking, character/word counts, processing speed calculations (Xrealtime), and improved batch statistics with separate average size metrics for total batch and processed files.
+
+[Changes Made]
+- Added three new database fields to transcripts table:
+  - character_count (INTEGER): Total characters in transcript (excluding whitespace), NULL for videos without speech
+  - word_count (INTEGER): Total words in transcript, NULL for videos without speech
+  - duration_seconds (REAL): Video duration in seconds extracted from audio metadata
+  - Migration support: ALTER TABLE statements with error handling for existing databases
+
+- Enhanced TranscriptionService with text metrics calculation:
+  - New calculate_text_metrics() static method analyzes transcript text
+  - Returns (None, None) for empty or whitespace-only transcripts (no speech videos)
+  - Character count excludes all whitespace (spaces, newlines, tabs)
+  - Word count uses whitespace splitting for accurate word boundary detection
+  - Integrated into transcribe_file() for automatic calculation on completion
+
+- Improved batch progress tracking with comprehensive file size statistics:
+  - Added total_batch_size (int): Sum of all file sizes in batch for accurate overall metrics
+  - Added processed_files_sizes (List[int]): Tracks individual file sizes as processed
+  - New avg_video_size_total property: Average size across entire batch (total_batch_size / total_files)
+  - New avg_video_size_processed property: Average size of processed files only (sum(processed_files_sizes) / count)
+  - Tracks file sizes for both successful and failed transcriptions for accurate averages
+
+- Updated batch_transcribe() to track file sizes throughout processing:
+  - Calculates total_batch_size before processing starts (all files via os.path.getsize)
+  - Appends file_size to processed_files_sizes for each completed file
+  - Handles OSError gracefully if file becomes inaccessible during processing
+  - Tracks sizes for both successful and failed files (included in processed average)
+
+- Enhanced API endpoints with new metrics:
+  - Updated /api/transcription/transcribe-single to save character_count, word_count, duration_seconds
+  - Updated /api/start-batch callback to persist all new metrics to database
+  - Added avg_video_size_total and avg_video_size_processed to /api/batch-status response
+  - Both average size metrics returned for real-time UI updates
+
+- Redesigned transcripts table UI with new columns and metrics:
+  - Added "Duration" column: Displays video duration in human-readable format (Xh Xm Xs or Xm Xs or Xs)
+  - Added "Chars" column: Character count with thousands separator (e.g., 1,234) or N/A
+  - Added "Words" column: Word count with thousands separator or N/A
+  - Existing "Time" column now shows processing time only (not duration)
+  - All new columns use formatCount() and formatDurationUI() helper functions
+
+- Enhanced transcript detail modal with processing insights:
+  - Added Duration field: Human-readable duration (formatDurationUI)
+  - Added Speed field: Processing speed as realtime multiplier (duration_seconds / processing_time = Xx)
+  - Added Words per Minute: Real-time speaking rate calculation ((word_count / duration_seconds) * 60)
+  - Reorganized metrics into logical groups (file info, processing metrics, content metrics)
+  - Shows N/A for videos without speech (null character_count/word_count)
+
+- Updated batch statistics UI with dual average size metrics:
+  - Renamed "Avg Video Size" to "Avg Size (All)": Shows avg_video_size_total from backend
+  - Added "Avg Size (Processed)": Shows avg_video_size_processed from backend
+  - Both metrics update in real-time during batch processing
+  - Provides insights into whether larger/smaller files being processed first
+  - Column layout adjusted: 2 columns for sizes, 3 for times (5 total stats)
+
+- Added JavaScript helper functions for UI formatting:
+  - formatCount(count): Formats numbers with thousands separator, returns 'N/A' for null/0
+  - formatDurationUI(seconds): Converts seconds to "Xh Xm Xs" format, returns 'N/A' for null/0
+  - Both functions handle edge cases (null, undefined, 0) consistently
+
+[Files Modified]
+- app/database.py:100-102 - Added character_count, word_count, duration_seconds columns to CREATE TABLE
+  - Lines 115-130: Migration code with ALTER TABLE statements and try/except error handling
+  - Lines 394-396: Added new parameters to update_transcript_status() signature
+  - Lines 410-418: Updated SQL query to include new fields in COMPLETED status updates
+
+- app/services/transcription_service.py:81-108 - New calculate_text_metrics() static method
+  - Returns (None, None) for videos without speech (empty/whitespace-only text)
+  - Character count calculation with whitespace removal
+  - Word count calculation with split() method
+  - Lines 342-347: Integrated into transcribe_file() to calculate and return metrics
+  - Lines 42-43: Added total_batch_size and processed_files_sizes to TranscriptionProgress dataclass
+  - Lines 60-74: New avg_video_size_total and avg_video_size_processed properties
+  - Lines 433-442: Calculate total_batch_size before batch starts
+  - Lines 463-467: Track file_size for each processed file (success path)
+  - Lines 481-486: Track file_size for failed files too (error path)
+
+- app/routes/transcription.py:293-295 - Added character_count, word_count, duration_seconds to single transcription
+  - Lines 408-410: Added same fields to batch transcription callback
+  - Lines 489-490: Added avg_video_size_total and avg_video_size_processed to batch status response
+
+- app/templates/transcription.html:829-831 - Added Duration, Chars, Words columns to transcript rows
+  - Lines 866-868: Added column headers for new fields
+  - Lines 940-966: Enhanced transcript detail modal with new metrics and reorganized layout
+  - Lines 1055-1083: Implemented formatCount() and formatDurationUI() helper functions
+  - Lines 679-691: Updated batch statistics to show dual average size metrics
+
+[Database Schema Changes]
+New columns in transcripts table:
+- character_count INTEGER (nullable) - NULL indicates video without speech
+- word_count INTEGER (nullable) - NULL indicates video without speech
+- duration_seconds REAL (nullable) - NULL if duration cannot be determined
+- Migration handled via ALTER TABLE with graceful error handling for existing databases
+
+[Technical Details]
+Purpose: Provide comprehensive metrics for transcript quality analysis, processing performance evaluation, and content insights
+
+Text Metrics Calculation:
+- Character count excludes whitespace for accurate content measurement
+- Word count uses split() for language-agnostic word boundary detection
+- Returns (None, None) for silent videos to distinguish from transcription failures
+- Calculated once during transcription, stored in database for efficient retrieval
+
+Duration Extraction:
+- Extracted from faster-whisper audio info (last segment end timestamp)
+- Represents actual audio duration, not file metadata duration
+- Used for processing speed calculation (realtime multiplier)
+- Critical for words-per-minute metric calculation
+
+Processing Speed Insights:
+- Realtime multiplier: duration_seconds / processing_time
+- Values > 1.0 indicate faster-than-realtime processing (GPU acceleration)
+- Values < 1.0 indicate slower-than-realtime (CPU processing or large models)
+- Example: 5.2x means 1 hour video processed in ~11.5 minutes
+
+Batch Statistics Enhancement:
+- avg_video_size_total: Overall batch composition (all files selected)
+- avg_video_size_processed: Actual processed file sizes (may differ if skipping duplicates)
+- Helps identify processing patterns (e.g., processing smaller files first)
+- Both metrics calculated on backend for accuracy and consistency
+
+UI/UX Improvements:
+- Duration column helps users understand video length at a glance
+- Character/word counts provide quick content volume assessment
+- Processing speed (Xrealtime) shows GPU acceleration effectiveness
+- Words per minute indicates speaking rate (typical: 150-160 wpm)
+- N/A values clearly indicate videos without speech (not errors)
+
+[Testing Recommendations]
+1. Test with videos containing speech (verify character/word counts > 0)
+2. Test with silent videos (verify character_count and word_count are NULL, displayed as N/A)
+3. Test batch processing to verify both average size metrics display correctly
+4. Verify processing speed shows > 1.0x for GPU, < 1.0x for CPU
+5. Check words-per-minute calculation for typical speech (150-160 wpm range)
+6. Test migration on existing database (ALTER TABLE should succeed silently)
+7. Verify formatCount() displays thousands separators correctly
+8. Verify formatDurationUI() handles hours, minutes, seconds properly
+
+[Breaking Changes]
+None - New columns are nullable, backward compatible with existing database records
+
+[Performance Impact]
+- Minimal: Text metrics calculated once during transcription (no runtime overhead)
+- File size tracking adds negligible overhead (os.path.getsize is fast)
+- No additional database queries required (metrics stored with transcript)
+
+---
+
 2025-12-18 14:25:33 - Updated by Claude Code
 
 [Category: Feature / Infrastructure]
