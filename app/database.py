@@ -549,6 +549,191 @@ class Database:
             cursor.execute('SELECT DISTINCT language FROM transcripts WHERE language IS NOT NULL ORDER BY language')
             return [row[0] for row in cursor.fetchall()]
 
+    # ============================================================================
+    # NOVA JOB OPERATIONS
+    # ============================================================================
+
+    def create_nova_job(self, analysis_job_id: int, model: str, analysis_types: list,
+                       user_options: dict = None) -> int:
+        """Create a new Nova analysis job."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO nova_jobs (analysis_job_id, model, analysis_types, user_options, status)
+                VALUES (?, ?, ?, ?, 'SUBMITTED')
+            ''', (analysis_job_id, model, json.dumps(analysis_types), json.dumps(user_options or {})))
+            return cursor.lastrowid
+
+    def get_nova_job(self, nova_job_id: int) -> Optional[Dict[str, Any]]:
+        """Get Nova job by ID."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM nova_jobs WHERE id = ?', (nova_job_id,))
+            row = cursor.fetchone()
+            if row:
+                job = dict(row)
+                # Parse JSON fields
+                if job.get('analysis_types'):
+                    job['analysis_types'] = json.loads(job['analysis_types'])
+                if job.get('user_options'):
+                    job['user_options'] = json.loads(job['user_options'])
+                if job.get('summary_result'):
+                    job['summary_result'] = json.loads(job['summary_result'])
+                if job.get('chapters_result'):
+                    job['chapters_result'] = json.loads(job['chapters_result'])
+                if job.get('elements_result'):
+                    job['elements_result'] = json.loads(job['elements_result'])
+                return job
+            return None
+
+    def get_nova_job_by_analysis_job(self, analysis_job_id: int) -> Optional[Dict[str, Any]]:
+        """Get Nova job by analysis_job_id."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM nova_jobs WHERE analysis_job_id = ?', (analysis_job_id,))
+            row = cursor.fetchone()
+            if row:
+                job = dict(row)
+                # Parse JSON fields
+                if job.get('analysis_types'):
+                    job['analysis_types'] = json.loads(job['analysis_types'])
+                if job.get('user_options'):
+                    job['user_options'] = json.loads(job['user_options'])
+                if job.get('summary_result'):
+                    job['summary_result'] = json.loads(job['summary_result'])
+                if job.get('chapters_result'):
+                    job['chapters_result'] = json.loads(job['chapters_result'])
+                if job.get('elements_result'):
+                    job['elements_result'] = json.loads(job['elements_result'])
+                return job
+            return None
+
+    def update_nova_job(self, nova_job_id: int, update_data: Dict[str, Any]):
+        """Update Nova job with arbitrary fields."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            # Build UPDATE query dynamically
+            fields = []
+            values = []
+            for key, value in update_data.items():
+                fields.append(f"{key} = ?")
+                # JSON fields
+                if key in ('summary_result', 'chapters_result', 'elements_result', 'user_options'):
+                    values.append(json.dumps(value) if value is not None else None)
+                else:
+                    values.append(value)
+
+            values.append(nova_job_id)
+            query = f"UPDATE nova_jobs SET {', '.join(fields)} WHERE id = ?"
+            cursor.execute(query, values)
+
+    def update_nova_job_status(self, nova_job_id: int, status: str, progress_percent: int = None):
+        """Update Nova job status and progress."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if progress_percent is not None:
+                cursor.execute('''
+                    UPDATE nova_jobs
+                    SET status = ?, progress_percent = ?
+                    WHERE id = ?
+                ''', (status, progress_percent, nova_job_id))
+            else:
+                cursor.execute('''
+                    UPDATE nova_jobs SET status = ? WHERE id = ?
+                ''', (status, nova_job_id))
+
+    def update_nova_job_started_at(self, nova_job_id: int):
+        """Update Nova job started_at timestamp."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE nova_jobs SET started_at = CURRENT_TIMESTAMP WHERE id = ?
+            ''', (nova_job_id,))
+
+    def update_nova_job_completed_at(self, nova_job_id: int):
+        """Update Nova job completed_at timestamp."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE nova_jobs SET completed_at = CURRENT_TIMESTAMP WHERE id = ?
+            ''', (nova_job_id,))
+
+    def list_nova_jobs(self, status: Optional[str] = None, model: Optional[str] = None,
+                      limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """List Nova jobs with optional filters."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            query = 'SELECT * FROM nova_jobs WHERE 1=1'
+            params = []
+
+            if status:
+                query += ' AND status = ?'
+                params.append(status)
+
+            if model:
+                query += ' AND model = ?'
+                params.append(model)
+
+            query += ' ORDER BY created_at DESC LIMIT ? OFFSET ?'
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+            jobs = []
+            for row in cursor.fetchall():
+                job = dict(row)
+                # Parse JSON fields
+                if job.get('analysis_types'):
+                    job['analysis_types'] = json.loads(job['analysis_types'])
+                if job.get('user_options'):
+                    job['user_options'] = json.loads(job['user_options'])
+                jobs.append(job)
+            return jobs
+
+    def delete_nova_job(self, nova_job_id: int) -> bool:
+        """Delete a Nova job."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM nova_jobs WHERE id = ?', (nova_job_id,))
+            return cursor.rowcount > 0
+
+    # Helper methods for analysis_jobs integration
+    def create_analysis_job(self, file_id: int, job_id: str, analysis_type: str,
+                           status: str = 'SUBMITTED', parameters: Optional[Dict] = None) -> int:
+        """Create a new analysis job (wrapper around create_job for compatibility)."""
+        return self.create_job(job_id, file_id, analysis_type, parameters)
+
+    def update_analysis_job(self, job_id: int, status: str = None, results: Optional[Dict] = None,
+                           error_message: Optional[str] = None):
+        """Update analysis job status (handles both job_id string and int)."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Check if job_id is an integer (database ID) or string (job_id field)
+            if isinstance(job_id, int):
+                # It's the database ID
+                if status in ('SUCCEEDED', 'FAILED', 'COMPLETED'):
+                    cursor.execute('''
+                        UPDATE analysis_jobs
+                        SET status = ?, results = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                    ''', (status, json.dumps(results) if results else None, error_message, job_id))
+                elif status:
+                    cursor.execute('''
+                        UPDATE analysis_jobs SET status = ? WHERE id = ?
+                    ''', (status, job_id))
+            else:
+                # It's the job_id string
+                if status in ('SUCCEEDED', 'FAILED', 'COMPLETED'):
+                    cursor.execute('''
+                        UPDATE analysis_jobs
+                        SET status = ?, results = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP
+                        WHERE job_id = ?
+                    ''', (status, json.dumps(results) if results else None, error_message, job_id))
+                elif status:
+                    cursor.execute('''
+                        UPDATE analysis_jobs SET status = ? WHERE job_id = ?
+                    ''', (status, job_id))
+
 
 # Global database instance (will be initialized in app factory)
 db: Optional[Database] = None
