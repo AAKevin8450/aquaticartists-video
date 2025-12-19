@@ -407,6 +407,130 @@ class Database:
                     file['metadata'] = self._parse_json_field(file['metadata'], default={})
             return files
 
+    def get_file_by_local_path(self, local_path: str) -> Optional[Dict[str, Any]]:
+        """Get file by local_path."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM files WHERE local_path = ? LIMIT 1', (local_path,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            file = dict(row)
+            if 'metadata' in file:
+                file['metadata'] = self._parse_json_field(file['metadata'], default={})
+            return file
+
+    def import_transcript_as_file(self, transcript: Dict[str, Any]) -> Optional[int]:
+        """
+        Import a transcript-only file into the files table.
+
+        This allows transcript-only files to be treated as full files for
+        proxy creation, analysis, and other operations.
+
+        Returns:
+            File ID if created, None if file already exists
+        """
+        import hashlib
+        import os
+
+        # Check if file already exists by local_path
+        existing = self.get_file_by_local_path(transcript['file_path'])
+        if existing:
+            return None  # Already imported
+
+        # Generate unique s3_key placeholder for local files
+        # Format: local://<hash of path>
+        path_hash = hashlib.sha256(transcript['file_path'].encode()).hexdigest()[:16]
+        s3_key = f"local://{path_hash}"
+
+        # Derive content_type from file extension
+        ext = os.path.splitext(transcript['file_name'])[1].lower()
+        content_type_map = {
+            '.mp4': 'video/mp4',
+            '.mov': 'video/quicktime',
+            '.avi': 'video/x-msvideo',
+            '.mkv': 'video/x-matroska',
+            '.webm': 'video/webm',
+            '.flv': 'video/x-flv',
+            '.wmv': 'video/x-ms-wmv',
+            '.m4v': 'video/x-m4v',
+        }
+        content_type = content_type_map.get(ext, 'video/mp4')
+
+        # Create file record using transcript metadata
+        return self.create_source_file(
+            filename=transcript['file_name'],
+            s3_key=s3_key,
+            file_type='video',  # Transcripts are always video files
+            size_bytes=transcript['file_size'],
+            content_type=content_type,
+            local_path=transcript['file_path'],
+            resolution_width=transcript.get('resolution_width'),
+            resolution_height=transcript.get('resolution_height'),
+            frame_rate=transcript.get('frame_rate'),
+            codec_video=transcript.get('codec_video'),
+            codec_audio=transcript.get('codec_audio'),
+            duration_seconds=transcript.get('duration_seconds'),
+            bitrate=transcript.get('bitrate'),
+            metadata={'source': 'transcript_import', 'imported_at': datetime.now().isoformat()}
+        )
+
+    def import_all_transcripts_as_files(self) -> Dict[str, Any]:
+        """
+        Import ALL transcript-only files into the files table.
+
+        This is a one-time migration to unify file management.
+
+        Returns:
+            Dictionary with statistics about the import
+        """
+        # Get all unique file paths from transcripts that are NOT in files table
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT DISTINCT
+                    t.file_path,
+                    t.file_name,
+                    t.file_size,
+                    MAX(t.resolution_width) as resolution_width,
+                    MAX(t.resolution_height) as resolution_height,
+                    MAX(t.frame_rate) as frame_rate,
+                    MAX(t.codec_video) as codec_video,
+                    MAX(t.codec_audio) as codec_audio,
+                    MAX(t.duration_seconds) as duration_seconds,
+                    MAX(t.bitrate) as bitrate
+                FROM transcripts t
+                LEFT JOIN files f ON t.file_path = f.local_path
+                WHERE f.id IS NULL AND t.status = 'COMPLETED'
+                GROUP BY t.file_path, t.file_name, t.file_size
+            ''')
+            transcripts = [dict(row) for row in cursor.fetchall()]
+
+        # Import each transcript as a file
+        imported = 0
+        skipped = 0
+        errors = []
+
+        for transcript in transcripts:
+            try:
+                file_id = self.import_transcript_as_file(transcript)
+                if file_id:
+                    imported += 1
+                else:
+                    skipped += 1
+            except Exception as e:
+                errors.append({
+                    'file_path': transcript['file_path'],
+                    'error': str(e)
+                })
+
+        return {
+            'total': len(transcripts),
+            'imported': imported,
+            'skipped': skipped,
+            'errors': errors
+        }
+
     def list_source_files_with_stats(
         self,
         file_type: Optional[str] = None,
@@ -920,6 +1044,17 @@ class Database:
                      resolution_width, resolution_height, frame_rate,
                      codec_video, codec_audio, bitrate,
                      datetime.now().isoformat(), transcript_id))
+
+                # Automatically import transcript file into files table
+                # This ensures all transcribed files can have proxies created and be analyzed
+                transcript = self.get_transcript(transcript_id)
+                if transcript:
+                    try:
+                        self.import_transcript_as_file(transcript)
+                    except Exception as e:
+                        # Log error but don't fail the transcript update
+                        print(f"[WARNING] Failed to import transcript file into files table: {e}")
+
             elif status == 'FAILED':
                 cursor.execute('''
                     UPDATE transcripts
@@ -1235,114 +1370,83 @@ class Database:
         search: Optional[str] = None,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        min_size: Optional[int] = None,
+        max_size: Optional[int] = None,
+        min_duration: Optional[int] = None,
+        max_duration: Optional[int] = None,
         sort_by: str = 'uploaded_at',
         sort_order: str = 'desc',
         limit: int = 50,
         offset: int = 0
     ) -> List[Dict[str, Any]]:
         """
-        List ALL files including both uploaded files (from files table) and transcribed files (from transcripts table).
+        List ALL files from the files table with stats.
 
-        This method combines:
-        1. Files from the files table (uploaded via web interface)
-        2. Unique file paths from transcripts table that don't exist in files table
+        All files the system knows about are now in the files table,
+        including transcript-only files that were migrated.
 
         Returns unified file list with stats.
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            # Build query that UNIONS files table and transcripts table
-            # For transcript-only files, we simulate the files table structure
+            # Simplified query - all files are now in the files table
             query = '''
-                WITH all_files AS (
-                    -- Files from files table
-                    SELECT
-                        f.id,
-                        f.filename,
-                        f.s3_key,
-                        f.file_type,
-                        f.size_bytes,
-                        f.content_type,
-                        f.uploaded_at,
-                        f.local_path,
-                        f.resolution_width,
-                        f.resolution_height,
-                        f.frame_rate,
-                        f.codec_video,
-                        f.codec_audio,
-                        f.duration_seconds,
-                        f.bitrate,
-                        'files' as source_table
-                    FROM files f
-                    WHERE (f.is_proxy = 0 OR f.is_proxy IS NULL)
-
-                    UNION
-
-                    -- Unique files from transcripts table that are NOT in files table
-                    SELECT
-                        -t.id as id,  -- Negative ID to avoid conflicts
-                        t.file_name as filename,
-                        NULL as s3_key,
-                        'video' as file_type,  -- Assume video for transcripts
-                        t.file_size as size_bytes,
-                        NULL as content_type,
-                        t.created_at as uploaded_at,
-                        t.file_path as local_path,
-                        MAX(t.resolution_width) as resolution_width,
-                        MAX(t.resolution_height) as resolution_height,
-                        MAX(t.frame_rate) as frame_rate,
-                        MAX(t.codec_video) as codec_video,
-                        MAX(t.codec_audio) as codec_audio,
-                        MAX(t.duration_seconds) as duration_seconds,  -- Use max duration across models
-                        MAX(t.bitrate) as bitrate,
-                        'transcripts' as source_table
-                    FROM transcripts t
-                    LEFT JOIN files f ON t.file_path = f.local_path
-                    WHERE f.id IS NULL AND t.status = 'COMPLETED'
-                    GROUP BY t.file_path, t.file_name, t.file_size, t.created_at
-                )
                 SELECT
-                    af.*,
-                    (SELECT COUNT(*) FROM files p WHERE p.source_file_id = af.id AND p.is_proxy = 1) as has_proxy,
-                    (SELECT p.id FROM files p WHERE p.source_file_id = af.id AND p.is_proxy = 1 LIMIT 1) as proxy_file_id,
-                    (SELECT p.s3_key FROM files p WHERE p.source_file_id = af.id AND p.is_proxy = 1 LIMIT 1) as proxy_s3_key,
-                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = af.id) as total_analyses,
-                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = af.id AND aj.status = 'SUCCEEDED') as completed_analyses,
-                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = af.id AND aj.status = 'IN_PROGRESS') as running_analyses,
-                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = af.id AND aj.status = 'FAILED') as failed_analyses,
-                    (SELECT COUNT(*) FROM transcripts t WHERE t.file_path = af.local_path) as total_transcripts,
-                    (SELECT COUNT(*) FROM transcripts t WHERE t.file_path = af.local_path AND t.status = 'COMPLETED') as completed_transcripts
-                FROM all_files af
-                WHERE 1=1
+                    f.id,
+                    f.filename,
+                    f.s3_key,
+                    f.file_type,
+                    f.size_bytes,
+                    f.content_type,
+                    f.uploaded_at,
+                    f.local_path,
+                    f.resolution_width,
+                    f.resolution_height,
+                    f.frame_rate,
+                    f.codec_video,
+                    f.codec_audio,
+                    f.duration_seconds,
+                    f.bitrate,
+                    (SELECT COUNT(*) FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1) as has_proxy,
+                    (SELECT p.id FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1 LIMIT 1) as proxy_file_id,
+                    (SELECT p.s3_key FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1 LIMIT 1) as proxy_s3_key,
+                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id) as total_analyses,
+                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'SUCCEEDED') as completed_analyses,
+                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'IN_PROGRESS') as running_analyses,
+                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'FAILED') as failed_analyses,
+                    (SELECT COUNT(*) FROM transcripts t WHERE t.file_path = f.local_path) as total_transcripts,
+                    (SELECT COUNT(*) FROM transcripts t WHERE t.file_path = f.local_path AND t.status = 'COMPLETED') as completed_transcripts
+                FROM files f
+                WHERE (f.is_proxy = 0 OR f.is_proxy IS NULL)
             '''
 
             params = []
 
             # Apply filters
             if file_type:
-                query += ' AND af.file_type = ?'
+                query += ' AND f.file_type = ?'
                 params.append(file_type)
 
             if has_proxy is not None:
                 if has_proxy:
-                    query += ' AND EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = af.id AND p.is_proxy = 1)'
+                    query += ' AND EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1)'
                 else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = af.id AND p.is_proxy = 1)'
+                    query += ' AND NOT EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1)'
 
             if has_transcription is not None:
                 if has_transcription:
-                    query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = af.local_path)'
+                    query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
                 else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = af.local_path)'
+                    query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
 
             if search:
                 query += ''' AND (
-                    af.filename LIKE ?
-                    OR af.local_path LIKE ?
+                    f.filename LIKE ?
+                    OR f.local_path LIKE ?
                     OR EXISTS (
                         SELECT 1 FROM transcripts t
-                        WHERE t.file_path = af.local_path
+                        WHERE t.file_path = f.local_path
                           AND t.transcript_text LIKE ?
                     )
                 )'''
@@ -1350,20 +1454,36 @@ class Database:
                 params.extend([search_pattern, search_pattern, search_pattern])
 
             if from_date:
-                query += ' AND af.uploaded_at >= ?'
+                query += ' AND f.uploaded_at >= ?'
                 params.append(from_date)
 
             if to_date:
-                query += ' AND af.uploaded_at <= ?'
+                query += ' AND f.uploaded_at <= ?'
                 params.append(to_date)
+
+            if min_size is not None:
+                query += ' AND f.size_bytes >= ?'
+                params.append(min_size)
+
+            if max_size is not None:
+                query += ' AND f.size_bytes <= ?'
+                params.append(max_size)
+
+            if min_duration is not None:
+                query += ' AND f.duration_seconds >= ?'
+                params.append(min_duration)
+
+            if max_duration is not None:
+                query += ' AND f.duration_seconds <= ?'
+                params.append(max_duration)
 
             # Add sorting
             valid_sort_fields = ['uploaded_at', 'filename', 'size_bytes', 'duration_seconds', 'file_type']
             if sort_by in valid_sort_fields:
                 sort_direction = 'ASC' if sort_order.lower() == 'asc' else 'DESC'
-                query += f' ORDER BY af.{sort_by} {sort_direction}'
+                query += f' ORDER BY f.{sort_by} {sort_direction}'
             else:
-                query += ' ORDER BY af.uploaded_at DESC'
+                query += ' ORDER BY f.uploaded_at DESC'
 
             query += ' LIMIT ? OFFSET ?'
             params.extend([limit, offset])
@@ -1383,64 +1503,43 @@ class Database:
         has_transcription: Optional[bool] = None,
         search: Optional[str] = None,
         from_date: Optional[str] = None,
-        to_date: Optional[str] = None
+        to_date: Optional[str] = None,
+        min_size: Optional[int] = None,
+        max_size: Optional[int] = None,
+        min_duration: Optional[int] = None,
+        max_duration: Optional[int] = None
     ) -> int:
-        """Count all files (files table + transcripts table)."""
+        """Count all files from the files table."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
-            query = '''
-                WITH all_files AS (
-                    SELECT
-                        f.id,
-                        f.filename,
-                        f.file_type,
-                        f.uploaded_at,
-                        f.local_path
-                    FROM files f
-                    WHERE (f.is_proxy = 0 OR f.is_proxy IS NULL)
-
-                    UNION
-
-                    SELECT
-                        -t.id as id,
-                        t.file_name as filename,
-                        'video' as file_type,
-                        t.created_at as uploaded_at,
-                        t.file_path as local_path
-                    FROM transcripts t
-                    LEFT JOIN files f ON t.file_path = f.local_path
-                    WHERE f.id IS NULL AND t.status = 'COMPLETED'
-                    GROUP BY t.file_path, t.file_name, t.created_at
-                )
-                SELECT COUNT(*) FROM all_files af WHERE 1=1
-            '''
-
+            # Simplified query - all files are now in the files table
+            query = 'SELECT COUNT(*) FROM files f WHERE (f.is_proxy = 0 OR f.is_proxy IS NULL)'
             params = []
 
             if file_type:
-                query += ' AND af.file_type = ?'
+                query += ' AND f.file_type = ?'
                 params.append(file_type)
 
             if has_proxy is not None:
                 if has_proxy:
-                    query += ' AND EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = af.id AND p.is_proxy = 1)'
+                    query += ' AND EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1)'
                 else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = af.id AND p.is_proxy = 1)'
+                    query += ' AND NOT EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1)'
 
             if has_transcription is not None:
                 if has_transcription:
-                    query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = af.local_path)'
+                    query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
                 else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = af.local_path)'
+                    query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
 
             if search:
                 query += ''' AND (
-                    af.filename LIKE ?
-                    OR af.local_path LIKE ?
+                    f.filename LIKE ?
+                    OR f.local_path LIKE ?
                     OR EXISTS (
                         SELECT 1 FROM transcripts t
-                        WHERE t.file_path = af.local_path
+                        WHERE t.file_path = f.local_path
                           AND t.transcript_text LIKE ?
                     )
                 )'''
@@ -1448,12 +1547,28 @@ class Database:
                 params.extend([search_pattern, search_pattern, search_pattern])
 
             if from_date:
-                query += ' AND af.uploaded_at >= ?'
+                query += ' AND f.uploaded_at >= ?'
                 params.append(from_date)
 
             if to_date:
-                query += ' AND af.uploaded_at <= ?'
+                query += ' AND f.uploaded_at <= ?'
                 params.append(to_date)
+
+            if min_size is not None:
+                query += ' AND f.size_bytes >= ?'
+                params.append(min_size)
+
+            if max_size is not None:
+                query += ' AND f.size_bytes <= ?'
+                params.append(max_size)
+
+            if min_duration is not None:
+                query += ' AND f.duration_seconds >= ?'
+                params.append(min_duration)
+
+            if max_duration is not None:
+                query += ' AND f.duration_seconds <= ?'
+                params.append(max_duration)
 
             cursor.execute(query, params)
             return cursor.fetchone()[0]
@@ -1465,7 +1580,11 @@ class Database:
         has_transcription: Optional[bool] = None,
         search: Optional[str] = None,
         from_date: Optional[str] = None,
-        to_date: Optional[str] = None
+        to_date: Optional[str] = None,
+        min_size: Optional[int] = None,
+        max_size: Optional[int] = None,
+        min_duration: Optional[int] = None,
+        max_duration: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Get summary statistics for all files matching filters.
@@ -1480,67 +1599,41 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
 
+            # Simplified query - all files are now in the files table
             query = '''
-                WITH all_files AS (
-                    SELECT
-                        f.id,
-                        f.filename,
-                        f.file_type,
-                        f.uploaded_at,
-                        f.local_path,
-                        f.size_bytes,
-                        f.duration_seconds
-                    FROM files f
-                    WHERE (f.is_proxy = 0 OR f.is_proxy IS NULL)
-
-                    UNION
-
-                    SELECT
-                        -t.id as id,
-                        t.file_name as filename,
-                        'video' as file_type,
-                        t.created_at as uploaded_at,
-                        t.file_path as local_path,
-                        t.file_size as size_bytes,
-                        MAX(t.duration_seconds) as duration_seconds
-                    FROM transcripts t
-                    LEFT JOIN files f ON t.file_path = f.local_path
-                    WHERE f.id IS NULL AND t.status = 'COMPLETED'
-                    GROUP BY t.file_path, t.file_name, t.file_size, t.created_at
-                )
                 SELECT
                     COUNT(*) as total_count,
-                    COALESCE(SUM(af.size_bytes), 0) as total_size_bytes,
-                    COALESCE(SUM(af.duration_seconds), 0) as total_duration_seconds
-                FROM all_files af
-                WHERE 1=1
+                    COALESCE(SUM(f.size_bytes), 0) as total_size_bytes,
+                    COALESCE(SUM(f.duration_seconds), 0) as total_duration_seconds
+                FROM files f
+                WHERE (f.is_proxy = 0 OR f.is_proxy IS NULL)
             '''
 
             params = []
 
             if file_type:
-                query += ' AND af.file_type = ?'
+                query += ' AND f.file_type = ?'
                 params.append(file_type)
 
             if has_proxy is not None:
                 if has_proxy:
-                    query += ' AND EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = af.id AND p.is_proxy = 1)'
+                    query += ' AND EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1)'
                 else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = af.id AND p.is_proxy = 1)'
+                    query += ' AND NOT EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1)'
 
             if has_transcription is not None:
                 if has_transcription:
-                    query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = af.local_path)'
+                    query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
                 else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = af.local_path)'
+                    query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
 
             if search:
                 query += ''' AND (
-                    af.filename LIKE ?
-                    OR af.local_path LIKE ?
+                    f.filename LIKE ?
+                    OR f.local_path LIKE ?
                     OR EXISTS (
                         SELECT 1 FROM transcripts t
-                        WHERE t.file_path = af.local_path
+                        WHERE t.file_path = f.local_path
                           AND t.transcript_text LIKE ?
                     )
                 )'''
@@ -1548,12 +1641,28 @@ class Database:
                 params.extend([search_pattern, search_pattern, search_pattern])
 
             if from_date:
-                query += ' AND af.uploaded_at >= ?'
+                query += ' AND f.uploaded_at >= ?'
                 params.append(from_date)
 
             if to_date:
-                query += ' AND af.uploaded_at <= ?'
+                query += ' AND f.uploaded_at <= ?'
                 params.append(to_date)
+
+            if min_size is not None:
+                query += ' AND f.size_bytes >= ?'
+                params.append(min_size)
+
+            if max_size is not None:
+                query += ' AND f.size_bytes <= ?'
+                params.append(max_size)
+
+            if min_duration is not None:
+                query += ' AND f.duration_seconds >= ?'
+                params.append(min_duration)
+
+            if max_duration is not None:
+                query += ' AND f.duration_seconds <= ?'
+                params.append(max_duration)
 
             cursor.execute(query, params)
             row = cursor.fetchone()

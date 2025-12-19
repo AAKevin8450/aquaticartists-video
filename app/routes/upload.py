@@ -412,6 +412,136 @@ def upload_file_direct():
         return jsonify({'error': 'Failed to upload file'}), 500
 
 
+def create_proxy_internal(file_id: int, force: bool = False, upload_to_s3: bool = True):
+    """
+    Internal function to create a proxy video for a file.
+
+    Args:
+        file_id: The file ID to create proxy for
+        force: If True, recreate proxy even if it exists
+        upload_to_s3: If True, upload proxy to S3 (default True). If False, only create local proxy.
+
+    Returns:
+        dict with proxy info
+
+    Raises:
+        Exception: If proxy creation fails
+    """
+    db = get_db()
+    file = db.get_file(file_id)
+
+    if not file:
+        raise Exception('File not found')
+
+    if file['file_type'] != 'video':
+        raise Exception('File must be a video')
+
+    # Check for existing proxy in new schema (proxy as separate file record)
+    existing_proxy = db.get_proxy_for_source(file_id)
+    if existing_proxy and not force:
+        return {
+            'file_id': file_id,
+            'proxy_id': existing_proxy['id'],
+            's3_key': existing_proxy.get('s3_key'),
+            'size_bytes': existing_proxy['size_bytes'],
+            'local_path': existing_proxy.get('local_path'),
+            'message': 'Proxy already exists'
+        }
+
+    if not shutil.which('ffmpeg'):
+        raise Exception('ffmpeg is not available on the server')
+
+    from flask import current_app
+    s3_service = get_s3_service(current_app) if upload_to_s3 else None
+
+    # Use local path if available
+    local_path = file.get('local_path')
+    if not local_path or not os.path.isfile(local_path):
+        raise Exception('Local source video not available for proxy creation')
+
+    # Generate proxy filename
+    source_filename = file['filename']
+    proxy_filename = f"proxy_720p15_{source_filename}"
+
+    # Determine where to save proxy
+    if upload_to_s3:
+        # Use temporary directory, will upload to S3
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            proxy_path = os.path.join(tmp_dir, proxy_filename)
+
+            try:
+                _create_proxy_video(local_path, proxy_path)
+            except RuntimeError as e:
+                current_app.logger.error(f"ffmpeg error: {e}")
+                raise Exception(f'Failed to create proxy video: {e}')
+
+            # Upload to S3
+            proxy_s3_key = f"proxies/{proxy_filename}"
+            proxy_size = os.path.getsize(proxy_path)
+
+            with open(proxy_path, 'rb') as proxy_file:
+                s3_service.upload_file(proxy_file, proxy_s3_key, 'video/mp4')
+
+            proxy_local_path = None
+    else:
+        # Save to local proxy_video folder (no S3 upload)
+        proxy_video_dir = Path('proxy_video')
+        proxy_video_dir.mkdir(parents=True, exist_ok=True)
+        proxy_path = str(proxy_video_dir / proxy_filename)
+
+        try:
+            _create_proxy_video(local_path, proxy_path)
+        except RuntimeError as e:
+            current_app.logger.error(f"ffmpeg error: {e}")
+            raise Exception(f'Failed to create proxy video: {e}')
+
+        proxy_s3_key = None  # No S3 upload
+        proxy_size = os.path.getsize(proxy_path)
+        proxy_local_path = proxy_path
+
+    # Extract media metadata from proxy
+    try:
+        from app.utils.media_metadata import extract_media_metadata
+        proxy_metadata = extract_media_metadata(proxy_path)
+    except Exception as e:
+        current_app.logger.warning(f"Failed to extract proxy metadata: {e}")
+        proxy_metadata = {
+            'resolution_width': 1280,
+            'resolution_height': 720,
+            'frame_rate': 15.0
+        }
+
+    # Create proxy file record in database
+    proxy_id = db.create_proxy_file(
+        source_file_id=file_id,
+        filename=proxy_filename,
+        s3_key=proxy_s3_key,
+        size_bytes=proxy_size,
+        content_type='video/mp4',
+        local_path=proxy_local_path,
+        resolution_width=proxy_metadata.get('resolution_width', 1280),
+        resolution_height=proxy_metadata.get('resolution_height', 720),
+        frame_rate=proxy_metadata.get('frame_rate', 15.0),
+        codec_video=proxy_metadata.get('codec_video'),
+        codec_audio=proxy_metadata.get('codec_audio'),
+        duration_seconds=proxy_metadata.get('duration_seconds'),
+        bitrate=proxy_metadata.get('bitrate'),
+        metadata={
+            'proxy_spec': '720p15',
+            'uploaded_to_s3': upload_to_s3
+        }
+    )
+
+    return {
+        'file_id': file_id,
+        'proxy_id': proxy_id,
+        's3_key': proxy_s3_key,
+        'local_path': proxy_local_path,
+        'size_bytes': proxy_size,
+        'uploaded_to_s3': upload_to_s3
+    }
+
+
 @bp.route('/create-proxy', methods=['POST'])
 def create_proxy():
     """
@@ -438,78 +568,9 @@ def create_proxy():
         if not file_id:
             return jsonify({'error': 'file_id is required'}), 400
 
-        db = get_db()
-        file = db.get_file(file_id)
-
-        if not file:
-            return jsonify({'error': 'File not found'}), 404
-
-        if file['file_type'] != 'video':
-            return jsonify({'error': 'File must be a video'}), 400
-
-        metadata = file.get('metadata', {}) or {}
-        existing_proxy = metadata.get('proxy_s3_key')
-        if existing_proxy and not force:
-            return jsonify({
-                'file_id': file_id,
-                'proxy_s3_key': existing_proxy,
-                'proxy_size_bytes': metadata.get('proxy_size_bytes'),
-                'message': 'Proxy already exists'
-            }), 200
-
-        if not shutil.which('ffmpeg'):
-            return jsonify({'error': 'ffmpeg is not available on the server'}), 500
-
-        s3_service = get_s3_service(current_app)
-        source_s3_key = file['s3_key']
-
-        key_path = PurePosixPath(source_s3_key)
-        proxy_s3_key = str(key_path.parent / 'proxy_720p15.mp4')
-
-        duration_seconds = metadata.get('duration_seconds')
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            proxy_path = os.path.join(tmp_dir, 'proxy_720p15.mp4')
-
-            local_path = metadata.get('local_path')
-            if local_path and os.path.isfile(local_path):
-                source_path = local_path
-                if duration_seconds is None:
-                    duration_seconds = _probe_duration_seconds(local_path)
-            else:
-                if metadata.get('proxy_s3_key') and source_s3_key == metadata.get('proxy_s3_key'):
-                    return jsonify({'error': 'Local source video not available for proxy creation'}), 404
-                source_path = os.path.join(tmp_dir, 'source' + os.path.splitext(file['filename'])[1])
-                s3_service.download_file(source_s3_key, source_path)
-
-            try:
-                _create_proxy_video(source_path, proxy_path)
-            except RuntimeError as e:
-                current_app.logger.error(f"ffmpeg error: {e}")
-                return jsonify({'error': 'Failed to create proxy video'}), 500
-
-            proxy_size = os.path.getsize(proxy_path)
-            with open(proxy_path, 'rb') as proxy_file:
-                s3_service.upload_file(proxy_file, proxy_s3_key, 'video/mp4')
-
-        metadata_updates = {
-            'proxy_s3_key': proxy_s3_key,
-            'proxy_size_bytes': proxy_size,
-            'proxy_content_type': 'video/mp4',
-            'proxy_generated_at': datetime.utcnow().isoformat() + 'Z',
-            'proxy_spec': '720p15',
-            'proxy_source_s3_key': source_s3_key
-        }
-        if duration_seconds is not None:
-            metadata_updates['duration_seconds'] = duration_seconds
-        updated_metadata = db.update_file_metadata(file_id, metadata_updates)
-
-        return jsonify({
-            'file_id': file_id,
-            'proxy_s3_key': proxy_s3_key,
-            'proxy_size_bytes': proxy_size,
-            'metadata': updated_metadata
-        }), 201
+        # Use internal function
+        result = create_proxy_internal(file_id, force)
+        return jsonify(result), 201
 
     except S3Error as e:
         return jsonify({'error': str(e)}), 500

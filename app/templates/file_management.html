@@ -67,23 +67,67 @@
                 </select>
             </div>
 
-            <!-- Date Range (Collapsible) -->
+            <!-- Upload Date Filters (Always Visible) -->
+            <div class="col-md-2">
+                <label class="form-label small">Upload From</label>
+                <input type="date" class="form-control" id="uploadFromDate">
+            </div>
+
+            <div class="col-md-2">
+                <label class="form-label small">Upload To</label>
+                <input type="date" class="form-control" id="uploadToDate">
+            </div>
+
+            <!-- File Created Date Filters -->
+            <div class="col-md-2">
+                <label class="form-label small">Created From</label>
+                <input type="date" class="form-control" id="createdFromDate">
+            </div>
+
+            <div class="col-md-2">
+                <label class="form-label small">Created To</label>
+                <input type="date" class="form-control" id="createdToDate">
+            </div>
+
+            <!-- Advanced Filters (Collapsible) -->
             <div class="col-12">
                 <button class="btn btn-sm btn-outline-secondary"
-                        data-bs-toggle="collapse" data-bs-target="#dateRangeCollapse">
-                    <i class="bi bi-calendar-range"></i> Date Range
+                        data-bs-toggle="collapse" data-bs-target="#advancedFiltersCollapse">
+                    <i class="bi bi-sliders"></i> Size & Duration Filters
                 </button>
             </div>
 
-            <div class="collapse col-12" id="dateRangeCollapse">
-                <div class="row g-2">
-                    <div class="col-md-4">
-                        <label class="form-label small">From Date</label>
-                        <input type="date" class="form-control" id="fromDate">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small">To Date</label>
-                        <input type="date" class="form-control" id="toDate">
+            <div class="collapse col-12" id="advancedFiltersCollapse">
+                <div class="card mt-2">
+                    <div class="card-body">
+                        <div class="row g-2 mb-0">
+
+                            <!-- File Size Range -->
+                            <div class="col-12 mb-2">
+                                <h6 class="text-muted small mb-2"><i class="bi bi-hdd"></i> File Size (MB)</h6>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Min Size</label>
+                                <input type="number" class="form-control" id="minSize" placeholder="0" min="0" step="1">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Max Size</label>
+                                <input type="number" class="form-control" id="maxSize" placeholder="Unlimited" min="0" step="1">
+                            </div>
+
+                            <!-- Duration Range -->
+                            <div class="col-12 mt-3 mb-2">
+                                <h6 class="text-muted small mb-2"><i class="bi bi-clock"></i> Duration (seconds)</h6>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Min Duration</label>
+                                <input type="number" class="form-control" id="minDuration" placeholder="0" min="0" step="1">
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small">Max Duration</label>
+                                <input type="number" class="form-control" id="maxDuration" placeholder="Unlimited" min="0" step="1">
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -97,6 +141,32 @@
                     <i class="bi bi-arrow-counterclockwise"></i> Reset
                 </button>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Batch Actions Section -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-lightning-fill"></i> Batch Actions</h5>
+    </div>
+    <div class="card-body">
+        <p class="text-muted small mb-3">
+            Apply actions to all filtered files. Current filter results: <strong id="batchFilesCount">0 files</strong>
+        </p>
+        <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-primary" id="batchProxyBtn">
+                <i class="bi bi-badge-hd"></i> Generate Proxies
+            </button>
+            <button class="btn btn-info" id="batchTranscribeBtn">
+                <i class="bi bi-mic"></i> Transcribe
+            </button>
+            <button class="btn btn-warning" id="batchNovaBtn">
+                <i class="bi bi-stars"></i> Nova Analysis
+            </button>
+            <button class="btn btn-success" id="batchRekognitionBtn">
+                <i class="bi bi-eye"></i> Rekognition Analysis
+            </button>
         </div>
     </div>
 </div>
@@ -190,6 +260,90 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Batch Progress Modal -->
+<div class="modal fade" id="batchProgressModal" tabindex="-1" data-bs-backdrop="static" data-bs-keyboard="false">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-lightning-fill"></i> Batch Processing
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" id="batchCloseBtn" disabled></button>
+            </div>
+            <div class="modal-body">
+                <!-- Progress Overview -->
+                <div class="mb-4">
+                    <h6 id="batchActionTitle">Processing...</h6>
+                    <div class="progress" style="height: 30px;">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated"
+                             role="progressbar"
+                             id="batchProgressBar"
+                             style="width: 0%">
+                            <span id="batchProgressText">0%</span>
+                        </div>
+                    </div>
+                    <div class="mt-2 d-flex justify-content-between text-muted small">
+                        <span id="batchStatusText">Starting...</span>
+                        <span id="batchCountText">0 / 0</span>
+                    </div>
+                </div>
+
+                <!-- Current File -->
+                <div class="alert alert-info mb-3" id="batchCurrentFile" style="display: none;">
+                    <small class="text-muted">Current file:</small><br>
+                    <strong id="batchCurrentFileName">-</strong>
+                </div>
+
+                <!-- Statistics -->
+                <div class="row text-center mb-3" id="batchStats" style="display: none;">
+                    <div class="col-4">
+                        <div class="d-flex flex-column">
+                            <small class="text-muted">Completed</small>
+                            <h5 class="mb-0 text-success" id="batchCompleted">0</h5>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="d-flex flex-column">
+                            <small class="text-muted">Failed</small>
+                            <h5 class="mb-0 text-danger" id="batchFailed">0</h5>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="d-flex flex-column">
+                            <small class="text-muted">Elapsed</small>
+                            <h5 class="mb-0" id="batchElapsed">0s</h5>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Error List (collapsible) -->
+                <div id="batchErrorsSection" style="display: none;">
+                    <hr>
+                    <button class="btn btn-sm btn-outline-danger mb-2"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#batchErrorsList">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        View Errors (<span id="batchErrorCount">0</span>)
+                    </button>
+                    <div class="collapse" id="batchErrorsList">
+                        <div class="list-group" id="batchErrorsContainer">
+                            <!-- Error items will be added here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-danger" id="batchCancelBtn">
+                    <i class="bi bi-x-circle"></i> Cancel
+                </button>
+                <button type="button" class="btn btn-secondary" id="batchDoneBtn" style="display: none;" data-bs-dismiss="modal">
+                    Close
+                </button>
             </div>
         </div>
     </div>
