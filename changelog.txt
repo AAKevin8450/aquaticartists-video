@@ -1,3 +1,32 @@
+2025-12-18 23:57:17 - Updated by Codex
+
+[Category: Feature, Bug Fix, API, Infrastructure]
+Move video proxy creation to local ffmpeg workflows, upload only proxies to S3, and surface size/duration in video selection.
+
+[Purpose]
+Reduce S3 storage/transfer by generating proxies from local videos, make proxy usage consistent for Nova, and show key file details in the UI.
+
+[Impact]
+Video uploads now require server-side handling to create proxies before S3 upload; Nova analysis prefers proxy keys when available; video dropdowns display size and duration.
+
+[Technical Notes]
+- `/api/upload/file` saves local videos, probes duration, creates 720p/15fps proxies via ffmpeg, and uploads only the proxy to S3.
+- Video presigned upload endpoints now reject videos to avoid full-size S3 uploads.
+- Nova status/result parsing tolerates JSON fields that are already decoded.
+- Bedrock batch job configs omit JSONL format fields to match API expectations.
+
+[Changes Made]
+- ⚠️ app/routes/upload.py: require server-side video uploads, create local proxies, upload only proxies to S3, store duration/original size/local path metadata, and add list/get response duration fields.
+- app/routes/main.py: compute display size/duration for the video dropdown.
+- app/templates/video_analysis.html: show size/duration in the dropdown and route uploads through `/api/upload/file`.
+- app/templates/upload.html: route uploads through `/api/upload/file` and mark proxy creation as required.
+- app/routes/nova_analysis.py: use proxy S3 keys when present and normalize JSON fields defensively.
+- app/services/nova_service.py: simplify batch input/output config to avoid JSONL format fields.
+- app/services/s3_service.py: add S3 download helper.
+- app/database.py: add metadata merge helper for file updates.
+- changelog.txt: add entry for proxy-first uploads and Nova handling updates.
+- AGENTS.md: document proxy-first upload flow and metadata fields.
+
 2025-12-18 23:10:05 - Updated by Codex
 
 [Category: Bug Fix, API, Infrastructure, Refactoring]

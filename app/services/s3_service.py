@@ -188,6 +188,23 @@ class S3Service:
         except ClientError as e:
             raise S3Error(f"Failed to delete file: {e}")
 
+    def download_file(self, s3_key: str, local_path: str) -> bool:
+        """
+        Download file from S3 to local path.
+
+        Args:
+            s3_key: S3 key of the file
+            local_path: Local filesystem path to save file
+
+        Returns:
+            True if successful
+        """
+        try:
+            self.s3_client.download_file(self.bucket_name, s3_key, local_path)
+            return True
+        except ClientError as e:
+            raise S3Error(f"Failed to download file: {e}")
+
     def file_exists(self, s3_key: str) -> bool:
         """
         Check if file exists in S3.

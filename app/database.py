@@ -246,6 +246,21 @@ class Database:
             cursor.execute('DELETE FROM files WHERE id = ?', (file_id,))
             return cursor.rowcount > 0
 
+    def update_file_metadata(self, file_id: int, metadata_updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update file metadata by merging new values."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT metadata FROM files WHERE id = ?', (file_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            existing = self._parse_json_field(row['metadata'], default={})
+            existing.update(metadata_updates or {})
+            cursor.execute('''
+                UPDATE files SET metadata = ? WHERE id = ?
+            ''', (json.dumps(existing), file_id))
+            return existing
+
     # Analysis job operations
     def create_job(self, job_id: str, file_id: int, analysis_type: str,
                    parameters: Optional[Dict] = None) -> int:

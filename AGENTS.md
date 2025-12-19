@@ -1,6 +1,6 @@
 # AGENTS
 
-Last Updated: 2025-12-18 23:10:05
+Last Updated: 2025-12-18 23:57:17
 
 Nova batch processing
 - Enable async batch mode by setting `BEDROCK_BATCH_ROLE_ARN`, `NOVA_BATCH_INPUT_PREFIX`, `NOVA_BATCH_OUTPUT_PREFIX` in `.env`.
@@ -14,3 +14,8 @@ Nova model keys
 
 Database
 - Run `migrations/003_add_nova_batch_fields.sql` to add batch metadata fields to `nova_jobs`.
+
+Video proxy uploads
+- Video uploads must use `/api/upload/file` so the server can create a 720p/15fps proxy from the local file via ffmpeg/ffprobe.
+- Only the proxy is uploaded to S3; full-size videos remain local and are recorded in file metadata (`local_path`, `original_size_bytes`, `duration_seconds`, `proxy_*`).
+- `GET /api/upload/files` and `GET /api/upload/files/<id>` return duration and display size based on original metadata; Nova analysis uses `proxy_s3_key` when present.

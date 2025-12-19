@@ -25,6 +25,28 @@ def get_nova_service():
     )
 
 
+def _ensure_json_list(value):
+    """Normalize list-like values that may already be parsed."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        return json.loads(value)
+    return list(value)
+
+
+def _ensure_json_dict(value):
+    """Normalize dict-like values that may already be parsed."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        return json.loads(value)
+    return dict(value)
+
+
 @bp.route('/analyze', methods=['POST'])
 def start_nova_analysis():
     """
@@ -92,7 +114,13 @@ def start_nova_analysis():
         if file['file_type'] != 'video':
             return jsonify({'error': 'File must be a video'}), 400
 
-        s3_key = file['s3_key']
+        metadata = file.get('metadata', {}) or {}
+        proxy_s3_key = metadata.get('proxy_s3_key')
+        s3_key = proxy_s3_key or file['s3_key']
+        if proxy_s3_key:
+            options['proxy_s3_key'] = proxy_s3_key
+            options['proxy_used'] = True
+            options['source_s3_key'] = file['s3_key']
 
         # Estimate duration for cost estimates and batch fallback
         estimated_duration = file.get('metadata', {}).get('duration_seconds', 300)
@@ -340,7 +368,7 @@ def get_nova_status(nova_job_id):
             'status': job['status'],
             'progress_percent': job['progress_percent'],
             'model': job['model'],
-            'analysis_types': json.loads(job['analysis_types']),
+            'analysis_types': _ensure_json_list(job.get('analysis_types')),
             'created_at': job['created_at'],
             'started_at': job['started_at'],
             'completed_at': job['completed_at']
@@ -377,8 +405,8 @@ def get_nova_status(nova_job_id):
                 results = nova_service.fetch_batch_results(
                     s3_prefix=job.get('batch_output_s3_prefix', ''),
                     model=job['model'],
-                    analysis_types=json.loads(job['analysis_types']),
-                    options=json.loads(job.get('user_options') or '{}')
+                    analysis_types=_ensure_json_list(job.get('analysis_types')),
+                    options=_ensure_json_dict(job.get('user_options'))
                 )
 
                 update_data = {
@@ -490,20 +518,20 @@ def get_nova_results(nova_job_id):
         results = {}
 
         if job['summary_result']:
-            results['summary'] = json.loads(job['summary_result'])
+            results['summary'] = _ensure_json_dict(job['summary_result'])
 
         if job['chapters_result']:
-            results['chapters'] = json.loads(job['chapters_result'])
+            results['chapters'] = _ensure_json_dict(job['chapters_result'])
 
         if job['elements_result']:
-            results['elements'] = json.loads(job['elements_result'])
+            results['elements'] = _ensure_json_dict(job['elements_result'])
 
         response = {
             'nova_job_id': job['id'],
             'analysis_job_id': job['analysis_job_id'],
             'status': job['status'],
             'model': job['model'],
-            'analysis_types': json.loads(job['analysis_types']),
+            'analysis_types': _ensure_json_list(job.get('analysis_types')),
             'results': results,
             'metadata': {
                 'tokens_input': job['tokens_input'],

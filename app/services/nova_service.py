@@ -390,12 +390,10 @@ class NovaVideoService:
                 modelId=model_id,
                 roleArn=role_arn,
                 inputDataConfig={
-                    's3InputDataConfig': {'s3Uri': input_s3_uri},
-                    's3InputFormat': 'JSONL'
+                    's3InputDataConfig': {'s3Uri': input_s3_uri}
                 },
                 outputDataConfig={
-                    's3OutputDataConfig': {'s3Uri': output_s3_uri},
-                    's3OutputFormat': 'JSONL'
+                    's3OutputDataConfig': {'s3Uri': output_s3_uri}
                 }
             )
         elif hasattr(self.batch_client, 'start_batch_inference_job'):
@@ -404,12 +402,10 @@ class NovaVideoService:
                 modelId=model_id,
                 roleArn=role_arn,
                 inputDataConfig={
-                    's3InputDataConfig': {'s3Uri': input_s3_uri},
-                    's3InputFormat': 'JSONL'
+                    's3InputDataConfig': {'s3Uri': input_s3_uri}
                 },
                 outputDataConfig={
-                    's3OutputDataConfig': {'s3Uri': output_s3_uri},
-                    's3OutputFormat': 'JSONL'
+                    's3OutputDataConfig': {'s3Uri': output_s3_uri}
                 }
             )
         else:
