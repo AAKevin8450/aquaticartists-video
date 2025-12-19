@@ -67,7 +67,7 @@ Critical environment variables are stored in .env file (not in git):
 - Auto-polling: History page automatically polls running jobs every 15 seconds until completion
 - Excel export: Professional formatted Excel files with Summary and Data sheets using openpyxl
 - Visual dashboard: Interactive charts, graphs, and insights for video analysis results (accessible via /dashboard/<job_id>)
-- File management: Centralized file view with full-text search (filenames, metadata, transcripts), advanced filtering (type/proxy/transcription/date), status badges (proxy/transcripts/analyses), and quick actions (create proxy, transcribe, analyze, delete cascade)
+- File management: Centralized file view showing 3,161+ files (uploaded + transcribed) with summary statistics (count, total size, total duration), full-text search, advanced filtering, status badges, quick actions, and S3 file operations (view/download/delete)
 
 ### Running the Application
 ```bash
@@ -126,11 +126,12 @@ Completely local video transcription system using faster-whisper (CTranslate2-ba
 11. **Enhanced Progress UI**: Solid completion bar, real-time statistics (dual avg size metrics, avg time, ETA, success rate)
 12. **Transcript Metrics**: Duration tracking, character/word counts, processing speed (Xrealtime), words per minute
 
-### Database Schema (Redesigned 2025-12-18)
-**transcripts** table (19 fields, no legacy fields):
+### Database Schema (Updated 2025-12-19)
+**transcripts** table (25 fields):
 - **Identity**: file_path, file_name, file_size, modified_time, model_name
 - **Transcript Data**: language, transcript_text, segments (JSON), word_timestamps (JSON)
 - **Content Metrics**: character_count, word_count, duration_seconds (all nullable, NULL for videos without speech)
+- **Video Metadata** (added 2025-12-19): resolution_width, resolution_height, frame_rate, codec_video, codec_audio, bitrate
 - **Quality Metrics**: confidence_score, processing_time
 - **Status Tracking**: status, error_message, created_at, completed_at
 - **Unique Constraint**: (file_path, file_size, modified_time, model_name) - allows multi-model storage
@@ -197,13 +198,20 @@ GET /transcription/api/batch-status/<job_id>
 GET /transcription/api/transcript/1/download?format=srt
 ```
 
+### Metadata Capture (Added 2025-12-19)
+All transcriptions now automatically extract and store video metadata:
+- **When**: Metadata extracted before transcription starts (via ffprobe)
+- **What**: Resolution (width/height), frame rate, video/audio codecs, bitrate, duration
+- **Storage**: Stored in transcripts table alongside transcript text
+- **Migration**: One-time migration completed for 3,154 existing transcripts (100% success)
+- **Usage**: Powers file management summary statistics (total duration, etc.)
+
 ### Troubleshooting
 - **FFmpeg not found**: Install FFmpeg and add to PATH, or specify path in system environment
 - **CUDA not available**: Install NVIDIA CUDA Toolkit (11.x or 12.x) for GPU support
 - **Out of memory**: Use smaller model size (medium or small) or CPU device
 - **Slow processing**: Ensure GPU acceleration is working (check logs for device: cuda)
 - **Files skipped**: System prevents reprocessing same video with same model (use different model or force flag)
-- **Database errors**: Database was recreated 2025-12-18 - old data/app.db deleted, fresh schema created
 
 ## Video Analysis Dashboard Feature
 

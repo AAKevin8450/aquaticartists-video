@@ -86,27 +86,33 @@ def format_confidence(confidence: float) -> str:
     return f"{confidence:.1f}%"
 
 
-def format_duration(duration_ms: int) -> str:
+def format_duration(duration_seconds: float) -> str:
     """
-    Format duration in milliseconds to human-readable string.
+    Format duration in seconds to human-readable string.
 
     Args:
-        duration_ms: Duration in milliseconds
+        duration_seconds: Duration in seconds (can be float or int)
 
     Returns:
-        Formatted duration string (e.g., "1m 30s")
+        Formatted duration string (e.g., "2h 15m", "1m 30s", "45s")
     """
-    if duration_ms < 0:
+    if duration_seconds < 0:
         return '0s'
 
-    seconds = duration_ms / 1000
-    minutes = int(seconds // 60)
-    remaining_seconds = int(seconds % 60)
+    total_seconds = int(duration_seconds)
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
 
-    if minutes > 0:
-        return f"{minutes}m {remaining_seconds}s"
+    if hours > 0:
+        if minutes > 0:
+            return f"{hours}h {minutes}m"
+        else:
+            return f"{hours}h"
+    elif minutes > 0:
+        return f"{minutes}m {seconds}s"
     else:
-        return f"{remaining_seconds}s"
+        return f"{seconds}s"
 
 
 def truncate_text(text: str, max_length: int = 100, suffix: str = '...') -> str:

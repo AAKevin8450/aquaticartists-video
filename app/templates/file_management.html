@@ -108,6 +108,30 @@
         <span class="badge bg-primary" id="filesTotalBadge">0 files</span>
     </div>
     <div class="card-body">
+        <!-- Summary Statistics -->
+        <div class="alert alert-info mb-3" id="filesSummary" style="display: none;">
+            <div class="row text-center">
+                <div class="col-md-4">
+                    <div class="d-flex flex-column">
+                        <small class="text-muted">Total Files</small>
+                        <h5 class="mb-0" id="summaryCount">-</h5>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="d-flex flex-column">
+                        <small class="text-muted">Total Size</small>
+                        <h5 class="mb-0" id="summarySize">-</h5>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="d-flex flex-column">
+                        <small class="text-muted">Total Duration</small>
+                        <h5 class="mb-0" id="summaryDuration">-</h5>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div id="filesContainer">
             <div class="text-center">
                 <div class="spinner-border" role="status">
@@ -127,13 +151,17 @@
 
 <!-- S3 Files Section (Collapsible) -->
 <div class="card">
-    <div class="card-header">
-        <button class="btn btn-link text-decoration-none w-100 text-start p-0"
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <button class="btn btn-link text-decoration-none flex-grow-1 text-start p-0"
                 data-bs-toggle="collapse" data-bs-target="#s3FilesCollapse">
             <h5 class="mb-0">
-                <i class="bi bi-cloud"></i> S3 Files (Proxies)
-                <i class="bi bi-chevron-down float-end"></i>
+                <i class="bi bi-cloud"></i> S3 Files
+                <span class="badge bg-secondary ms-2" id="s3FilesCountBadge">0 files</span>
+                <i class="bi bi-chevron-down"></i>
             </h5>
+        </button>
+        <button class="btn btn-sm btn-danger" id="deleteAllS3Btn" title="Delete all S3 files">
+            <i class="bi bi-trash"></i> Delete All
         </button>
     </div>
     <div class="collapse" id="s3FilesCollapse">

@@ -78,9 +78,9 @@ def list_files():
         # Calculate pagination
         offset = (page - 1) * per_page
 
-        # Get files from database
+        # Get files from database (includes both uploaded files and transcribed files)
         db = get_db()
-        files = db.list_source_files_with_stats(
+        files = db.list_all_files_with_stats(
             file_type=file_type,
             has_proxy=has_proxy,
             has_transcription=has_transcription,
@@ -94,7 +94,17 @@ def list_files():
         )
 
         # Get total count for pagination
-        total = db.count_source_files(
+        total = db.count_all_files(
+            file_type=file_type,
+            has_proxy=has_proxy,
+            has_transcription=has_transcription,
+            search=search or None,
+            from_date=from_date,
+            to_date=to_date
+        )
+
+        # Get summary statistics
+        summary = db.get_all_files_summary(
             file_type=file_type,
             has_proxy=has_proxy,
             has_transcription=has_transcription,
@@ -155,6 +165,13 @@ def list_files():
                 'per_page': per_page,
                 'total': total,
                 'pages': pages
+            },
+            'summary': {
+                'total_count': summary['total_count'],
+                'total_size_bytes': summary['total_size_bytes'],
+                'total_size_display': format_file_size(summary['total_size_bytes']),
+                'total_duration_seconds': summary['total_duration_seconds'],
+                'total_duration_display': format_duration(summary['total_duration_seconds']) if summary['total_duration_seconds'] else None
             }
         }), 200
 
@@ -594,11 +611,10 @@ def delete_file(file_id):
 @bp.route('/api/s3-files', methods=['GET'])
 def list_s3_files():
     """
-    List all files stored in S3 (proxies) with source file linking.
+    List all files stored in S3 by directly querying the S3 bucket.
 
     Query parameters:
-        - limit: Max results (default 100)
-        - offset: Pagination offset (default 0)
+        - prefix: Filter by S3 key prefix (default: none)
 
     Returns:
         {
@@ -607,27 +623,35 @@ def list_s3_files():
         }
     """
     try:
-        limit = int(request.args.get('limit', 100))
-        offset = int(request.args.get('offset', 0))
+        prefix = request.args.get('prefix', '')
 
+        s3_service = get_s3_service(current_app)
         db = get_db()
-        files = db.list_s3_files(limit=limit, offset=offset)
+
+        # List all files from S3 bucket directly
+        s3_objects = s3_service.list_files(prefix=prefix)
 
         # Format files for display
         formatted_files = []
-        for file in files:
-            formatted_files.append({
-                'proxy_id': file['proxy_id'],
-                'proxy_filename': file['proxy_filename'],
-                's3_key': file['s3_key'],
-                'size_bytes': file['size_bytes'],
-                'size_display': format_file_size(file['size_bytes']),
-                'uploaded_at': format_timestamp(file['uploaded_at']),
-                'source_id': file.get('source_id'),
-                'source_filename': file.get('source_filename'),
-                'source_local_path': file.get('source_local_path'),
-                'source_file_type': file.get('source_file_type')
-            })
+        for s3_obj in s3_objects:
+            s3_key = s3_obj['key']
+            size_bytes = s3_obj['size']
+            last_modified = s3_obj.get('last_modified')
+
+            # Try to find matching database record
+            db_file = db.get_file_by_s3_key(s3_key)
+
+            formatted_file = {
+                's3_key': s3_key,
+                'size_bytes': size_bytes,
+                'size_display': format_file_size(size_bytes),
+                'last_modified': format_timestamp(last_modified) if last_modified else None,
+                'filename': s3_key.split('/')[-1],  # Extract filename from S3 key
+                'in_database': db_file is not None,
+                'file_id': db_file['id'] if db_file else None,
+                'file_type': db_file['file_type'] if db_file else 'unknown'
+            }
+            formatted_files.append(formatted_file)
 
         return jsonify({
             's3_files': formatted_files,
@@ -636,4 +660,105 @@ def list_s3_files():
 
     except Exception as e:
         current_app.logger.error(f"List S3 files error: {e}", exc_info=True)
-        return jsonify({'error': 'Failed to list S3 files'}), 500
+        return jsonify({'error': f'Failed to list S3 files: {str(e)}'}), 500
+
+
+@bp.route('/api/s3-file/<path:s3_key>/download-url', methods=['GET'])
+def get_s3_download_url(s3_key: str):
+    """
+    Get presigned download URL for an S3 file.
+
+    Returns:
+        {
+            "download_url": "https://...",
+            "expires_in": 3600
+        }
+    """
+    try:
+        s3_service = get_s3_service(current_app)
+
+        # Generate presigned URL
+        download_url = s3_service.get_presigned_download_url(s3_key, expires_in=3600)
+
+        return jsonify({
+            'download_url': download_url,
+            'expires_in': 3600,
+            's3_key': s3_key
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Get download URL error: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to generate download URL: {str(e)}'}), 500
+
+
+@bp.route('/api/s3-file/<path:s3_key>', methods=['DELETE'])
+def delete_s3_file(s3_key: str):
+    """
+    Delete a single file from S3.
+
+    Returns:
+        {
+            "message": "File deleted successfully",
+            "s3_key": "..."
+        }
+    """
+    try:
+        s3_service = get_s3_service(current_app)
+
+        # Delete the file
+        s3_service.delete_file(s3_key)
+
+        return jsonify({
+            'message': 'File deleted successfully',
+            's3_key': s3_key
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Delete S3 file error: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to delete file: {str(e)}'}), 500
+
+
+@bp.route('/api/s3-files/delete-all', methods=['POST'])
+def delete_all_s3_files():
+    """
+    Delete ALL files from the S3 bucket.
+
+    WARNING: This is a destructive operation!
+
+    Request body (optional):
+        {
+            "confirm": true,  # Must be true to proceed
+            "prefix": "folder/"  # Optional: only delete files with this prefix
+        }
+
+    Returns:
+        {
+            "message": "Deleted X files",
+            "deleted_count": X
+        }
+    """
+    try:
+        data = request.get_json() or {}
+
+        # Require explicit confirmation
+        if not data.get('confirm'):
+            return jsonify({'error': 'Confirmation required. Set "confirm": true in request body'}), 400
+
+        s3_service = get_s3_service(current_app)
+        prefix = data.get('prefix', '')
+
+        # Delete all files
+        deleted_count = s3_service.delete_all_files(prefix=prefix)
+
+        message = f"Deleted {deleted_count} file{'s' if deleted_count != 1 else ''}"
+        if prefix:
+            message += f" with prefix '{prefix}'"
+
+        return jsonify({
+            'message': message,
+            'deleted_count': deleted_count
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Delete all S3 files error: {e}", exc_info=True)
+        return jsonify({'error': f'Failed to delete files: {str(e)}'}), 500
