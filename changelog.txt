@@ -1,3 +1,507 @@
+2025-12-19 11:11:39 - Updated by Claude Code
+
+[Category: Feature]
+Comprehensive file management page with centralized file visibility, full-text search, advanced filtering, and quick actions for proxy creation, transcription, analysis, and deletion
+
+[Purpose]
+Provide centralized file management interface for viewing all uploaded files with their processing status (proxy, transcription, analysis jobs). Enable users to search across filenames/metadata/transcripts, filter by type/proxy/transcription/date, and perform quick actions (create proxy, start transcription, start analysis, delete file) directly from the file list without navigating to separate pages.
+
+[Impact]
+Users can now manage their entire file library from a single page with powerful search/filter capabilities and one-click access to all file operations. Replaces fragmented workflow requiring navigation between Upload, History, and Transcription pages to check file status. Full-text search enables finding files by transcript content. Delete cascade safely removes all related data (analysis jobs, transcripts, proxy files, S3 files, local files).
+
+[Changes Made - Database Layer]
+- app/database.py:369-667 (+299 lines): Five new comprehensive query methods for file management
+  - list_source_files_with_stats() returns files with aggregated statistics using SQL subqueries
+    - Proxy status: has_proxy (COUNT), proxy_file_id, proxy_s3_key from proxy files table join
+    - Analysis counts: total_analyses, completed_analyses, running_analyses, failed_analyses from analysis_jobs table
+    - Transcript counts: total_transcripts, completed_transcripts from transcripts table (file_id OR file_path matching)
+    - Supports filters: file_type, has_proxy, has_transcription, search (full-text), from_date, to_date
+    - Sorting: uploaded_at, filename, size_bytes, duration_seconds (ascending/descending)
+    - Pagination: limit/offset parameters with default 50 per page
+  - count_source_files() returns total count matching same filters for pagination calculations
+  - get_file_with_stats() returns complete file details with proxy, analysis_jobs, transcripts arrays
+  - list_s3_files() returns proxy files with source file linking via LEFT JOIN
+  - delete_file_cascade() safely deletes file and all related data with proper cascade logic
+    - Deletes transcripts (manual, by file_id OR file_path matching)
+    - Deletes proxy file records (CASCADE via source_file_id FK)
+    - Deletes analysis jobs (CASCADE via file_id FK)
+    - Deletes nova jobs (CASCADE via analysis_job_id FK)
+    - Returns counts: {analysis_jobs, nova_jobs, transcripts, proxy_files}
+    - Does NOT delete actual S3/local files (calling code handles filesystem deletion)
+
+- app/database.py:137-145 (+8 lines): Two new performance indexes for sorting
+  - idx_files_uploaded_at ON files(uploaded_at DESC) for default sort
+  - idx_files_size_bytes ON files(size_bytes DESC) for size sorting
+  - Leverages existing indexes: idx_files_type, idx_files_is_proxy, idx_jobs_file_id, idx_transcripts_file_id
+
+[Changes Made - Backend API]
+- app/routes/file_management.py (new, 550 lines): Complete REST API with 10 endpoints
+  - GET /files - Page route rendering file_management.html template
+  - GET /api/files - List source files with search/filter/pagination (returns files array + pagination object)
+    - Query params: file_type, has_proxy, has_transcription, search, from_date, to_date, sort_by, sort_order, page, per_page
+    - Returns formatted files with size_display, duration_display, resolution string
+    - Response: {files: [...], pagination: {page, per_page, total, pages}}
+  - GET /api/files/<id> - Get detailed file with proxy, analysis_jobs, transcripts
+    - Includes presigned URL for proxy S3 download (1 hour expiration)
+    - Returns media_metadata object with resolution/frame_rate/codecs/bitrate
+  - GET /api/files/<id>/s3-files - Get S3 files for specific source file
+  - POST /api/files/<id>/create-proxy - Create proxy (delegates to upload.create_proxy_internal)
+  - POST /api/files/<id>/start-analysis - Start Rekognition analysis
+    - Body: {analysis_types: ["label_detection", ...], use_proxy: true}
+    - Creates multiple jobs for multi-select analysis types
+  - POST /api/files/<id>/start-transcription - Start transcription
+    - Body: {model_name: "medium", language: "en", force: false}
+    - Delegates to TranscriptionService.transcribe_file()
+  - POST /api/files/<id>/start-nova - Start Nova analysis
+    - Body: {model: "us.amazon.nova-lite-v1:0", analysis_types: ["summary", "chapters"], options: {...}}
+    - Requires proxy file (Nova uses S3 URIs)
+  - DELETE /api/files/<id> - Delete file cascade
+    - Deletes database records via delete_file_cascade()
+    - Deletes S3 files via s3_service.delete_file()
+    - Deletes local files (source + proxy) via Path.unlink()
+    - Returns deleted counts for confirmation
+  - GET /api/s3-files - List all S3 files with source linking
+
+[Changes Made - Frontend UI]
+- app/templates/file_management.html (new, 168 lines): Complete Bootstrap 5 responsive interface
+  - Search & Filters card with debounced search input (300ms)
+  - Four filter dropdowns: File Type (All/Video/Image), Proxy Status (All/Has/No), Transcription (All/Has/No), Date Range (collapsible from/to date pickers)
+  - Apply Filters / Reset buttons for batch filter application
+  - Source Files card with table (8 columns): File, Type, Size, Duration, Resolution, Status, Uploaded, Actions
+    - File column shows filename + codec info + status badges (proxy, transcripts, analyses)
+    - Status column shows multi-badge indicators with counts
+    - Actions column has View Details button + dropdown (Create Proxy, Transcribe, Rekognition, Nova, Download, Delete)
+  - Pagination controls (Previous/Next with page numbers, max 5 visible pages)
+  - Files count badge (X files) in card header
+  - S3 Files collapsible section (lazy-loaded on expand)
+    - Table showing proxy files with source file links
+  - File Details modal (XL size) with comprehensive information
+    - File Information section (filename, type, size, duration, upload date, local path)
+    - Media Metadata section (resolution, frame rate, codecs, bitrate)
+    - Proxy Files section (proxy filename, size, presigned S3 URL for viewing)
+    - Analysis Jobs section (table with type, status, timestamps, View action)
+    - Transcripts section (table with model, language, status, word count, created date)
+
+[Changes Made - Frontend JavaScript]
+- app/static/js/file_management.js (new, 850 lines): Complete client-side logic with ES6 modules
+  - State management: currentFilters object tracks all filter states
+  - loadFiles() fetches and renders file list with error handling
+  - renderFiles() builds dynamic table with empty state handling
+  - renderFileRow() creates row HTML with status badges and action dropdown
+  - attachFileEventListeners() delegates click handlers for all actions
+  - renderPagination() builds pagination controls with ellipsis for many pages
+  - updateFilesCount() updates badge with total file count
+  - viewFileDetails() loads and displays file details modal
+  - renderFileDetails() builds modal HTML from file data
+  - File action functions:
+    - createProxy() - Confirms and creates proxy via POST /api/files/<id>/create-proxy
+    - startTranscription() - Prompts for model, starts transcription
+    - startRekognitionAnalysis() - Starts label_detection (simplified for now)
+    - startNovaAnalysis() - Starts summary+chapters with Lite model
+    - downloadFile() - Opens proxy presigned URL in new tab
+    - deleteFile() - Confirms and deletes with cascade cleanup
+  - loadS3Files() + renderS3Files() for lazy-loaded S3 section
+  - Helper functions: escapeHtml() for XSS prevention, getStatusBadgeClass() for status colors
+  - Debounced search with 300ms delay using setTimeout
+  - showAlert() integration from utils.js for user feedback
+
+[Changes Made - Integration]
+- app/__init__.py:51-67 (+2 lines): Registered file_management blueprint
+  - Import: from app.routes import file_management
+  - Registration: app.register_blueprint(file_management.bp)
+  - Updated log message to include "File Management"
+
+- app/templates/base.html:59-63 (+4 lines): Added File Management navigation menu item
+  - Link: /files with folder icon (bi-folder2-open)
+  - Positioned between Transcription and History in navbar
+  - Follows existing navigation pattern with icon + text
+
+[Files Created]
+- app/routes/file_management.py - Complete API blueprint with 10 endpoints (550 lines)
+- app/templates/file_management.html - Responsive UI with search/filters/table/modal (168 lines)
+- app/static/js/file_management.js - Client-side logic with ES6 modules (850 lines)
+
+[Files Modified]
+- app/database.py (+307 lines) - Five query methods + two indexes
+- app/__init__.py (+2 lines) - Blueprint registration
+- app/templates/base.html (+4 lines) - Navigation menu item
+
+[Technical Details - Full-Text Search]
+Search Strategy:
+- Uses SQL LIKE with % wildcards for pattern matching
+- Searches across: filename, local_path, transcript_text (via EXISTS subquery)
+- Debounced on frontend (300ms delay) to reduce API calls
+- Case-insensitive by default (SQLite LIKE behavior)
+- Search pattern: f'%{search_term}%' for substring matching
+
+Transcript Search:
+- Uses EXISTS subquery to check transcripts table
+- Matches by file_id (new FK) OR file_path (legacy compatibility)
+- Searches transcript_text field (full content indexed)
+- Returns source files that have matching transcript content
+- Example: Searching "pool installation" finds videos with those words in transcript
+
+Performance:
+- Indexed fields (filename, file_id, file_path) for fast lookups
+- Subquery optimization via database query planner
+- Efficient for <1000 files (expected dataset size)
+- Pagination limits result set to 50 files per page
+
+[Technical Details - Delete Cascade]
+Deletion Strategy:
+1. Get proxy files for source (SELECT WHERE source_file_id = ?)
+2. Count analysis jobs (will cascade via file_id FK)
+3. Count Nova jobs (will cascade via analysis_job_id → analysis_jobs FK chain)
+4. Count transcripts (manual deletion, supports file_id OR file_path)
+5. Delete transcripts (manual DELETE WHERE file_id = ? OR file_path = ?)
+6. Delete proxy file records (CASCADE via source_file_id FK)
+7. Delete source file record (CASCADE deletes analysis_jobs → nova_jobs)
+8. Return counts for user confirmation
+
+Filesystem Cleanup (handled by API route, not database method):
+- Delete source local file (Path.unlink() on local_path)
+- Delete proxy local file (Path.unlink() on proxy local_path)
+- Delete S3 files (s3_service.delete_file() on proxy s3_key)
+- Counts: s3_files (deleted from S3), local_files (deleted from filesystem)
+
+Safety:
+- All database operations in single transaction (atomic)
+- FK CASCADE ensures referential integrity
+- Manual transcript deletion for backward compatibility (file_id nullable)
+- Returns detailed counts for user verification
+- Error handling with rollback on failure
+
+[Technical Details - Status Indicators]
+Proxy Badge (Green):
+- Shows if file has proxy in proxy_video/ folder AND S3
+- Icon: bi-cloud-check (cloud with checkmark)
+- Text: "Proxy"
+- Query: COUNT(*) FROM files WHERE source_file_id = f.id AND is_proxy = 1
+
+Transcript Badge (Blue):
+- Shows count of completed transcripts
+- Icon: bi-mic (microphone)
+- Text: "{count}" (e.g., "2" for 2 transcripts)
+- Query: COUNT(*) FROM transcripts WHERE (file_id = f.id OR file_path = f.local_path) AND status = 'COMPLETED'
+- Supports multi-model (same video transcribed with different Whisper models)
+
+Analysis Badge (Yellow/Primary):
+- Yellow (bg-warning) if any running analyses (IN_PROGRESS status)
+- Primary (bg-primary) if all analyses completed (SUCCEEDED status)
+- Icon: bi-hourglass-split (running) or bi-graph-up (completed)
+- Text: "{completed}/{total}" (e.g., "2/3" for 2 of 3 completed)
+- Query: COUNT(*) FROM analysis_jobs WHERE file_id = f.id GROUP BY status
+
+[Technical Details - Performance Optimization]
+Database Queries:
+- Single aggregation query with subqueries (one round-trip)
+- Leverages indexes for filtering and sorting
+- Pagination with LIMIT/OFFSET prevents loading entire dataset
+- COUNT(*) query separate for accurate pagination
+
+Frontend:
+- Debounced search (300ms) prevents excessive API calls while typing
+- Lazy-loaded S3 section (only loads when expanded)
+- Pagination limits DOM rendering to 50 rows
+- Event delegation for action buttons (single handler per table)
+
+API:
+- Formatted data on backend (size_display, duration_display) reduces frontend logic
+- Presigned URLs generated on demand (1 hour expiration)
+- Error responses with clear messages for user feedback
+
+[Testing Recommendations]
+1. Test search across filenames (verify LIKE matching)
+2. Test search across transcript content (verify subquery works)
+3. Test filter combinations (type + proxy + transcription + date range)
+4. Test pagination with >50 files (verify page controls)
+5. Test create proxy action (verify proxy generation)
+6. Test start transcription (verify job creation)
+7. Test start analysis (verify Rekognition job creation)
+8. Test start Nova (verify proxy requirement check)
+9. Test delete cascade (verify all related data deleted)
+10. Test S3 files section (verify lazy loading)
+11. Test file details modal (verify all sections display)
+12. Test with files missing metadata (verify N/A handling)
+
+[Breaking Changes]
+None - Feature is additive, does not modify existing functionality
+
+[User Experience Impact]
+Improvements:
+- Centralized file management eliminates navigation between multiple pages
+- Full-text search enables finding files by transcript content
+- Status badges provide at-a-glance processing status
+- Quick actions reduce clicks (no need to navigate to separate pages)
+- Delete cascade ensures complete cleanup (no orphaned data)
+- Pagination handles large file libraries efficiently
+
+Workflow:
+- Old: Upload → Navigate to History to check status → Navigate to Transcription to check transcripts
+- New: Files page shows everything in one view with search/filter
+- One-click actions: Create proxy, transcribe, analyze, delete
+- Detailed modal shows complete file history and processing status
+
+[Verification]
+Flask App Startup:
+- Run: python -c "from app import create_app; app = create_app(); print('Success')"
+- Expected: "All blueprints registered (including Nova and File Management)"
+- Verify: No import errors, blueprint registered successfully
+
+Database Indexes:
+- Run: sqlite3 data/app.db "PRAGMA index_list(files);"
+- Expected: idx_files_uploaded_at and idx_files_size_bytes in list
+- Verify: Indexes created for sorting performance
+
+File Management Page:
+- Navigate to http://localhost:5700/files
+- Expected: Page loads with empty state or file list
+- Verify: Search bar, filters, table headers display correctly
+
+---
+
+2025-12-19 08:31:07 - Updated by Claude Code
+
+[Category: Feature, Infrastructure, Database Migration]
+Enhanced file tracking system with dual file management (source + proxy), comprehensive media metadata extraction, and persistent proxy storage for efficient large-scale video processing
+
+[Purpose]
+Support processing terabytes of local video content by implementing a robust file tracking system that manages both source and proxy videos separately with full media metadata (resolution, codecs, frame rate, duration, bitrate). This infrastructure enables efficient proxy reuse across multiple analysis jobs while maintaining relationships between source files and their proxies. Simplifies user experience by making proxy creation automatic and transparent.
+
+[Impact]
+All video uploads now automatically create two database records (source file + proxy file) with complete media metadata extracted via FFprobe. Proxy videos stored persistently in proxy_video/ folder for reuse in future analysis jobs. Upload workflow simplified - proxy creation checkbox removed (always automatic). Breaking changes: None, fully backward compatible with existing database records through migration script.
+
+[Changes Made - Database Schema]
+- migrations/004_enhance_file_tracking.sql (new): Database migration adding 10 columns to files table and 1 column to transcripts table
+  - Added is_proxy BOOLEAN (0=source, 1=proxy) to distinguish file types
+  - Added source_file_id INTEGER foreign key linking proxy to source file
+  - Added local_path TEXT storing filesystem path for both source and proxy files
+  - Added resolution_width INTEGER and resolution_height INTEGER for video dimensions
+  - Added frame_rate REAL for frames per second (e.g., 15.0, 30.0, 60.0)
+  - Added codec_video TEXT (h264, hevc, vp9, etc.) and codec_audio TEXT (aac, mp3, opus, etc.)
+  - Added duration_seconds REAL for accurate video duration from media streams
+  - Added bitrate INTEGER in bits per second for quality assessment
+  - Added file_id INTEGER to transcripts table for linking transcripts to source files
+  - Migration includes data backfill: Updates existing files with metadata extracted from legacy metadata JSON field
+
+- run_migration_004.py (new): Migration runner script with comprehensive error handling
+  - Executes migration/004_enhance_file_tracking.sql with transaction safety
+  - Idempotent design: Safe to run multiple times, skips existing columns gracefully
+  - Validates migration success by checking all 18 expected columns in files table
+  - Displays before/after column counts and full schema verification
+
+- app/database.py:261-371 (new methods): Five new CRUD methods for dual file tracking
+  - create_source_file() creates source file record with 13 parameters including full media metadata
+  - create_proxy_file() creates proxy file record with source_file_id foreign key relationship
+  - get_proxy_for_source() retrieves proxy file for given source file ID with JSON metadata parsing
+  - get_source_for_proxy() retrieves source file for given proxy file ID (reverse lookup)
+  - list_source_files() lists non-proxy files with optional file_type filter, pagination (limit/offset)
+  - All methods use parameterized queries with JSON field parsing via _parse_json_field()
+
+[Changes Made - Media Metadata Infrastructure]
+- app/utils/media_metadata.py (new): FFprobe-based media metadata extraction utility (190 lines)
+  - extract_media_metadata() extracts all metadata using FFprobe JSON output with subprocess
+  - Returns dict with resolution_width, resolution_height, frame_rate, codec_video, codec_audio, duration_seconds, bitrate
+  - format_media_metadata() formats metadata as human-readable string for debugging/logging
+  - get_video_resolution() quick helper for width/height extraction only
+  - get_video_duration() quick helper for duration extraction only
+  - verify_proxy_spec() validates proxy meets 720p15 specification (720px height, 15fps)
+  - MediaMetadataError exception class for graceful error handling
+  - Supports both video and image files with format-specific parsing
+  - FFprobe availability check with helpful error message if not in PATH
+
+- proxy_video/.gitkeep (new): Git placeholder for persistent proxy video storage folder
+  - All proxy videos stored here with naming convention: {upload_id}_720p15.mp4
+  - Enables proxy reuse across multiple analysis jobs without regeneration
+  - Reduces redundant FFmpeg transcoding operations for repeated analysis
+
+[Changes Made - Upload Workflow]
+- app/routes/upload.py:265-375 (complete rewrite of video upload flow): Dual file tracking with automatic proxy generation
+  - Lines 268-276: Save source video to uploads/{upload_id}/{filename} (local storage, not S3)
+  - Lines 278-284: Extract media metadata from source video using extract_media_metadata()
+  - Lines 286-295: Create 720p15 proxy in proxy_video/{upload_id}_720p15.mp4 using _create_proxy_video()
+  - Lines 299-303: Extract media metadata from proxy video for accurate proxy specs
+  - Lines 305-308: Upload proxy (not source) to S3 at uploads/{upload_id}/proxy_720p15.mp4
+  - Lines 311-327: Create source file record with create_source_file() including all 13 metadata fields
+  - Lines 329-349: Create proxy file record with create_proxy_file() linked via source_file_id
+  - Lines 351-359: Return JSON response with both file IDs (source and proxy), sizes, duration
+  - Removed create_proxy checkbox logic and form parameter handling (automatic now)
+  - Added comprehensive error handling with cleanup of local files on failure
+  - Handles MediaMetadataError gracefully with warning logs if metadata extraction fails
+
+[Changes Made - Frontend]
+- app/templates/upload.html:40-47 (removed proxy checkbox UI): Simplified user interface
+  - Removed 9 lines of proxy checkbox HTML (checkbox input, label, help text)
+  - Updated help text from "Max 10GB" to "Max 10GB - Proxy (720p, 15fps) automatically created for Nova analysis"
+  - Removed proxyOptions div container and all related DOM manipulation JavaScript
+  - Lines 94-102: Removed proxyOptions.style.display toggle logic in radio button change handlers
+  - Lines 143-146: Removed create_proxy form data parameter from upload submission
+  - Cleaner UI with fewer user decisions required during upload
+
+[Files Created]
+- migrations/004_enhance_file_tracking.sql - Complete database schema migration with 18 SQL statements
+- run_migration_004.py - Migration runner with validation and error handling
+- app/utils/media_metadata.py - FFprobe-based metadata extraction utility (190 lines)
+- proxy_video/.gitkeep - Git placeholder for proxy video storage folder
+- FILE_TRACKING_IMPROVEMENTS.md - Comprehensive implementation documentation (357 lines)
+
+[Files Modified]
+- app/database.py (+105 lines) - Five new CRUD methods for dual file tracking
+- app/routes/upload.py (+67 net lines, 121 modified) - Complete video upload workflow rewrite
+- app/templates/upload.html (-12 lines) - Removed proxy creation checkbox and JavaScript
+
+[Technical Details - Database Migration]
+Migration Strategy:
+- Adds 10 columns to files table with ALTER TABLE statements (idempotent)
+- Adds 1 column to transcripts table with ALTER TABLE
+- Extracts metadata from legacy metadata JSON field using json_extract() for backfill
+- Updates existing records with resolution_width, resolution_height, duration_seconds from JSON
+- Sets is_proxy = 0 for all existing files (assumes all existing files are source files)
+- Creates indexes for efficient queries: is_proxy, source_file_id
+- Transaction-safe: All operations in single transaction, rolls back on any error
+
+Media Metadata Extraction:
+- Uses FFprobe (part of FFmpeg suite) via subprocess.run() with JSON output format
+- Parses video stream (index 0) for resolution, frame_rate, codec_name
+- Parses audio stream (index 1) for audio codec_name
+- Extracts duration from format.duration field (most reliable source)
+- Extracts bitrate from format.bit_rate field
+- Graceful error handling: Returns empty dict on failure, logs warning
+- Cross-platform: Works on Windows, Linux, macOS (FFmpeg required)
+
+Dual File Tracking Architecture:
+- Source files: Full resolution original videos, stored locally, NOT uploaded to S3
+- Proxy files: 720p 15fps optimized for Nova/Rekognition, stored locally AND S3
+- Relationship: source_file_id foreign key creates 1:1 relationship (one proxy per source)
+- Metadata: Both files have complete media metadata for quick filtering/queries
+- Storage: Source in uploads/{id}/, proxy in proxy_video/ (persistent, reusable)
+
+Upload Workflow Changes:
+- Previous: Upload full video to S3, create single file record, generate proxy in temp directory
+- Current: Save source locally, extract metadata, generate proxy, upload proxy to S3, create TWO file records
+- Benefits: Source video preserved locally for future processing, proxy reusable, complete metadata tracking
+- API Response: Now includes proxy_file_id and proxy_size_bytes in addition to file_id
+
+Frontend Simplification:
+- Removed user-facing proxy creation checkbox (confusing, always required anyway)
+- Automatic proxy generation eliminates user decision fatigue
+- Clear help text communicates automatic proxy creation
+- Cleaner upload form with fewer options
+
+[Technical Details - Performance and Storage]
+Processing Overhead:
+- FFprobe metadata extraction: ~100-500ms per video (negligible)
+- Proxy generation: ~5-30 seconds per video (depends on duration and resolution)
+- Database inserts: ~5-10ms for two records
+- Total overhead: Dominated by proxy generation (already required for Nova)
+
+Storage Impact:
+- Source videos: Stored locally in uploads/ folder (not uploaded to S3, zero S3 cost)
+- Proxy videos: Stored locally in proxy_video/ AND uploaded to S3
+- Proxy size: Typically 10-30% of source video size (720p15 vs original resolution/framerate)
+- Example: 5GB 4K 60fps source -> 500MB 720p 15fps proxy
+- Local storage requirement: Full source size + proxy size per video
+- S3 storage requirement: Only proxy size (reduced from full source size)
+
+Database Growth:
+- Two records per video upload instead of one (minimal overhead)
+- Metadata fields add ~200 bytes per record (resolution, codecs, duration, etc.)
+- Expected growth: 400 bytes per video upload (negligible compared to video file sizes)
+
+[Breaking Changes]
+None - Fully backward compatible
+- Migration adds columns with NULL defaults, safe for existing records
+- Existing single file records remain valid (is_proxy defaults to 0, source records)
+- Old upload API responses still contain all original fields (file_id, s3_key, size_bytes, etc.)
+- New fields (proxy_file_id, proxy_size_bytes) added to response, not replacing existing
+- Frontend change removes checkbox but workflow still functions identically for user
+
+[Dependencies]
+Required External Tools:
+- FFmpeg (includes FFprobe): Must be installed and in system PATH for metadata extraction and proxy generation
+- Python 3.12+: For type hints using | syntax in media_metadata.py
+
+Python Packages (already in requirements.txt):
+- sqlite3 (built-in): Database operations
+- pathlib (built-in): File path handling
+- subprocess (built-in): FFprobe execution
+- json (built-in): Metadata parsing
+
+[Testing Recommendations]
+1. Run database migration: python run_migration_004.py (verify 18 columns in files table)
+2. Upload test video via web UI (verify source file saved to uploads/{id}/)
+3. Check proxy_video/ folder (verify proxy file created with {upload_id}_720p15.mp4 naming)
+4. Check S3 bucket (verify proxy uploaded to uploads/{id}/proxy_720p15.mp4)
+5. Query database files table (verify two records: is_proxy=0 and is_proxy=1)
+6. Verify media metadata populated (resolution_width, resolution_height, frame_rate, codecs, duration, bitrate)
+7. Verify relationship (proxy.source_file_id == source.id)
+8. Test video analysis with proxy file (ensure Nova/Rekognition use proxy correctly)
+9. Test get_proxy_for_source() and get_source_for_proxy() database methods
+10. Test list_source_files() filtering (should only return source files, not proxies)
+
+[Known Limitations and Future Work]
+Current Limitations:
+- Only one proxy format supported (720p15), no configurable proxy specs
+- No automatic cleanup of old proxy files (proxy_video/ folder grows unbounded)
+- Source files not backed up to S3 (local storage only, risk of data loss)
+- Transcript integration incomplete (transcripts.file_id added but not populated by transcription service)
+
+Future Enhancements - Phase 2:
+- Update transcription service to populate transcripts.file_id when creating transcripts
+- Add database queries to list all transcripts for a given source file
+- Show transcript status badges in file listing UI
+
+Future Enhancements - Phase 3:
+- Implement advanced filtering: "Show all 1080p videos", "Show HEVC codec videos"
+- Add sorting by resolution, frame rate, bitrate, duration
+- Duration range filtering (e.g., "Videos between 5-10 minutes")
+
+Future Enhancements - Phase 4:
+- Support multiple proxy formats (480p, 1080p, custom specs)
+- Regenerate proxy on demand with different specifications
+- Automatic cleanup of orphaned proxy files (source deleted but proxy remains)
+
+Future Enhancements - Phase 5 (optional):
+- S3 source backup option for disaster recovery
+- Separate S3 buckets for source vs. proxy (different storage classes)
+- S3 lifecycle policies: Glacier archival for old source files, standard for proxies
+
+[User Experience Impact]
+Improvements:
+- Simplified upload process: No checkbox confusion, automatic proxy creation
+- Faster future analysis: Proxy files reused without regeneration
+- Better file tracking: Can query all videos by resolution, codec, duration
+- Complete metadata: Rich media information available without re-scanning files
+- Transcript readiness: Infrastructure in place for linking transcripts to source files
+
+Workflow Changes:
+- Upload time slightly longer (metadata extraction + proxy generation already required)
+- No user-visible breaking changes (checkbox removal is simplification)
+- API response includes additional fields (proxy_file_id, proxy_size_bytes) but backward compatible
+
+[Verification]
+Migration Success:
+- Run: python run_migration_004.py
+- Expected: "Migration completed successfully! Files table columns (18)"
+- Verify: PRAGMA table_info(files) shows all 18 columns including new ones
+
+File Tracking:
+- Upload video via web UI
+- Check database: SELECT * FROM files WHERE is_proxy = 0; (source file)
+- Check database: SELECT * FROM files WHERE is_proxy = 1; (proxy file)
+- Verify: source_file_id in proxy record matches id in source record
+
+Media Metadata:
+- After upload, query: SELECT resolution_width, resolution_height, frame_rate, codec_video, duration_seconds FROM files WHERE is_proxy = 0;
+- Verify: All fields populated with realistic values (e.g., 1920x1080, 30fps, h264, 120.5 seconds)
+
+Proxy Storage:
+- Check filesystem: dir proxy_video\{upload_id}_720p15.mp4 (Windows) or ls proxy_video/{upload_id}_720p15.mp4 (Linux)
+- Check S3: aws s3 ls s3://video-analysis-app-676206912644/uploads/{upload_id}/proxy_720p15.mp4
+- Verify: Both local and S3 proxy files exist
+
+---
+
 2025-12-18 23:57:17 - Updated by Codex
 
 [Category: Feature, Bug Fix, API, Infrastructure]

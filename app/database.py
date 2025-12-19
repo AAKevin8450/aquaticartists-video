@@ -135,6 +135,16 @@ class Database:
             ''')
 
             cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_files_uploaded_at
+                ON files(uploaded_at DESC)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_files_size_bytes
+                ON files(size_bytes DESC)
+            ''')
+
+            cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_jobs_status
                 ON analysis_jobs(status)
             ''')
@@ -260,6 +270,411 @@ class Database:
                 UPDATE files SET metadata = ? WHERE id = ?
             ''', (json.dumps(existing), file_id))
             return existing
+
+    def create_source_file(self, filename: str, s3_key: str, file_type: str,
+                          size_bytes: int, content_type: str,
+                          local_path: Optional[str] = None,
+                          resolution_width: Optional[int] = None,
+                          resolution_height: Optional[int] = None,
+                          frame_rate: Optional[float] = None,
+                          codec_video: Optional[str] = None,
+                          codec_audio: Optional[str] = None,
+                          duration_seconds: Optional[float] = None,
+                          bitrate: Optional[int] = None,
+                          metadata: Optional[Dict] = None) -> int:
+        """Create a source file record with media metadata."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO files (
+                    filename, s3_key, file_type, size_bytes, content_type,
+                    is_proxy, source_file_id, local_path,
+                    resolution_width, resolution_height, frame_rate,
+                    codec_video, codec_audio, duration_seconds, bitrate,
+                    metadata
+                )
+                VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (filename, s3_key, file_type, size_bytes, content_type,
+                  local_path, resolution_width, resolution_height, frame_rate,
+                  codec_video, codec_audio, duration_seconds, bitrate,
+                  json.dumps(metadata or {})))
+            return cursor.lastrowid
+
+    def create_proxy_file(self, source_file_id: int, filename: str, s3_key: str,
+                         size_bytes: int, content_type: str,
+                         local_path: Optional[str] = None,
+                         resolution_width: Optional[int] = None,
+                         resolution_height: Optional[int] = None,
+                         frame_rate: Optional[float] = None,
+                         codec_video: Optional[str] = None,
+                         codec_audio: Optional[str] = None,
+                         duration_seconds: Optional[float] = None,
+                         bitrate: Optional[int] = None,
+                         metadata: Optional[Dict] = None) -> int:
+        """Create a proxy file record linked to a source file."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO files (
+                    filename, s3_key, file_type, size_bytes, content_type,
+                    is_proxy, source_file_id, local_path,
+                    resolution_width, resolution_height, frame_rate,
+                    codec_video, codec_audio, duration_seconds, bitrate,
+                    metadata
+                )
+                VALUES (?, ?, 'video', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (filename, s3_key, size_bytes, content_type,
+                  source_file_id, local_path,
+                  resolution_width, resolution_height, frame_rate,
+                  codec_video, codec_audio, duration_seconds, bitrate,
+                  json.dumps(metadata or {})))
+            return cursor.lastrowid
+
+    def get_proxy_for_source(self, source_file_id: int) -> Optional[Dict[str, Any]]:
+        """Get proxy file record for a given source file."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM files WHERE source_file_id = ? AND is_proxy = 1
+                LIMIT 1
+            ''', (source_file_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            file = dict(row)
+            if 'metadata' in file:
+                file['metadata'] = self._parse_json_field(file['metadata'], default={})
+            return file
+
+    def get_source_for_proxy(self, proxy_file_id: int) -> Optional[Dict[str, Any]]:
+        """Get source file record for a given proxy file."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT source_file_id FROM files WHERE id = ?', (proxy_file_id,))
+            row = cursor.fetchone()
+            if not row or not row['source_file_id']:
+                return None
+            return self.get_file(row['source_file_id'])
+
+    def list_source_files(self, file_type: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """List source files (non-proxy) with optional type filter."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if file_type:
+                cursor.execute('''
+                    SELECT * FROM files WHERE file_type = ? AND (is_proxy = 0 OR is_proxy IS NULL)
+                    ORDER BY uploaded_at DESC LIMIT ? OFFSET ?
+                ''', (file_type, limit, offset))
+            else:
+                cursor.execute('''
+                    SELECT * FROM files WHERE (is_proxy = 0 OR is_proxy IS NULL)
+                    ORDER BY uploaded_at DESC LIMIT ? OFFSET ?
+                ''', (limit, offset))
+            files = [dict(row) for row in cursor.fetchall()]
+            for file in files:
+                if 'metadata' in file:
+                    file['metadata'] = self._parse_json_field(file['metadata'], default={})
+            return files
+
+    def list_source_files_with_stats(
+        self,
+        file_type: Optional[str] = None,
+        has_proxy: Optional[bool] = None,
+        has_transcription: Optional[bool] = None,
+        search: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        sort_by: str = 'uploaded_at',
+        sort_order: str = 'desc',
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        List source files with aggregated statistics.
+
+        Returns files with additional fields:
+        - has_proxy: Boolean indicating if proxy exists
+        - proxy_file_id, proxy_s3_key: Proxy file information
+        - total_analyses, completed_analyses, running_analyses, failed_analyses: Analysis job counts
+        - total_transcripts, completed_transcripts: Transcript counts
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build query with subqueries for aggregation
+            query = '''
+                SELECT
+                    f.*,
+                    (SELECT COUNT(*) FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1) as has_proxy,
+                    (SELECT p.id FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1 LIMIT 1) as proxy_file_id,
+                    (SELECT p.s3_key FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1 LIMIT 1) as proxy_s3_key,
+                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id) as total_analyses,
+                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'SUCCEEDED') as completed_analyses,
+                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'IN_PROGRESS') as running_analyses,
+                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'FAILED') as failed_analyses,
+                    (SELECT COUNT(*) FROM transcripts t WHERE t.file_path = f.local_path OR t.file_id = f.id) as total_transcripts,
+                    (SELECT COUNT(*) FROM transcripts t WHERE (t.file_path = f.local_path OR t.file_id = f.id) AND t.status = 'COMPLETED') as completed_transcripts
+                FROM files f
+                WHERE (f.is_proxy = 0 OR f.is_proxy IS NULL)
+            '''
+
+            params = []
+
+            # Apply filters
+            if file_type:
+                query += ' AND f.file_type = ?'
+                params.append(file_type)
+
+            if has_proxy is not None:
+                if has_proxy:
+                    query += ' AND EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1)'
+
+            if has_transcription is not None:
+                if has_transcription:
+                    query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path OR t.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path OR t.file_id = f.id)'
+
+            if search:
+                query += ''' AND (
+                    f.filename LIKE ?
+                    OR f.local_path LIKE ?
+                    OR EXISTS (
+                        SELECT 1 FROM transcripts t
+                        WHERE (t.file_id = f.id OR t.file_path = f.local_path)
+                          AND t.transcript_text LIKE ?
+                    )
+                )'''
+                search_pattern = f'%{search}%'
+                params.extend([search_pattern, search_pattern, search_pattern])
+
+            if from_date:
+                query += ' AND f.uploaded_at >= ?'
+                params.append(from_date)
+
+            if to_date:
+                query += ' AND f.uploaded_at <= ?'
+                params.append(to_date)
+
+            # Add sorting
+            valid_sort_fields = ['uploaded_at', 'filename', 'size_bytes', 'duration_seconds', 'file_type']
+            if sort_by in valid_sort_fields:
+                sort_direction = 'ASC' if sort_order.lower() == 'asc' else 'DESC'
+                query += f' ORDER BY f.{sort_by} {sort_direction}'
+            else:
+                query += ' ORDER BY f.uploaded_at DESC'
+
+            query += ' LIMIT ? OFFSET ?'
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+
+            files = []
+            for row in cursor.fetchall():
+                file = dict(row)
+                if 'metadata' in file:
+                    file['metadata'] = self._parse_json_field(file['metadata'], default={})
+                files.append(file)
+            return files
+
+    def count_source_files(
+        self,
+        file_type: Optional[str] = None,
+        has_proxy: Optional[bool] = None,
+        has_transcription: Optional[bool] = None,
+        search: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None
+    ) -> int:
+        """Count source files matching the given filters."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            query = 'SELECT COUNT(*) FROM files f WHERE (f.is_proxy = 0 OR f.is_proxy IS NULL)'
+            params = []
+
+            if file_type:
+                query += ' AND f.file_type = ?'
+                params.append(file_type)
+
+            if has_proxy is not None:
+                if has_proxy:
+                    query += ' AND EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1)'
+
+            if has_transcription is not None:
+                if has_transcription:
+                    query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path OR t.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path OR t.file_id = f.id)'
+
+            if search:
+                query += ''' AND (
+                    f.filename LIKE ?
+                    OR f.local_path LIKE ?
+                    OR EXISTS (
+                        SELECT 1 FROM transcripts t
+                        WHERE (t.file_id = f.id OR t.file_path = f.local_path)
+                          AND t.transcript_text LIKE ?
+                    )
+                )'''
+                search_pattern = f'%{search}%'
+                params.extend([search_pattern, search_pattern, search_pattern])
+
+            if from_date:
+                query += ' AND f.uploaded_at >= ?'
+                params.append(from_date)
+
+            if to_date:
+                query += ' AND f.uploaded_at <= ?'
+                params.append(to_date)
+
+            cursor.execute(query, params)
+            return cursor.fetchone()[0]
+
+    def get_file_with_stats(self, file_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get detailed file information with all related data.
+
+        Returns:
+        - file: File record with metadata
+        - proxy: Proxy file record (if exists)
+        - analysis_jobs: List of analysis jobs for this file
+        - transcripts: List of transcripts for this file
+        """
+        file = self.get_file(file_id)
+        if not file:
+            return None
+
+        # Get proxy file
+        proxy = self.get_proxy_for_source(file_id)
+
+        # Get analysis jobs
+        analysis_jobs = self.list_jobs(file_id=file_id, limit=1000)
+
+        # Get transcripts (by file_id or local_path)
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM transcripts
+                WHERE file_id = ? OR file_path = ?
+                ORDER BY created_at DESC
+            ''', (file_id, file.get('local_path')))
+
+            transcripts = []
+            for row in cursor.fetchall():
+                transcript = dict(row)
+                for field in ['segments', 'word_timestamps']:
+                    if transcript.get(field):
+                        transcript[field] = json.loads(transcript[field])
+                transcripts.append(transcript)
+
+        return {
+            'file': file,
+            'proxy': proxy,
+            'analysis_jobs': analysis_jobs,
+            'transcripts': transcripts
+        }
+
+    def list_s3_files(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """
+        List all files stored in S3 (proxies) with source file linking.
+
+        Returns proxy files with source file information.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT
+                    p.id as proxy_id,
+                    p.filename as proxy_filename,
+                    p.s3_key,
+                    p.size_bytes,
+                    p.uploaded_at,
+                    p.source_file_id,
+                    s.id as source_id,
+                    s.filename as source_filename,
+                    s.local_path as source_local_path,
+                    s.file_type as source_file_type
+                FROM files p
+                LEFT JOIN files s ON p.source_file_id = s.id
+                WHERE p.is_proxy = 1 AND p.s3_key IS NOT NULL
+                ORDER BY p.uploaded_at DESC
+                LIMIT ? OFFSET ?
+            ''', (limit, offset))
+
+            files = [dict(row) for row in cursor.fetchall()]
+            return files
+
+    def delete_file_cascade(self, file_id: int) -> Dict[str, int]:
+        """
+        Delete file and all related data with cascade logic.
+
+        Returns dictionary with counts of deleted records:
+        - analysis_jobs: Number of analysis jobs deleted
+        - nova_jobs: Number of Nova jobs deleted
+        - transcripts: Number of transcripts deleted
+        - proxy_files: Number of proxy files deleted
+
+        Note: This does NOT delete actual S3 or local files, only database records.
+        File deletion should be handled by the calling code.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Get proxy files for this source
+            cursor.execute('SELECT id FROM files WHERE source_file_id = ? AND is_proxy = 1', (file_id,))
+            proxy_ids = [row[0] for row in cursor.fetchall()]
+
+            # Count analysis jobs (will be cascade deleted via FK)
+            cursor.execute('SELECT COUNT(*) FROM analysis_jobs WHERE file_id = ?', (file_id,))
+            analysis_jobs_count = cursor.fetchone()[0]
+
+            # Count Nova jobs (will be cascade deleted via FK from analysis_jobs)
+            cursor.execute('''
+                SELECT COUNT(*) FROM nova_jobs nj
+                JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id
+                WHERE aj.file_id = ?
+            ''', (file_id,))
+            nova_jobs_count = cursor.fetchone()[0]
+
+            # Count transcripts for this file (by file_id or local_path)
+            file = self.get_file(file_id)
+            local_path = file.get('local_path') if file else None
+
+            if local_path:
+                cursor.execute('''
+                    SELECT COUNT(*) FROM transcripts
+                    WHERE file_id = ? OR file_path = ?
+                ''', (file_id, local_path))
+            else:
+                cursor.execute('SELECT COUNT(*) FROM transcripts WHERE file_id = ?', (file_id,))
+            transcripts_count = cursor.fetchone()[0]
+
+            # Delete transcripts (not cascade, manual delete)
+            if local_path:
+                cursor.execute('''
+                    DELETE FROM transcripts WHERE file_id = ? OR file_path = ?
+                ''', (file_id, local_path))
+            else:
+                cursor.execute('DELETE FROM transcripts WHERE file_id = ?', (file_id,))
+
+            # Delete proxy files (will also cascade delete their analysis jobs)
+            for proxy_id in proxy_ids:
+                cursor.execute('DELETE FROM files WHERE id = ?', (proxy_id,))
+
+            # Delete source file (will cascade delete analysis_jobs and nova_jobs via FK)
+            cursor.execute('DELETE FROM files WHERE id = ?', (file_id,))
+
+            return {
+                'analysis_jobs': analysis_jobs_count,
+                'nova_jobs': nova_jobs_count,
+                'transcripts': transcripts_count,
+                'proxy_files': len(proxy_ids)
+            }
 
     # Analysis job operations
     def create_job(self, job_id: str, file_id: int, analysis_type: str,

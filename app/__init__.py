@@ -50,7 +50,8 @@ def create_app(config_name=None):
     # Register blueprints
     from app.routes import (
         main, upload, video_analysis, image_analysis, collections,
-        history, analysis, transcription, dashboard, nova_analysis
+        history, analysis, transcription, dashboard, nova_analysis,
+        file_management
     )
 
     app.register_blueprint(main.bp)
@@ -63,8 +64,9 @@ def create_app(config_name=None):
     app.register_blueprint(transcription.bp)
     app.register_blueprint(dashboard.bp)
     app.register_blueprint(nova_analysis.bp)
+    app.register_blueprint(file_management.bp)
 
-    app.logger.info("All blueprints registered (including Nova)")
+    app.logger.info("All blueprints registered (including Nova and File Management)")
 
     # Error handlers
     @app.errorhandler(404)
