@@ -44,6 +44,15 @@
                             <strong>Image:</strong> JPEG, PNG (Max 15MB)
                         </div>
                     </div>
+                    <div class="mb-4" id="proxyOptions" style="display: none;">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="createProxy" checked disabled>
+                            <label class="form-check-label" for="createProxy">
+                                Create Nova proxy (720p, 15 fps, required)
+                            </label>
+                        </div>
+                        <div class="form-text">Generates a smaller video for faster Nova analysis.</div>
+                    </div>
 
                     <!-- Upload Progress -->
                     <div id="uploadProgress" class="mb-3" style="display: none;">
@@ -94,14 +103,21 @@
     const uploadStatus = document.getElementById('uploadStatus');
     const videoTypeRadio = document.getElementById('videoType');
     const imageTypeRadio = document.getElementById('imageType');
+    const proxyOptions = document.getElementById('proxyOptions');
+
+    if (videoTypeRadio && videoTypeRadio.checked) {
+        proxyOptions.style.display = 'block';
+    }
 
     // Update file input accept attribute based on selected type
     document.querySelectorAll('input[name="fileType"]').forEach(radio => {
         radio.addEventListener('change', (e) => {
             if (e.target.value === 'video') {
                 fileInput.accept = 'video/mp4,video/quicktime,video/x-msvideo,video/x-matroska';
+                proxyOptions.style.display = 'block';
             } else {
                 fileInput.accept = 'image/jpeg,image/png';
+                proxyOptions.style.display = 'none';
             }
             fileInput.value = '';
         });
@@ -140,33 +156,12 @@
         try {
             uploadBtn.disabled = true;
             uploadProgress.style.display = 'block';
-            uploadStatus.textContent = 'Requesting upload URL...';
-
-            // Request presigned URL
-            const response = await fetch('/api/upload/presigned-url', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    filename: file.name,
-                    content_type: file.type,
-                    size_bytes: file.size
-                })
-            });
-
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || 'Failed to get upload URL');
+            uploadStatus.textContent = 'Uploading file...';
+            const formData = new FormData();
+            formData.append('file', file);
+            if (fileType === 'video') {
+                formData.append('create_proxy', 'true');
             }
-
-            const data = await response.json();
-            uploadStatus.textContent = 'Uploading to S3...';
-
-            // Upload to S3 with progress tracking using XMLHttpRequest
-            console.log('Uploading to S3:', {
-                url: data.upload_url,
-                contentType: file.type,
-                size: file.size
-            });
 
             await new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
@@ -177,51 +172,37 @@
                         const percentComplete = Math.round((e.loaded / e.total) * 100);
                         progressBar.style.width = percentComplete + '%';
                         progressBar.textContent = percentComplete + '%';
-                        uploadStatus.textContent = `Uploading to S3... ${percentComplete}%`;
+                        uploadStatus.textContent = `Uploading file... ${percentComplete}%`;
+                        if (percentComplete >= 100 && fileType === 'video') {
+                            uploadStatus.textContent = 'Creating proxy and uploading to S3...';
+                        }
                     }
                 });
 
                 xhr.addEventListener('load', () => {
-                    if (xhr.status === 200) {
-                        console.log('S3 upload successful');
+                    if (xhr.status >= 200 && xhr.status < 300) {
                         resolve();
                     } else {
-                        console.error('S3 upload error:', xhr.responseText);
-                        reject(new Error(`S3 upload failed with status ${xhr.status}: ${xhr.statusText}`));
+                        try {
+                            const error = JSON.parse(xhr.responseText);
+                            reject(new Error(error.error || `Upload failed with status ${xhr.status}`));
+                        } catch (parseError) {
+                            reject(new Error(`Upload failed with status ${xhr.status}`));
+                        }
                     }
                 });
 
                 xhr.addEventListener('error', () => {
-                    reject(new Error('Network error during S3 upload'));
+                    reject(new Error('Network error during upload'));
                 });
 
                 xhr.addEventListener('abort', () => {
                     reject(new Error('Upload cancelled'));
                 });
 
-                xhr.open('PUT', data.upload_url);
-                xhr.setRequestHeader('Content-Type', file.type);
-                xhr.send(file);
+                xhr.open('POST', '/api/upload/file');
+                xhr.send(formData);
             });
-
-            uploadStatus.textContent = 'Completing upload...';
-
-            // Complete upload by recording in database
-            const completeResponse = await fetch('/api/upload/complete', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    s3_key: data.s3_key,
-                    filename: file.name,
-                    size_bytes: file.size,
-                    content_type: file.type
-                })
-            });
-
-            if (!completeResponse.ok) {
-                const error = await completeResponse.json();
-                throw new Error(error.error || 'Failed to complete upload');
-            }
 
             progressBar.style.width = '100%';
             progressBar.textContent = '100%';

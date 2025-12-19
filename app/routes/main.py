@@ -3,6 +3,7 @@ Main routes for page rendering.
 """
 from flask import Blueprint, render_template, current_app
 from app.database import get_db
+from app.utils.formatters import format_file_size, format_duration
 
 bp = Blueprint('main', __name__)
 
@@ -46,6 +47,15 @@ def video_analysis_page():
     try:
         db = get_db()
         video_files = db.list_files(file_type='video', limit=100)
+        for file in video_files:
+            metadata = file.get('metadata') or {}
+            size_bytes = metadata.get('original_size_bytes', file.get('size_bytes'))
+            duration_seconds = metadata.get('duration_seconds')
+            file['display_size'] = format_file_size(size_bytes) if size_bytes is not None else 'N/A'
+            file['display_duration'] = (
+                format_duration(int(duration_seconds * 1000))
+                if isinstance(duration_seconds, (int, float)) else 'N/A'
+            )
         return render_template('video_analysis.html', files=video_files)
     except Exception as e:
         current_app.logger.error(f"Video analysis page error: {e}")

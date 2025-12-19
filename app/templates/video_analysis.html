@@ -25,19 +25,51 @@
                 <h5 class="mb-0">Select Video File</h5>
             </div>
             <div class="card-body">
-                {% if files %}
-                <select class="form-select" id="videoFileSelect">
+                <select class="form-select" id="videoFileSelect" {% if not files %}disabled{% endif %}>
                     <option value="">-- Select a video file --</option>
                     {% for file in files %}
-                    <option value="{{ file.id }}">{{ file.filename }} ({{ file.uploaded_at }})</option>
+                    <option value="{{ file.id }}">{{ file.filename }} ({{ file.display_size }} | {{ file.display_duration }} | {{ file.uploaded_at }})</option>
                     {% endfor %}
                 </select>
-                {% else %}
-                <p class="text-muted">No video files uploaded yet.</p>
-                <a href="/upload" class="btn btn-primary">
-                    <i class="bi bi-cloud-upload"></i> Upload Video
-                </a>
-                {% endif %}
+                <p class="text-muted mt-2" id="noVideosMessage" {% if files %}style="display: none;"{% endif %}>
+                    No video files uploaded yet. Upload one below to get started.
+                </p>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">Upload New Video</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label for="videoUploadInput" class="form-label fw-bold">Choose Video File:</label>
+                    <input type="file" class="form-control" id="videoUploadInput" accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska">
+                    <div class="form-text">MP4, MOV, AVI, MKV (Max 10GB)</div>
+                </div>
+                <div class="mb-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="videoCreateProxy" checked disabled>
+                        <label class="form-check-label" for="videoCreateProxy">
+                            Create Nova proxy (720p, 15 fps, required)
+                        </label>
+                    </div>
+                    <div class="form-text">Generates a smaller video for faster Nova analysis.</div>
+                </div>
+                <div id="videoUploadProgress" class="mb-3" style="display: none;">
+                    <div class="progress">
+                        <div class="progress-bar progress-bar-striped progress-bar-animated"
+                             id="videoProgressBar"
+                             role="progressbar"
+                             style="width: 0%">0%</div>
+                    </div>
+                    <small id="videoUploadStatus" class="text-muted"></small>
+                </div>
+                <div class="d-grid gap-2">
+                    <button type="button" class="btn btn-primary" id="videoUploadBtn">
+                        <i class="bi bi-cloud-upload"></i> Upload Video
+                    </button>
+                </div>
             </div>
         </div>
 
@@ -299,6 +331,12 @@
     const novaCostDetails = document.getElementById('novaCostDetails');
     const novaCostTotal = document.getElementById('novaCostTotal');
     const novaBatchMode = document.getElementById('novaBatchMode');
+    const videoUploadInput = document.getElementById('videoUploadInput');
+    const videoUploadBtn = document.getElementById('videoUploadBtn');
+    const videoUploadProgress = document.getElementById('videoUploadProgress');
+    const videoProgressBar = document.getElementById('videoProgressBar');
+    const videoUploadStatus = document.getElementById('videoUploadStatus');
+    const noVideosMessage = document.getElementById('noVideosMessage');
     let novaModels = {};
 
     // Show analysis type card when video is selected
@@ -315,6 +353,120 @@
                 startAnalysisBtn.style.display = 'none';
                 novaOptionsCard.style.display = 'none';
                 startNovaBtn.style.display = 'none';
+            }
+        });
+    }
+
+    function addUploadedVideoOption(fileId, filename, displaySize, displayDuration) {
+        if (!videoFileSelect) return;
+        const option = document.createElement('option');
+        option.value = String(fileId);
+        const sizeText = displaySize || 'N/A';
+        const durationText = displayDuration || 'N/A';
+        option.textContent = `${filename} (${sizeText} | ${durationText} | just now)`;
+        videoFileSelect.appendChild(option);
+        videoFileSelect.disabled = false;
+        if (noVideosMessage) {
+            noVideosMessage.style.display = 'none';
+        }
+        videoFileSelect.value = String(fileId);
+        videoFileSelect.dispatchEvent(new Event('change'));
+    }
+
+    if (videoUploadBtn) {
+        videoUploadBtn.addEventListener('click', async () => {
+            const file = videoUploadInput.files[0];
+            if (!file) {
+                showAlert('Please select a video file to upload', 'warning');
+                return;
+            }
+
+            if (!file.type.startsWith('video/')) {
+                showAlert('Please select a valid video file', 'danger');
+                return;
+            }
+
+            if (file.size > 10 * 1024 * 1024 * 1024) { // 10GB
+                showAlert('Video file size must be less than 10GB', 'danger');
+                return;
+            }
+
+            try {
+                videoUploadBtn.disabled = true;
+                videoUploadProgress.style.display = 'block';
+                videoUploadStatus.textContent = 'Uploading video...';
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('create_proxy', 'true');
+
+                const completeData = await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+
+                    xhr.upload.addEventListener('progress', (e) => {
+                        if (e.lengthComputable) {
+                            const percentComplete = Math.round((e.loaded / e.total) * 100);
+                            videoProgressBar.style.width = percentComplete + '%';
+                            videoProgressBar.textContent = percentComplete + '%';
+                            videoUploadStatus.textContent = `Uploading video... ${percentComplete}%`;
+                            if (percentComplete >= 100) {
+                                videoUploadStatus.textContent = 'Creating proxy and uploading to S3...';
+                            }
+                        }
+                    });
+
+                    xhr.addEventListener('load', () => {
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            try {
+                                resolve(JSON.parse(xhr.responseText));
+                            } catch (error) {
+                                reject(new Error('Invalid server response'));
+                            }
+                        } else {
+                            try {
+                                const error = JSON.parse(xhr.responseText);
+                                reject(new Error(error.error || `Upload failed with status ${xhr.status}`));
+                            } catch (parseError) {
+                                reject(new Error(`Upload failed with status ${xhr.status}`));
+                            }
+                        }
+                    });
+
+                    xhr.addEventListener('error', () => {
+                        reject(new Error('Network error during upload'));
+                    });
+
+                    xhr.addEventListener('abort', () => {
+                        reject(new Error('Upload cancelled'));
+                    });
+
+                    xhr.open('POST', '/api/upload/file');
+                    xhr.send(formData);
+                });
+
+                videoProgressBar.style.width = '100%';
+                videoProgressBar.textContent = '100%';
+                videoUploadStatus.textContent = 'Upload complete!';
+
+                showAlert(`Video "${file.name}" uploaded successfully!`, 'success');
+
+                setTimeout(() => {
+                    videoUploadInput.value = '';
+                    videoUploadProgress.style.display = 'none';
+                    videoProgressBar.style.width = '0%';
+                    videoProgressBar.textContent = '0%';
+                    videoUploadBtn.disabled = false;
+                    addUploadedVideoOption(
+                        completeData.file_id,
+                        file.name,
+                        completeData.display_size,
+                        completeData.display_duration
+                    );
+                }, 1500);
+            } catch (error) {
+                console.error('Upload error:', error);
+                showAlert(`Upload failed: ${error.message}`, 'danger');
+                videoUploadBtn.disabled = false;
+                videoUploadProgress.style.display = 'none';
             }
         });
     }

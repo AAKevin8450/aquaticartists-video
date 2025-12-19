@@ -2,17 +2,89 @@
 Upload routes for file management.
 """
 from flask import Blueprint, request, jsonify, current_app
-from werkzeug.utils import secure_filename
 from app.services.s3_service import get_s3_service, S3Error
 from app.database import get_db
 from app.utils.validators import (
     validate_file_type, validate_file_size, sanitize_filename,
     get_file_type, ValidationError
 )
-from app.utils.formatters import format_file_size, format_timestamp
+from app.utils.formatters import format_file_size, format_timestamp, format_duration
 import uuid
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+from datetime import datetime
+from pathlib import PurePosixPath, Path
 
 bp = Blueprint('upload', __name__, url_prefix='/api/upload')
+
+
+def _format_duration_seconds(duration_seconds):
+    if duration_seconds is None:
+        return 'N/A'
+    try:
+        return format_duration(int(float(duration_seconds) * 1000))
+    except (ValueError, TypeError):
+        return 'N/A'
+
+
+def _probe_duration_seconds(file_path: str):
+    if shutil.which('ffprobe'):
+        command = [
+            'ffprobe',
+            '-v', 'error',
+            '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1',
+            file_path
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            try:
+                return float(result.stdout.strip())
+            except ValueError:
+                pass
+
+    if shutil.which('ffmpeg'):
+        command = ['ffmpeg', '-i', file_path]
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        duration_match = re.search(r'Duration:\s*(\d+):(\d+):(\d+\.\d+)', result.stderr or '')
+        if duration_match:
+            hours = int(duration_match.group(1))
+            minutes = int(duration_match.group(2))
+            seconds = float(duration_match.group(3))
+            return hours * 3600 + minutes * 60 + seconds
+    return None
+
+
+def _create_proxy_video(source_path: str, proxy_path: str):
+    command = [
+        'ffmpeg',
+        '-y',
+        '-i', source_path,
+        '-vf', 'scale=-2:720,fps=15',
+        '-map', '0:v:0',
+        '-map', '0:a?',
+        '-c:v', 'libx264',
+        '-preset', 'fast',
+        '-crf', '28',
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        '-b:a', '96k',
+        '-ac', '2',
+        '-movflags', '+faststart',
+        proxy_path
+    ]
+
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr or 'ffmpeg failed')
+
+
+def _get_display_size_bytes(file_record):
+    metadata = file_record.get('metadata') or {}
+    return metadata.get('original_size_bytes', file_record.get('size_bytes'))
 
 
 @bp.route('/presigned-url', methods=['POST'])
@@ -56,6 +128,11 @@ def get_presigned_url():
             else current_app.config['MAX_IMAGE_SIZE_MB']
         )
         validate_file_size(size_bytes, max_size_mb)
+
+        if file_type == 'video':
+            return jsonify({
+                'error': 'Video uploads must use /api/upload/file to generate a local proxy first'
+            }), 400
 
         # Get S3 service and generate presigned POST
         s3_service = get_s3_service(current_app)
@@ -109,6 +186,11 @@ def complete_upload():
             current_app.config['ALLOWED_VIDEO_EXTENSIONS'],
             current_app.config['ALLOWED_IMAGE_EXTENSIONS']
         )
+
+        if file_type == 'video':
+            return jsonify({
+                'error': 'Video uploads must use /api/upload/file to generate a proxy'
+            }), 400
 
         # Verify file exists in S3
         s3_service = get_s3_service(current_app)
@@ -169,15 +251,86 @@ def upload_file_direct():
 
         # Generate S3 key
         safe_filename = sanitize_filename(file.filename)
-        s3_key = f"uploads/{uuid.uuid4()}/{safe_filename}"
+        upload_id = uuid.uuid4()
 
-        # Get file size BEFORE uploading
-        file.seek(0, 2)  # Seek to end
-        size_bytes = file.tell()
-        file.seek(0)  # Reset to beginning for upload
+        max_size_mb = (
+            current_app.config['MAX_VIDEO_SIZE_MB'] if file_type == 'video'
+            else current_app.config['MAX_IMAGE_SIZE_MB']
+        )
+
+        if request.content_length:
+            validate_file_size(request.content_length, max_size_mb)
 
         # Upload to S3
         s3_service = get_s3_service(current_app)
+        if file_type == 'video':
+            create_proxy = request.form.get('create_proxy', 'true').lower() in ('1', 'true', 'yes', 'on')
+            if not create_proxy:
+                return jsonify({'error': 'Proxy creation is required for video uploads'}), 400
+
+            if not shutil.which('ffmpeg'):
+                return jsonify({'error': 'ffmpeg is not available on the server'}), 500
+
+            upload_root = Path(current_app.config['UPLOAD_FOLDER'])
+            upload_dir = upload_root / str(upload_id)
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            local_path = upload_dir / safe_filename
+            file.save(local_path)
+
+            size_bytes = os.path.getsize(local_path)
+            try:
+                validate_file_size(size_bytes, max_size_mb)
+            except ValidationError as e:
+                if local_path.exists():
+                    local_path.unlink()
+                return jsonify({'error': str(e)}), 400
+
+            duration_seconds = _probe_duration_seconds(str(local_path))
+
+            proxy_s3_key = f"uploads/{upload_id}/proxy_720p15.mp4"
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                proxy_path = os.path.join(tmp_dir, 'proxy_720p15.mp4')
+                _create_proxy_video(str(local_path), proxy_path)
+                proxy_size = os.path.getsize(proxy_path)
+                with open(proxy_path, 'rb') as proxy_file:
+                    s3_service.upload_file(proxy_file, proxy_s3_key, 'video/mp4')
+
+            # Record in database
+            db = get_db()
+            file_id = db.create_file(
+                filename=file.filename,
+                s3_key=proxy_s3_key,
+                file_type=file_type,
+                size_bytes=size_bytes,
+                content_type='video/mp4',
+                metadata={
+                    'original_size_bytes': size_bytes,
+                    'duration_seconds': duration_seconds,
+                    'local_path': str(local_path),
+                    'original_content_type': file.content_type or '',
+                    'proxy_s3_key': proxy_s3_key,
+                    'proxy_size_bytes': proxy_size,
+                    'proxy_content_type': 'video/mp4',
+                    'proxy_generated_at': datetime.utcnow().isoformat() + 'Z',
+                    'proxy_spec': '720p15'
+                }
+            )
+
+            return jsonify({
+                'file_id': file_id,
+                'message': 'File uploaded successfully',
+                's3_key': proxy_s3_key,
+                'size_bytes': size_bytes,
+                'display_size': format_file_size(size_bytes),
+                'duration_seconds': duration_seconds,
+                'display_duration': _format_duration_seconds(duration_seconds)
+            }), 201
+
+        s3_key = f"uploads/{upload_id}/{safe_filename}"
+        file.seek(0, 2)
+        size_bytes = file.tell()
+        file.seek(0)
+        validate_file_size(size_bytes, max_size_mb)
         s3_service.upload_file(file, s3_key, file.content_type)
 
         # Record in database
@@ -193,16 +346,127 @@ def upload_file_direct():
         return jsonify({
             'file_id': file_id,
             'message': 'File uploaded successfully',
-            's3_key': s3_key
+            's3_key': s3_key,
+            'size_bytes': size_bytes,
+            'display_size': format_file_size(size_bytes)
         }), 201
 
     except ValidationError as e:
         return jsonify({'error': str(e)}), 400
     except S3Error as e:
         return jsonify({'error': str(e)}), 500
+    except RuntimeError as e:
+        current_app.logger.error(f"Proxy creation error: {e}")
+        return jsonify({'error': 'Failed to create proxy video'}), 500
     except Exception as e:
         current_app.logger.error(f"Direct upload error: {e}")
         return jsonify({'error': 'Failed to upload file'}), 500
+
+
+@bp.route('/create-proxy', methods=['POST'])
+def create_proxy():
+    """
+    Create a 720p/15fps proxy video for an existing upload.
+
+    Expected JSON:
+        {
+            "file_id": 123,
+            "force": false
+        }
+
+    Returns:
+        {
+            "file_id": 123,
+            "proxy_s3_key": "uploads/.../proxy_720p15.mp4",
+            "proxy_size_bytes": 1024000
+        }
+    """
+    try:
+        data = request.get_json() or {}
+        file_id = data.get('file_id')
+        force = bool(data.get('force', False))
+
+        if not file_id:
+            return jsonify({'error': 'file_id is required'}), 400
+
+        db = get_db()
+        file = db.get_file(file_id)
+
+        if not file:
+            return jsonify({'error': 'File not found'}), 404
+
+        if file['file_type'] != 'video':
+            return jsonify({'error': 'File must be a video'}), 400
+
+        metadata = file.get('metadata', {}) or {}
+        existing_proxy = metadata.get('proxy_s3_key')
+        if existing_proxy and not force:
+            return jsonify({
+                'file_id': file_id,
+                'proxy_s3_key': existing_proxy,
+                'proxy_size_bytes': metadata.get('proxy_size_bytes'),
+                'message': 'Proxy already exists'
+            }), 200
+
+        if not shutil.which('ffmpeg'):
+            return jsonify({'error': 'ffmpeg is not available on the server'}), 500
+
+        s3_service = get_s3_service(current_app)
+        source_s3_key = file['s3_key']
+
+        key_path = PurePosixPath(source_s3_key)
+        proxy_s3_key = str(key_path.parent / 'proxy_720p15.mp4')
+
+        duration_seconds = metadata.get('duration_seconds')
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            proxy_path = os.path.join(tmp_dir, 'proxy_720p15.mp4')
+
+            local_path = metadata.get('local_path')
+            if local_path and os.path.isfile(local_path):
+                source_path = local_path
+                if duration_seconds is None:
+                    duration_seconds = _probe_duration_seconds(local_path)
+            else:
+                if metadata.get('proxy_s3_key') and source_s3_key == metadata.get('proxy_s3_key'):
+                    return jsonify({'error': 'Local source video not available for proxy creation'}), 404
+                source_path = os.path.join(tmp_dir, 'source' + os.path.splitext(file['filename'])[1])
+                s3_service.download_file(source_s3_key, source_path)
+
+            try:
+                _create_proxy_video(source_path, proxy_path)
+            except RuntimeError as e:
+                current_app.logger.error(f"ffmpeg error: {e}")
+                return jsonify({'error': 'Failed to create proxy video'}), 500
+
+            proxy_size = os.path.getsize(proxy_path)
+            with open(proxy_path, 'rb') as proxy_file:
+                s3_service.upload_file(proxy_file, proxy_s3_key, 'video/mp4')
+
+        metadata_updates = {
+            'proxy_s3_key': proxy_s3_key,
+            'proxy_size_bytes': proxy_size,
+            'proxy_content_type': 'video/mp4',
+            'proxy_generated_at': datetime.utcnow().isoformat() + 'Z',
+            'proxy_spec': '720p15',
+            'proxy_source_s3_key': source_s3_key
+        }
+        if duration_seconds is not None:
+            metadata_updates['duration_seconds'] = duration_seconds
+        updated_metadata = db.update_file_metadata(file_id, metadata_updates)
+
+        return jsonify({
+            'file_id': file_id,
+            'proxy_s3_key': proxy_s3_key,
+            'proxy_size_bytes': proxy_size,
+            'metadata': updated_metadata
+        }), 201
+
+    except S3Error as e:
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        current_app.logger.error(f"Proxy creation error: {e}")
+        return jsonify({'error': 'Failed to create proxy video'}), 500
 
 
 @bp.route('/files', methods=['GET'])
@@ -232,13 +496,17 @@ def list_files():
         # Format file data
         formatted_files = []
         for file in files:
+            size_bytes = _get_display_size_bytes(file)
+            duration_seconds = (file.get('metadata') or {}).get('duration_seconds')
             formatted_files.append({
                 'id': file['id'],
                 'filename': file['filename'],
                 's3_key': file['s3_key'],
                 'file_type': file['file_type'],
-                'size': format_file_size(file['size_bytes']),
-                'size_bytes': file['size_bytes'],
+                'size': format_file_size(size_bytes) if size_bytes is not None else 'N/A',
+                'size_bytes': size_bytes,
+                'duration_seconds': duration_seconds,
+                'duration': _format_duration_seconds(duration_seconds),
                 'content_type': file['content_type'],
                 'uploaded_at': format_timestamp(file['uploaded_at'])
             })
@@ -285,8 +553,10 @@ def get_file(file_id):
             'filename': file['filename'],
             's3_key': file['s3_key'],
             'file_type': file['file_type'],
-            'size': format_file_size(file['size_bytes']),
-            'size_bytes': file['size_bytes'],
+            'size': format_file_size(_get_display_size_bytes(file)),
+            'size_bytes': _get_display_size_bytes(file),
+            'duration_seconds': (file.get('metadata') or {}).get('duration_seconds'),
+            'duration': _format_duration_seconds((file.get('metadata') or {}).get('duration_seconds')),
             'content_type': file['content_type'],
             'uploaded_at': format_timestamp(file['uploaded_at']),
             'presigned_url': presigned_url
