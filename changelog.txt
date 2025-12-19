@@ -1,3 +1,163 @@
+2025-12-19 13:43:58 - Updated by Claude Code
+
+[Category: Feature + Infrastructure]
+File management enhancements: unified file listing with transcripts, summary statistics, S3 file operations, and complete video metadata for all transcribed files
+
+[Purpose]
+Provide complete visibility into all files (uploaded + transcribed) with accurate duration/metadata, enable S3 file management (view/download/delete), and ensure file summaries show correct statistics. The file management page was only showing 8 uploaded files but missing 3,154 transcribed files. Duration summaries were incorrect (1m 21s instead of 22+ hours) because metadata wasn't captured during transcription.
+
+[Impact]
+File management now shows all 3,161 files (uploaded + transcribed) with complete metadata. Users can view accurate statistics (22.5 hours total duration vs 1m 21s), search across all files including transcripts, manage S3 files directly (download via presigned URLs, delete individual files, bulk delete all with double-confirmation), and all future transcriptions automatically capture full video metadata (resolution, codecs, frame rate, bitrate).
+
+[Changes Made - Database Schema]
+- app/database.py:131-160 (+30 lines): Added 6 metadata columns to transcripts table
+  - resolution_width, resolution_height (INTEGER) - Video dimensions
+  - frame_rate (REAL) - Frames per second
+  - codec_video, codec_audio (TEXT) - Video/audio codec names
+  - bitrate (INTEGER) - Bitrate in bits per second
+  - Migration: ALTER TABLE ADD COLUMN with try/except for existing columns
+- app/database.py:885-922 (+38 lines): Updated update_transcript_status() signature
+  - Added 6 new optional parameters for metadata fields
+  - UPDATE query now sets all metadata fields when status='COMPLETED'
+
+[Changes Made - Database Queries]
+- app/database.py:1232-1336 (+104 lines): New list_all_files_with_stats() method
+  - UNION query combining files table + transcripts table (unique file_path)
+  - For transcripts: Uses MAX() aggregation to get metadata from any model's transcript
+  - Pulls resolution_width/height, frame_rate, codec_video/audio, bitrate, duration_seconds from transcripts
+  - Returns 3,161 files (7 from files table + 3,154 from transcripts table)
+  - Supports same filters as list_source_files_with_stats: file_type, has_proxy, has_transcription, search, dates
+- app/database.py:1338-1418 (+81 lines): Updated count_all_files() method
+  - Mirrors UNION logic from list_all_files_with_stats for accurate counts
+- app/database.py:1420-1524 (+105 lines): New get_all_files_summary() method
+  - Returns {total_count, total_size_bytes, total_duration_seconds}
+  - UNION query with SUM() aggregates for accurate totals across both tables
+  - Fixed GROUP BY to include file_size for proper deduplication
+
+[Changes Made - Transcription Service]
+- app/routes/transcription.py:285-315 (+23 lines): Single file transcription metadata extraction
+  - Import extract_media_metadata from app.utils.media_metadata
+  - Extract metadata before transcription (resolution, codecs, frame rate, bitrate, duration)
+  - Pass metadata to db.update_transcript_status() on completion
+  - Gracefully handles MediaMetadataError with logger.warning
+- app/routes/transcription.py:417-446 (+24 lines): Batch transcription db_callback metadata
+  - Extract metadata for each file in batch job
+  - Print metadata to console for progress tracking
+  - Pass all 6 metadata fields to update_transcript_status()
+
+[Changes Made - S3 Service]
+- app/services/s3_service.py:226-248 (+23 lines): New get_presigned_download_url() method
+  - Generates presigned GET URL with configurable expiration (default 1 hour)
+  - Returns URL string for direct browser download
+- app/services/s3_service.py:250-285 (+36 lines): New delete_all_files() method
+  - Bulk delete operation with optional prefix filtering
+  - Uses paginator for list_objects_v2 (handles large buckets)
+  - Batch delete in chunks of 1,000 (S3 API limit)
+  - Returns deleted file count
+
+[Changes Made - Backend API Routes]
+- app/routes/file_management.py:83-114 (+32 lines): Updated GET /api/files endpoint
+  - Changed from list_source_files_with_stats() to list_all_files_with_stats()
+  - Changed from count_source_files() to count_all_files()
+  - Added get_all_files_summary() call for statistics
+  - Response now includes summary: {total_count, total_size_bytes, total_size_display, total_duration_seconds, total_duration_display}
+- app/routes/file_management.py:666-691 (+26 lines): New GET /api/s3-file/<s3_key>/download-url endpoint
+  - Generates presigned download URL via s3_service.get_presigned_download_url()
+  - Returns {download_url, expires_in: 3600, s3_key}
+- app/routes/file_management.py:694-718 (+25 lines): New DELETE /api/s3-file/<s3_key> endpoint
+  - Deletes single S3 file via s3_service.delete_file()
+  - Returns {message, s3_key}
+- app/routes/file_management.py:721-764 (+44 lines): New POST /api/s3-files/delete-all endpoint
+  - Requires explicit confirmation in request body: {confirm: true}
+  - Optional prefix parameter for selective deletion
+  - Calls s3_service.delete_all_files()
+  - Returns {message, deleted_count}
+- app/routes/file_management.py:626-663 (+38 lines): Updated GET /api/s3-files endpoint
+  - Changed from database query to direct S3 bucket listing via s3_service.list_files()
+  - Shows all 17 S3 files (not just proxy files in database)
+  - Cross-references with database via get_file_by_s3_key()
+  - Returns in_database boolean and file_id/file_type when found
+
+[Changes Made - Frontend UI]
+- app/templates/file_management.html:111-133 (+23 lines): Added summary statistics alert
+  - Bootstrap alert-info box with 3-column layout
+  - Shows Total Files (count), Total Size (formatted), Total Duration (formatted)
+  - Hidden by default, displayed when files exist
+- app/templates/file_management.html:154-165 (+12 lines): Updated S3 Files section header
+  - Added file count badge showing number of S3 files
+  - Added "Delete All" danger button in header (red, with trash icon)
+  - Flexbox layout for proper button alignment
+
+[Changes Made - Frontend JavaScript]
+- app/static/js/file_management.js:147,476-490 (+16 lines): Summary display logic
+  - New updateSummary(summary) function to populate statistics
+  - Updates summaryCount, summarySize, summaryDuration elements
+  - Shows/hides summary container based on data availability
+  - Called automatically after loadFiles() completes
+- app/static/js/file_management.js:916-1005 (+90 lines): Updated renderS3Files() function
+  - Added file count badge update
+  - Added "Actions" column to S3 files table
+  - Download button (blue) and Delete button (red) for each file
+  - Event listeners attached for download-s3-btn and delete-s3-btn
+- app/static/js/file_management.js:1007-1096 (+90 lines): New S3 file operation functions
+  - downloadS3File(s3Key): Fetches presigned URL, opens in new tab, shows success alert
+  - deleteS3File(s3Key, filename): Single confirmation, DELETE request, reloads S3 list
+  - deleteAllS3Files(): Double confirmation (alert + "DELETE ALL" prompt), POST request with {confirm: true}
+- app/static/js/file_management.js:73-77 (+5 lines): Delete All button event listener
+  - Attached to deleteAllS3Btn on DOMContentLoaded
+  - Calls deleteAllS3Files() on click
+
+[Changes Made - Utilities]
+- app/utils/formatters.py:89-115 (+27 lines): Fixed format_duration() function
+  - Changed from milliseconds to seconds input (duration_ms → duration_seconds)
+  - Added hours display for durations > 1 hour (e.g., "22h 32m")
+  - Format logic: hours only ("5h"), hours+minutes ("2h 15m"), minutes+seconds ("45m 30s"), seconds ("30s")
+  - Fixed bug: was dividing by 1000 (treating seconds as milliseconds), now uses seconds directly
+
+[Migration Script - One-Time Metadata Backfill]
+- migrate_transcript_metadata.py (new, 152 lines): Automated metadata extraction for existing transcripts
+  - Scanned all 3,154 completed transcripts for missing metadata
+  - Used extract_media_metadata() with ffprobe to get resolution/codecs/duration/bitrate
+  - Batch updated transcripts table with 6 metadata columns
+  - Results: 3,154 processed, 3,154 success, 0 failures, 0 files not found (100% success rate)
+  - Supports --dry-run flag for testing, --live flag for actual updates
+  - Progress reporting every 10 files with success/fail/not-found counts
+
+[Files Modified]
+- app/database.py (schema migrations, 3 new methods, 2 updated queries)
+- app/routes/file_management.py (1 updated endpoint, 3 new S3 endpoints)
+- app/routes/transcription.py (metadata extraction in 2 places)
+- app/services/s3_service.py (2 new methods for presigned URLs and bulk delete)
+- app/static/js/file_management.js (summary display, S3 operations, event handlers)
+- app/templates/file_management.html (summary section, S3 header with delete all button)
+- app/utils/formatters.py (fixed duration formatting from milliseconds to seconds)
+
+[Technical Details]
+- Metadata extraction uses ffprobe via app/utils/media_metadata.py (existing utility)
+- Migration processed 3,154 files at ~0.3s per file (15 minutes total runtime)
+- UNION queries use MAX() for metadata fields to handle multiple transcripts per file (different models)
+- GROUP BY includes file_path, file_name, file_size, created_at for proper deduplication
+- S3 presigned URLs expire in 1 hour (configurable)
+- S3 delete_all uses pagination to handle large buckets (1,000 objects per batch)
+- Double confirmation for delete all: warning dialog + typed "DELETE ALL" confirmation
+
+[Testing Performed]
+- Verified all 3,154 transcripts have complete metadata (resolution, codecs, duration, bitrate)
+- Confirmed file summary shows 22h 32m total duration (was 1m 21s before fix)
+- Tested file listing returns 3,161 files (7 from files + 3,154 from transcripts)
+- Tested S3 listing shows all 17 bucket files (was showing none before fix)
+- Verified S3 download generates valid presigned URLs
+- Tested S3 delete operations (single file and bulk delete with confirmation)
+- Confirmed future transcriptions automatically capture metadata
+
+[Breaking Changes]
+None - all changes are backward compatible. Existing code continues to work.
+
+[Known Issues]
+None
+
+---
+
 2025-12-19 11:11:39 - Updated by Claude Code
 
 [Category: Feature]

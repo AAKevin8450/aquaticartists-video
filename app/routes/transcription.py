@@ -282,10 +282,18 @@ def transcribe_single():
             )
 
         try:
+            # Extract video metadata
+            from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
+            metadata = {}
+            try:
+                metadata = extract_media_metadata(file_path)
+            except MediaMetadataError as e:
+                current_app.logger.warning(f"Failed to extract metadata: {e}")
+
             # Transcribe
             result = service.transcribe_file(file_path, language=language)
 
-            # Update database with results
+            # Update database with results and metadata
             db.update_transcript_status(
                 transcript_id=transcript_id,
                 status=TranscriptStatus.COMPLETED,
@@ -297,7 +305,13 @@ def transcribe_single():
                 word_timestamps=result['word_timestamps'],
                 language=result['language'],
                 confidence_score=result['confidence_score'],
-                processing_time=result['processing_time_seconds']
+                processing_time=result['processing_time_seconds'],
+                resolution_width=metadata.get('resolution_width'),
+                resolution_height=metadata.get('resolution_height'),
+                frame_rate=metadata.get('frame_rate'),
+                codec_video=metadata.get('codec_video'),
+                codec_audio=metadata.get('codec_audio'),
+                bitrate=metadata.get('bitrate')
             )
 
             # Get updated transcript
@@ -400,7 +414,16 @@ def start_batch():
                         )
                         print(f"[DB_CALLBACK] Created new transcript ID: {transcript_id}")
 
-                    # Update with results
+                    # Extract video metadata
+                    from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
+                    metadata = {}
+                    try:
+                        metadata = extract_media_metadata(file_path)
+                        print(f"[DB_CALLBACK] Metadata: {metadata.get('resolution_width')}x{metadata.get('resolution_height')}, {metadata.get('duration_seconds')}s")
+                    except MediaMetadataError as e:
+                        print(f"[DB_CALLBACK] Warning: Failed to extract metadata: {e}")
+
+                    # Update with results and metadata
                     db.update_transcript_status(
                         transcript_id=transcript_id,
                         status=TranscriptStatus.COMPLETED,
@@ -412,7 +435,13 @@ def start_batch():
                         word_timestamps=result['word_timestamps'],
                         language=result['language'],
                         confidence_score=result['confidence_score'],
-                        processing_time=result['processing_time_seconds']
+                        processing_time=result['processing_time_seconds'],
+                        resolution_width=metadata.get('resolution_width'),
+                        resolution_height=metadata.get('resolution_height'),
+                        frame_rate=metadata.get('frame_rate'),
+                        codec_video=metadata.get('codec_video'),
+                        codec_audio=metadata.get('codec_audio'),
+                        bitrate=metadata.get('bitrate')
                     )
                     print(f"[DB_CALLBACK] Successfully saved transcript ID: {transcript_id}")
 

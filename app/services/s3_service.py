@@ -223,6 +223,67 @@ class S3Service:
                 return False
             raise S3Error(f"Failed to check file existence: {e}")
 
+    def get_presigned_download_url(self, s3_key: str, expires_in: int = 3600) -> str:
+        """
+        Generate a presigned URL for downloading a file from S3.
+
+        Args:
+            s3_key: S3 key of the file
+            expires_in: URL expiration time in seconds (default: 1 hour)
+
+        Returns:
+            Presigned download URL
+        """
+        try:
+            url = self.s3_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': self.bucket_name,
+                    'Key': s3_key
+                },
+                ExpiresIn=expires_in
+            )
+            return url
+        except ClientError as e:
+            raise S3Error(f"Failed to generate presigned URL: {e}")
+
+    def delete_all_files(self, prefix: str = '') -> int:
+        """
+        Delete all files in the bucket (or with a specific prefix).
+
+        WARNING: This is a destructive operation!
+
+        Args:
+            prefix: Optional prefix to limit deletion (default: '' deletes everything)
+
+        Returns:
+            Number of files deleted
+        """
+        try:
+            deleted_count = 0
+
+            # List all objects
+            paginator = self.s3_client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(Bucket=self.bucket_name, Prefix=prefix)
+
+            # Delete in batches of 1000 (S3 limit)
+            for page in pages:
+                if 'Contents' not in page:
+                    continue
+
+                objects_to_delete = [{'Key': obj['Key']} for obj in page['Contents']]
+
+                if objects_to_delete:
+                    response = self.s3_client.delete_objects(
+                        Bucket=self.bucket_name,
+                        Delete={'Objects': objects_to_delete}
+                    )
+                    deleted_count += len(response.get('Deleted', []))
+
+            return deleted_count
+        except ClientError as e:
+            raise S3Error(f"Failed to delete all files: {e}")
+
 
 def get_s3_service(app=None) -> S3Service:
     """

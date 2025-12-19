@@ -69,6 +69,12 @@ function initializeEventListeners() {
             loadS3Files();
         }
     });
+
+    // Delete All S3 Files button
+    const deleteAllS3Btn = document.getElementById('deleteAllS3Btn');
+    if (deleteAllS3Btn) {
+        deleteAllS3Btn.addEventListener('click', deleteAllS3Files);
+    }
 }
 
 function applyFilters() {
@@ -144,6 +150,7 @@ async function loadFiles() {
         renderFiles(currentFiles);
         renderPagination(currentPagination);
         updateFilesCount(currentPagination.total);
+        updateSummary(data.summary);
 
     } catch (error) {
         console.error('Failed to load files:', error);
@@ -470,6 +477,22 @@ function renderPagination(pagination) {
 function updateFilesCount(total) {
     const badge = document.getElementById('filesTotalBadge');
     badge.textContent = `${total} file${total !== 1 ? 's' : ''}`;
+}
+
+function updateSummary(summary) {
+    const summaryContainer = document.getElementById('filesSummary');
+    const countEl = document.getElementById('summaryCount');
+    const sizeEl = document.getElementById('summarySize');
+    const durationEl = document.getElementById('summaryDuration');
+
+    if (summary && summary.total_count > 0) {
+        countEl.textContent = summary.total_count.toLocaleString();
+        sizeEl.textContent = summary.total_size_display || '0 B';
+        durationEl.textContent = summary.total_duration_display || 'N/A';
+        summaryContainer.style.display = 'block';
+    } else {
+        summaryContainer.style.display = 'none';
+    }
 }
 
 // ============================================================================
@@ -898,6 +921,11 @@ async function loadS3Files() {
 
 function renderS3Files(files) {
     const container = document.getElementById('s3FilesContainer');
+    const countBadge = document.getElementById('s3FilesCountBadge');
+
+    if (countBadge) {
+        countBadge.textContent = `${files.length} file${files.length !== 1 ? 's' : ''}`;
+    }
 
     if (files.length === 0) {
         container.innerHTML = '<p class="text-muted">No files stored in S3</p>';
@@ -909,27 +937,45 @@ function renderS3Files(files) {
             <table class="table table-sm table-hover">
                 <thead>
                     <tr>
-                        <th>Proxy File</th>
+                        <th>Filename</th>
                         <th>S3 Key</th>
                         <th>Size</th>
-                        <th>Source File</th>
-                        <th>Uploaded</th>
+                        <th>Type</th>
+                        <th>In Database</th>
+                        <th>Last Modified</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     ${files.map(file => `
                         <tr>
-                            <td>${escapeHtml(file.proxy_filename)}</td>
+                            <td>${escapeHtml(file.filename)}</td>
                             <td><code class="small">${escapeHtml(file.s3_key)}</code></td>
                             <td>${file.size_display}</td>
                             <td>
-                                ${file.source_id ? `
-                                    <a href="#" class="link-primary view-source-btn" data-file-id="${file.source_id}">
-                                        ${escapeHtml(file.source_filename)}
-                                    </a>
-                                ` : '<span class="text-muted">No source</span>'}
+                                <span class="badge bg-${file.file_type === 'video' ? 'primary' : file.file_type === 'image' ? 'success' : 'secondary'}">
+                                    ${file.file_type}
+                                </span>
                             </td>
-                            <td>${file.uploaded_at}</td>
+                            <td>
+                                ${file.in_database ? `
+                                    <span class="badge bg-success">
+                                        <i class="bi bi-check-circle"></i> Yes
+                                        ${file.file_id ? `<a href="#" class="text-white ms-1 view-file-btn" data-file-id="${file.file_id}"><i class="bi bi-eye"></i></a>` : ''}
+                                    </span>
+                                ` : '<span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle"></i> No</span>'}
+                            </td>
+                            <td>${file.last_modified || 'N/A'}</td>
+                            <td>
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <button class="btn btn-outline-primary download-s3-btn" data-s3-key="${escapeHtml(file.s3_key)}" title="Download">
+                                        <i class="bi bi-download"></i>
+                                    </button>
+                                    <button class="btn btn-outline-danger delete-s3-btn" data-s3-key="${escapeHtml(file.s3_key)}" data-filename="${escapeHtml(file.filename)}" title="Delete">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </div>
+                            </td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -939,14 +985,120 @@ function renderS3Files(files) {
 
     container.innerHTML = table;
 
-    // Attach click handlers for source file links
-    container.querySelectorAll('.view-source-btn').forEach(link => {
+    // Attach click handlers
+    container.querySelectorAll('.view-file-btn').forEach(link => {
         link.addEventListener('click', (e) => {
             e.preventDefault();
             const fileId = parseInt(e.currentTarget.dataset.fileId);
             viewFileDetails(fileId);
         });
     });
+
+    container.querySelectorAll('.download-s3-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const s3Key = btn.dataset.s3Key;
+            downloadS3File(s3Key);
+        });
+    });
+
+    container.querySelectorAll('.delete-s3-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const s3Key = btn.dataset.s3Key;
+            const filename = btn.dataset.filename;
+            deleteS3File(s3Key, filename);
+        });
+    });
+}
+
+// ============================================================================
+// S3 FILE OPERATIONS
+// ============================================================================
+
+async function downloadS3File(s3Key) {
+    try {
+        // Get presigned download URL
+        const response = await fetch(`/api/s3-file/${encodeURIComponent(s3Key)}/download-url`);
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to get download URL');
+        }
+
+        const data = await response.json();
+
+        // Open download in new tab
+        window.open(data.download_url, '_blank');
+
+        showAlert('Download started! Check your downloads folder.', 'success');
+
+    } catch (error) {
+        console.error('Download S3 file error:', error);
+        showAlert(`Failed to download file: ${error.message}`, 'danger');
+    }
+}
+
+async function deleteS3File(s3Key, filename) {
+    if (!confirm(`Are you sure you want to delete "${filename}" from S3?\n\nThis action cannot be undone.`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/s3-file/${encodeURIComponent(s3Key)}`, {
+            method: 'DELETE'
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to delete file');
+        }
+
+        showAlert(`File "${filename}" deleted successfully`, 'success');
+
+        // Reload S3 files
+        loadS3Files();
+
+    } catch (error) {
+        console.error('Delete S3 file error:', error);
+        showAlert(`Failed to delete file: ${error.message}`, 'danger');
+    }
+}
+
+async function deleteAllS3Files() {
+    if (!confirm('⚠️ WARNING ⚠️\n\nAre you ABSOLUTELY SURE you want to delete ALL files from the S3 bucket?\n\nThis will permanently delete:\n- All uploaded videos\n- All proxy files\n- All Nova batch files\n- Everything in the bucket\n\nThis action CANNOT be undone!')) {
+        return;
+    }
+
+    // Second confirmation
+    const confirmText = prompt('Type "DELETE ALL" to confirm this destructive action:');
+    if (confirmText !== 'DELETE ALL') {
+        showAlert('Delete all cancelled', 'info');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/s3-files/delete-all', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ confirm: true })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to delete files');
+        }
+
+        const data = await response.json();
+        showAlert(data.message, 'success');
+
+        // Reload S3 files
+        loadS3Files();
+
+    } catch (error) {
+        console.error('Delete all S3 files error:', error);
+        showAlert(`Failed to delete files: ${error.message}`, 'danger');
+    }
 }
 
 // ============================================================================
