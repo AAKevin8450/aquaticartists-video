@@ -12,6 +12,8 @@
         "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-micro-v1:0",
         "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-lite-v1:0",
         "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-pro-v2:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-omni-v2:0",
         "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-premier-v1:0"
       ]
     },
@@ -36,6 +38,23 @@
         "arn:aws:s3:::video-analysis-app-676206912644",
         "arn:aws:s3:::video-analysis-app-676206912644/*"
       ]
+    },
+    {
+      "Sid": "BedrockBatchInference",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:CreateModelInvocationJob",
+        "bedrock:GetModelInvocationJob",
+        "bedrock:ListModelInvocationJobs",
+        "bedrock:StopModelInvocationJob"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IAMPassRoleForBatch",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::123456789012:role/BedrockBatchRole"
     }
   ]
 }

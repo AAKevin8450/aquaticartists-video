@@ -274,3 +274,13 @@ input[type="file"]::-webkit-file-upload-button:hover {
 .cursor-pointer {
     cursor: pointer;
 }
+
+/* Nova dashboard */
+.nova-chapter-card {
+    border-left: 4px solid #20c997;
+    background: #f8fbff;
+}
+
+#novaSummaryContent {
+    white-space: pre-wrap;
+}

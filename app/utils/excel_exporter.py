@@ -25,8 +25,14 @@ def export_to_excel(job_data):
     _create_summary_sheet(ws_summary, job_data)
 
     # Create Data sheet based on analysis type
-    ws_data = wb.create_sheet("Data")
-    _create_data_sheet(ws_data, job_data)
+    analysis_type = job_data.get('analysis_type', '')
+    if analysis_type == 'nova':
+        ws_chapters = wb.create_sheet("Chapters")
+        _format_nova_chapters(ws_chapters, job_data.get('results', {}))
+        _create_nova_element_sheets(wb, job_data.get('results', {}))
+    else:
+        ws_data = wb.create_sheet("Data")
+        _create_data_sheet(ws_data, job_data)
 
     # Save to BytesIO
     excel_file = BytesIO()
@@ -69,6 +75,43 @@ def _create_summary_sheet(ws, job_data):
         ws[f'A{row}'] = "Total Results:"
         ws[f'A{row}'].font = Font(bold=True)
         ws[f'B{row}'] = len(results)
+        row += 1
+
+    if job_data.get('analysis_type') == 'nova' and isinstance(results, dict):
+        totals = results.get('totals', {})
+        summary = results.get('summary', {})
+
+        ws[f'A{row}'] = "Nova Model:"
+        ws[f'A{row}'].font = Font(bold=True)
+        ws[f'B{row}'] = (results.get('model') or '').upper()
+        row += 1
+
+        ws[f'A{row}'] = "Analyses:"
+        ws[f'A{row}'].font = Font(bold=True)
+        ws[f'B{row}'] = ', '.join(results.get('analysis_types', []))
+        row += 1
+
+        ws[f'A{row}'] = "Tokens Used:"
+        ws[f'A{row}'].font = Font(bold=True)
+        ws[f'B{row}'] = totals.get('tokens_total', 0)
+        row += 1
+
+        ws[f'A{row}'] = "Cost (USD):"
+        ws[f'A{row}'].font = Font(bold=True)
+        ws[f'B{row}'] = totals.get('cost_total_usd', 0)
+        row += 1
+
+        ws[f'A{row}'] = "Processing Time (s):"
+        ws[f'A{row}'].font = Font(bold=True)
+        ws[f'B{row}'] = totals.get('processing_time_seconds', 0)
+        row += 2
+
+        if summary:
+            ws[f'A{row}'] = "Summary:"
+            ws[f'A{row}'].font = Font(bold=True)
+            ws[f'B{row}'] = summary.get('text', '')
+            ws[f'B{row}'].alignment = Alignment(wrap_text=True)
+            row += 1
 
     # Auto-size columns
     ws.column_dimensions['A'].width = 20
@@ -101,6 +144,112 @@ def _create_data_sheet(ws, job_data):
         _format_segmentation(ws, results)
     else:
         _format_generic_results(ws, results)
+
+
+def _format_nova_chapters(ws, results):
+    """Format Nova chapter detection results."""
+    chapters_result = results.get('chapters', {}) if isinstance(results, dict) else {}
+    chapters = chapters_result.get('chapters', [])
+
+    if not chapters:
+        ws['A1'] = "No chapters available"
+        return
+
+    headers = ["Index", "Title", "Start Time", "End Time", "Duration", "Summary", "Key Points"]
+    _write_header_row(ws, headers)
+
+    row = 2
+    for chapter in chapters:
+        ws[f'A{row}'] = chapter.get('index', '')
+        ws[f'B{row}'] = chapter.get('title', '')
+        ws[f'C{row}'] = chapter.get('start_time', '')
+        ws[f'D{row}'] = chapter.get('end_time', '')
+        ws[f'E{row}'] = chapter.get('duration', '')
+        ws[f'F{row}'] = chapter.get('summary', '')
+        ws[f'G{row}'] = ', '.join(chapter.get('key_points', []))
+        row += 1
+
+    _auto_size_columns(ws, headers)
+
+
+def _create_nova_element_sheets(wb, results):
+    """Create Nova element sheets for equipment, topics, and speakers."""
+    elements = results.get('elements', {}) if isinstance(results, dict) else {}
+
+    ws_equipment = wb.create_sheet("Equipment")
+    _format_nova_equipment(ws_equipment, elements.get('equipment', []))
+
+    ws_topics = wb.create_sheet("Topics")
+    _format_nova_topics(ws_topics, elements.get('topics_discussed', []))
+
+    ws_speakers = wb.create_sheet("Speakers")
+    _format_nova_speakers(ws_speakers, elements.get('speakers', []), elements.get('people', {}))
+
+
+def _format_nova_equipment(ws, equipment):
+    """Format Nova equipment results."""
+    if not equipment:
+        ws['A1'] = "No equipment detected"
+        return
+
+    headers = ["Name", "Category", "Time Ranges", "Discussed", "Confidence"]
+    _write_header_row(ws, headers)
+
+    row = 2
+    for item in equipment:
+        ws[f'A{row}'] = item.get('name', '')
+        ws[f'B{row}'] = item.get('category', '')
+        ws[f'C{row}'] = ', '.join(item.get('time_ranges', []))
+        ws[f'D{row}'] = 'Yes' if item.get('discussed') else 'No'
+        ws[f'E{row}'] = item.get('confidence', '')
+        row += 1
+
+    _auto_size_columns(ws, headers)
+
+
+def _format_nova_topics(ws, topics):
+    """Format Nova topics results."""
+    if not topics:
+        ws['A1'] = "No topics detected"
+        return
+
+    headers = ["Topic", "Importance", "Time Ranges", "Keywords", "Description"]
+    _write_header_row(ws, headers)
+
+    row = 2
+    for topic in topics:
+        ws[f'A{row}'] = topic.get('topic', '')
+        ws[f'B{row}'] = topic.get('importance', '')
+        ws[f'C{row}'] = ', '.join(topic.get('time_ranges', []))
+        ws[f'D{row}'] = ', '.join(topic.get('keywords', []))
+        ws[f'E{row}'] = topic.get('description', '')
+        row += 1
+
+    _auto_size_columns(ws, headers)
+
+
+def _format_nova_speakers(ws, speakers, people):
+    """Format Nova speakers results."""
+    headers = ["Speaker ID", "Role", "Speaking %", "Time Ranges"]
+    _write_header_row(ws, headers)
+
+    row = 2
+    for speaker in speakers:
+        ws[f'A{row}'] = speaker.get('speaker_id', '')
+        ws[f'B{row}'] = speaker.get('role', '')
+        ws[f'C{row}'] = speaker.get('speaking_percentage', '')
+        ws[f'D{row}'] = ', '.join(speaker.get('time_ranges', []))
+        row += 1
+
+    if not speakers:
+        ws[f'A{row}'] = "No speakers detected"
+
+    ws[f'F1'] = "People Summary"
+    ws[f'F1'].font = Font(bold=True)
+    ws[f'F2'] = f"Max Count: {people.get('max_count', 'n/a')}"
+    ws[f'F3'] = f"Multiple Speakers: {people.get('multiple_speakers', False)}"
+
+    _auto_size_columns(ws, headers)
 
 
 def _format_label_detection(ws, results):

@@ -26,7 +26,7 @@ export async function initDashboard(jobId) {
         jobData = await response.json();
 
         // Check if job is completed
-        if (jobData.status !== 'SUCCEEDED') {
+        if (jobData.status !== 'SUCCEEDED' && jobData.status !== 'COMPLETED') {
             showError(`Job status: ${jobData.status}. Dashboard only available for completed jobs.`);
             return;
         }

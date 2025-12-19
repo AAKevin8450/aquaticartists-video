@@ -46,6 +46,7 @@
                             <option value="shot_segmentation">Shot Segmentation</option>
                             <option value="ppe_detection">PPE Detection</option>
                             <option value="face_comparison">Face Comparison</option>
+                            <option value="nova">Nova Understanding</option>
                         </select>
                     </div>
                     <div class="col-md-3">
@@ -84,6 +85,7 @@
                                     <th>File</th>
                                     <th>Analysis Type</th>
                                     <th>Status</th>
+                                    <th>Nova Status</th>
                                     <th>Created</th>
                                     <th>Updated</th>
                                     <th>Actions</th>
@@ -96,14 +98,21 @@
                                     <td>{{ job.file_id }}</td>
                                     <td>{{ job.analysis_type_display or job.analysis_type }}</td>
                                     <td>
-                                        <span class="badge {% if job.status == 'SUCCEEDED' %}bg-success{% elif job.status == 'FAILED' %}bg-danger{% elif job.status == 'IN_PROGRESS' or job.status == 'SUBMITTED' %}bg-warning{% else %}bg-secondary{% endif %}">
+                                        <span class="badge {% if job.status == 'SUCCEEDED' or job.status == 'COMPLETED' %}bg-success{% elif job.status == 'FAILED' %}bg-danger{% elif job.status == 'IN_PROGRESS' or job.status == 'SUBMITTED' %}bg-warning{% else %}bg-secondary{% endif %}">
                                             {{ job.status }}
                                         </span>
+                                    </td>
+                                    <td>
+                                        {% if job.analysis_type == 'nova' %}
+                                            <span class="badge bg-info">Nova</span>
+                                        {% else %}
+                                            <span class="text-muted">--</span>
+                                        {% endif %}
                                     </td>
                                     <td>{{ job.started_at or 'N/A' }}</td>
                                     <td>{{ job.completed_at or 'In Progress' }}</td>
                                     <td>
-                                        {% if job.status == 'SUCCEEDED' %}
+                                        {% if job.status == 'SUCCEEDED' or job.status == 'COMPLETED' %}
                                         <a href="/dashboard/{{ job.job_id }}" class="btn btn-sm btn-primary">
                                             <i class="bi bi-graph-up"></i> View
                                         </a>
@@ -124,7 +133,7 @@
                                             </ul>
                                         </div>
                                         {% elif job.status == 'IN_PROGRESS' or job.status == 'SUBMITTED' %}
-                                        <button class="btn btn-sm btn-warning check-status-btn" data-job-id="{{ job.job_id }}">
+                                        <button class="btn btn-sm btn-warning check-status-btn" data-job-id="{{ job.job_id }}" data-analysis-type="{{ job.analysis_type }}" data-nova-job-id="{{ job.nova_job_id or '' }}">
                                             <i class="bi bi-arrow-clockwise"></i> Check
                                         </button>
                                         {% endif %}
@@ -223,8 +232,11 @@
 
         document.querySelectorAll('.check-status-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
-                const jobId = e.target.closest('button').dataset.jobId;
-                await checkJobStatus(jobId);
+                const button = e.target.closest('button');
+                const jobId = button.dataset.jobId;
+                const analysisType = button.dataset.analysisType;
+                const novaJobId = button.dataset.novaJobId;
+                await checkJobStatus({ jobId, analysisType, novaJobId });
             });
         });
 
@@ -318,18 +330,23 @@
     }
 
     // Check job status
-    async function checkJobStatus(jobId) {
+    async function checkJobStatus(jobInfo) {
         try {
-            const response = await fetch(`/api/video/job/${jobId}/status`);
+            let response;
+            if (jobInfo.analysisType === 'nova' && jobInfo.novaJobId) {
+                response = await fetch(`/api/nova/status/${jobInfo.novaJobId}`);
+            } else {
+                response = await fetch(`/api/video/job/${jobInfo.jobId}/status`);
+            }
             if (!response.ok) {
                 const error = await response.json();
                 throw new Error(error.error || 'Failed to check status');
             }
 
             const status = await response.json();
-            showAlert(`Job ${jobId} status: ${status.status}`, 'info');
+            showAlert(`Job ${jobInfo.jobId} status: ${status.status}`, 'info');
 
-            if (status.status === 'COMPLETED' || status.status === 'FAILED') {
+            if (status.status === 'COMPLETED' || status.status === 'SUCCEEDED' || status.status === 'FAILED') {
                 await loadJobs();
             }
         } catch (error) {
@@ -401,20 +418,35 @@
             return;
         }
 
+        const renderNovaStatus = (job) => {
+            if (job.nova_status) {
+                const progress = job.nova_progress_percent ?? 0;
+                const batchLabel = job.nova_batch_mode ? ` | Batch: ${job.nova_batch_status || 'IN_PROGRESS'}` : '';
+                return `
+                    <div class="small">
+                        <span class="badge bg-info">${job.nova_status}</span>
+                        <div class="text-muted">${progress}%${batchLabel}</div>
+                    </div>
+                `;
+            }
+            return '<span class="text-muted">--</span>';
+        };
+
         const tableBody = jobs.map(job => `
             <tr>
                 <td><code>${job.job_id || job.id}</code></td>
                 <td>${job.file_id}</td>
                 <td>${job.analysis_type_display || job.analysis_type}</td>
                 <td>
-                    <span class="badge ${job.status === 'SUCCEEDED' ? 'bg-success' : job.status === 'FAILED' ? 'bg-danger' : job.status === 'IN_PROGRESS' ? 'bg-warning' : 'bg-secondary'}">
+                    <span class="badge ${job.status === 'SUCCEEDED' || job.status === 'COMPLETED' ? 'bg-success' : job.status === 'FAILED' ? 'bg-danger' : job.status === 'IN_PROGRESS' || job.status === 'SUBMITTED' ? 'bg-warning' : 'bg-secondary'}">
                         ${job.status}
                     </span>
                 </td>
+                <td>${job.analysis_type === 'nova' ? renderNovaStatus(job) : '<span class="text-muted">--</span>'}</td>
                 <td>${job.started_at || 'N/A'}</td>
                 <td>${job.completed_at || 'In Progress'}</td>
                 <td>
-                    ${job.status === 'SUCCEEDED' ? `
+                    ${job.status === 'SUCCEEDED' || job.status === 'COMPLETED' ? `
                         <a href="/dashboard/${job.job_id || job.id}" class="btn btn-sm btn-primary">
                             <i class="bi bi-graph-up"></i> View
                         </a>
@@ -435,7 +467,7 @@
                             </ul>
                         </div>
                     ` : job.status === 'IN_PROGRESS' || job.status === 'SUBMITTED' ? `
-                        <button class="btn btn-sm btn-warning check-status-btn" data-job-id="${job.job_id || job.id}">
+                        <button class="btn btn-sm btn-warning check-status-btn" data-job-id="${job.job_id || job.id}" data-analysis-type="${job.analysis_type}" data-nova-job-id="${job.nova_job_id || ''}">
                             <i class="bi bi-arrow-clockwise"></i> Check
                         </button>
                     ` : ''}
@@ -455,6 +487,7 @@
                             <th>File</th>
                             <th>Analysis Type</th>
                             <th>Status</th>
+                            <th>Nova Status</th>
                             <th>Created</th>
                             <th>Updated</th>
                             <th>Actions</th>
@@ -549,11 +582,16 @@
         let anyCompleted = false;
         for (const job of runningJobs) {
             try {
-                const response = await fetch(`/api/video/job/${job.job_id || job.id}/status`);
+                let response;
+                if (job.analysis_type === 'nova' && job.nova_job_id) {
+                    response = await fetch(`/api/nova/status/${job.nova_job_id}`);
+                } else {
+                    response = await fetch(`/api/video/job/${job.job_id || job.id}/status`);
+                }
                 if (response.ok) {
                     const status = await response.json();
 
-                    if (status.status === 'SUCCEEDED' || status.status === 'FAILED') {
+                    if (status.status === 'SUCCEEDED' || status.status === 'COMPLETED' || status.status === 'FAILED') {
                         console.log(`Job ${job.job_id || job.id} completed with status: ${status.status}`);
                         anyCompleted = true;
                     }

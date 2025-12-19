@@ -1,6 +1,7 @@
 """
 AWS Nova video analysis service using Amazon Bedrock.
 Provides intelligent video comprehension including summaries, chapters, and element identification.
+Supports automatic chunking for long videos exceeding model context windows.
 """
 import os
 import json
@@ -8,7 +9,7 @@ import boto3
 import time
 import logging
 from botocore.exceptions import ClientError
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Callable
 from functools import wraps
 from datetime import datetime
 
@@ -61,7 +62,8 @@ class NovaVideoService:
             'max_video_minutes': 12,
             'price_input_per_1k': 0.035,
             'price_output_per_1k': 0.14,
-            'best_for': 'Quick summaries, batch processing'
+            'best_for': 'Quick summaries, batch processing',
+            'supports_batch': True
         },
         'lite': {
             'id': 'us.amazon.nova-lite-v1:0',
@@ -70,7 +72,8 @@ class NovaVideoService:
             'max_video_minutes': 30,
             'price_input_per_1k': 0.06,
             'price_output_per_1k': 0.24,
-            'best_for': 'General video understanding (recommended)'
+            'best_for': 'General video understanding (recommended)',
+            'supports_batch': True
         },
         'pro': {
             'id': 'us.amazon.nova-pro-v1:0',
@@ -79,7 +82,28 @@ class NovaVideoService:
             'max_video_minutes': 30,
             'price_input_per_1k': 0.80,
             'price_output_per_1k': 3.20,
-            'best_for': 'Complex reasoning, detailed analysis'
+            'best_for': 'Complex reasoning, detailed analysis',
+            'supports_batch': True
+        },
+        'pro_2_preview': {
+            'id': 'us.amazon.nova-pro-v2:0',
+            'name': 'Nova 2 Pro (Preview)',
+            'context_tokens': 300000,
+            'max_video_minutes': 30,
+            'price_input_per_1k': 0.80,
+            'price_output_per_1k': 3.20,
+            'best_for': 'Preview model for advanced reasoning',
+            'supports_batch': True
+        },
+        'omni_2_preview': {
+            'id': 'us.amazon.nova-omni-v2:0',
+            'name': 'Nova 2 Omni (Preview)',
+            'context_tokens': 300000,
+            'max_video_minutes': 30,
+            'price_input_per_1k': 2.00,
+            'price_output_per_1k': 8.00,
+            'best_for': 'Preview model for multimodal comprehension',
+            'supports_batch': True
         },
         'premier': {
             'id': 'us.amazon.nova-premier-v1:0',
@@ -88,7 +112,8 @@ class NovaVideoService:
             'max_video_minutes': 90,
             'price_input_per_1k': 2.00,  # Estimated
             'price_output_per_1k': 8.00,  # Estimated
-            'best_for': 'Enterprise critical analysis'
+            'best_for': 'Enterprise critical analysis',
+            'supports_batch': True
         }
     }
 
@@ -104,7 +129,29 @@ class NovaVideoService:
             session_kwargs['aws_secret_access_key'] = aws_secret_key
 
         self.client = boto3.client('bedrock-runtime', **session_kwargs)
+        try:
+            self.batch_client = boto3.client('bedrock', **session_kwargs)
+        except Exception as e:
+            logger.warning(f"Bedrock batch client unavailable: {e}")
+            self.batch_client = None
         self.s3_client = boto3.client('s3', **session_kwargs)
+
+        # Initialize chunker and aggregator for long video support
+        from app.services.video_chunker import VideoChunker
+        from app.services.nova_aggregator import NovaAggregator
+
+        self.chunker = VideoChunker(
+            bucket_name=bucket_name,
+            region=region,
+            aws_access_key=aws_access_key,
+            aws_secret_key=aws_secret_key
+        )
+
+        self.aggregator = NovaAggregator(
+            region=region,
+            aws_access_key=aws_access_key,
+            aws_secret_key=aws_secret_key
+        )
 
         logger.info(f"NovaVideoService initialized for bucket: {bucket_name}, region: {region}")
 
@@ -114,7 +161,9 @@ class NovaVideoService:
             raise NovaError(f"Invalid model: {model}. Choose from: {list(self.MODEL_CONFIG.keys())}")
         return self.MODEL_CONFIG[model]
 
-    def estimate_cost(self, model: str, video_duration_seconds: float, estimated_output_tokens: int = 2048) -> Dict[str, Any]:
+    def estimate_cost(self, model: str, video_duration_seconds: float,
+                      estimated_output_tokens: int = 2048,
+                      batch_mode: bool = False) -> Dict[str, Any]:
         """
         Estimate cost for video analysis.
 
@@ -135,6 +184,10 @@ class NovaVideoService:
         input_cost = (estimated_input_tokens / 1000) * config['price_input_per_1k']
         output_cost = (estimated_output_tokens / 1000) * config['price_output_per_1k']
         total_cost = input_cost + output_cost
+        if batch_mode:
+            input_cost *= 0.5
+            output_cost *= 0.5
+            total_cost *= 0.5
 
         return {
             'model': model,
@@ -145,7 +198,8 @@ class NovaVideoService:
             'output_cost_usd': round(output_cost, 4),
             'total_cost_usd': round(total_cost, 4),
             'price_per_1k_input': config['price_input_per_1k'],
-            'price_per_1k_output': config['price_output_per_1k']
+            'price_per_1k_output': config['price_output_per_1k'],
+            'batch_discount_applied': bool(batch_mode)
         }
 
     def _build_s3_uri(self, s3_key: str) -> str:
@@ -263,6 +317,404 @@ class NovaVideoService:
             'timestamp': datetime.utcnow().isoformat() + 'Z'
         }
 
+    def _build_batch_records(self, s3_key: str, analysis_types: List[str],
+                             options: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Build batch records for Nova batch inference."""
+        s3_uri = self._build_s3_uri(s3_key)
+        video_format = self._get_video_format(s3_key)
+
+        depth = options.get('summary_depth', 'standard')
+        language = options.get('language', 'auto')
+
+        prompt_map = {
+            'summary': self._get_summary_prompt(depth, language),
+            'chapters': self._get_chapters_prompt(),
+            'elements': self._get_elements_prompt()
+        }
+
+        inference_map = {
+            'summary': {'maxTokens': 2048, 'temperature': 0.3, 'topP': 0.9},
+            'chapters': {'maxTokens': 4096, 'temperature': 0.2, 'topP': 0.9},
+            'elements': {'maxTokens': 4096, 'temperature': 0.3, 'topP': 0.9}
+        }
+
+        records = []
+        for analysis_type in analysis_types:
+            prompt = prompt_map.get(analysis_type)
+            if not prompt:
+                continue
+            records.append({
+                'recordId': analysis_type,
+                'modelInput': {
+                    'messages': [
+                        {
+                            'role': 'user',
+                            'content': [
+                                {
+                                    'video': {
+                                        'format': video_format,
+                                        'source': {
+                                            's3Location': {'uri': s3_uri}
+                                        }
+                                    }
+                                },
+                                {'text': prompt}
+                            ]
+                        }
+                    ],
+                    'inferenceConfig': inference_map[analysis_type]
+                }
+            })
+
+        if not records:
+            raise NovaError("No valid analysis types provided for batch processing.")
+
+        return records
+
+    def _normalize_s3_prefix(self, prefix: str) -> str:
+        """Normalize S3 prefix by trimming separators."""
+        return prefix.strip().strip('/')
+
+    def _start_batch_job(self, job_name: str, model_id: str, role_arn: str,
+                         input_s3_uri: str, output_s3_uri: str) -> str:
+        """Start a Bedrock batch job using the available API."""
+        if not self.batch_client:
+            raise NovaError("Bedrock batch client not available. Update boto3 to a version that supports batch inference.")
+        if hasattr(self.batch_client, 'create_model_invocation_job'):
+            response = self.batch_client.create_model_invocation_job(
+                jobName=job_name,
+                modelId=model_id,
+                roleArn=role_arn,
+                inputDataConfig={
+                    's3InputDataConfig': {'s3Uri': input_s3_uri},
+                    's3InputFormat': 'JSONL'
+                },
+                outputDataConfig={
+                    's3OutputDataConfig': {'s3Uri': output_s3_uri},
+                    's3OutputFormat': 'JSONL'
+                }
+            )
+        elif hasattr(self.batch_client, 'start_batch_inference_job'):
+            response = self.batch_client.start_batch_inference_job(
+                jobName=job_name,
+                modelId=model_id,
+                roleArn=role_arn,
+                inputDataConfig={
+                    's3InputDataConfig': {'s3Uri': input_s3_uri},
+                    's3InputFormat': 'JSONL'
+                },
+                outputDataConfig={
+                    's3OutputDataConfig': {'s3Uri': output_s3_uri},
+                    's3OutputFormat': 'JSONL'
+                }
+            )
+        else:
+            raise NovaError("Bedrock batch inference API not available in this boto3 version.")
+
+        return (response.get('jobArn')
+                or response.get('jobIdentifier')
+                or response.get('batchJobArn')
+                or response.get('jobId'))
+
+    def _get_batch_job(self, job_identifier: str) -> Dict[str, Any]:
+        """Fetch batch job status from Bedrock."""
+        if not self.batch_client:
+            raise NovaError("Bedrock batch client not available. Update boto3 to a version that supports batch inference.")
+        if hasattr(self.batch_client, 'get_model_invocation_job'):
+            try:
+                return self.batch_client.get_model_invocation_job(jobIdentifier=job_identifier)
+            except TypeError:
+                return self.batch_client.get_model_invocation_job(jobId=job_identifier)
+        if hasattr(self.batch_client, 'get_batch_inference_job'):
+            try:
+                return self.batch_client.get_batch_inference_job(batchJobArn=job_identifier)
+            except TypeError:
+                return self.batch_client.get_batch_inference_job(jobId=job_identifier)
+        raise NovaError("Bedrock batch inference API not available in this boto3 version.")
+
+    def _extract_text_from_batch_output(self, output: Dict[str, Any]) -> Optional[str]:
+        """Extract text response from batch model output."""
+        if not isinstance(output, dict):
+            return None
+        if 'output' in output and isinstance(output['output'], dict):
+            message = output['output'].get('message')
+            if message and message.get('content'):
+                return message['content'][0].get('text')
+        if 'message' in output and isinstance(output['message'], dict):
+            content = output['message'].get('content', [])
+            if content:
+                return content[0].get('text')
+        if 'text' in output:
+            return output.get('text')
+        return None
+
+    def _extract_usage_from_batch_output(self, output: Dict[str, Any]) -> Dict[str, int]:
+        """Extract token usage from batch output if present."""
+        usage = output.get('usage', {}) if isinstance(output, dict) else {}
+        input_tokens = usage.get('inputTokens') or usage.get('input_tokens') or 0
+        output_tokens = usage.get('outputTokens') or usage.get('output_tokens') or 0
+        total_tokens = usage.get('totalTokens') or usage.get('total_tokens') or (input_tokens + output_tokens)
+        return {
+            'input_tokens': int(input_tokens or 0),
+            'output_tokens': int(output_tokens or 0),
+            'total_tokens': int(total_tokens or 0)
+        }
+
+    def _calculate_cost(self, model: str, input_tokens: int, output_tokens: int,
+                        batch_mode: bool) -> float:
+        """Calculate cost from token usage."""
+        config = self.get_model_config(model)
+        cost = (input_tokens / 1000) * config['price_input_per_1k'] + (
+            output_tokens / 1000) * config['price_output_per_1k']
+        if batch_mode:
+            cost *= 0.5
+        return round(cost, 4)
+
+    @handle_bedrock_errors
+    def start_batch_analysis(self, s3_key: str, model: str,
+                             analysis_types: List[str],
+                             options: Dict[str, Any],
+                             role_arn: str,
+                             input_prefix: str,
+                             output_prefix: str,
+                             job_name: str) -> Dict[str, Any]:
+        """Submit a Nova batch inference job."""
+        if not role_arn:
+            raise NovaError("BEDROCK_BATCH_ROLE_ARN is required for batch processing.")
+
+        config = self.get_model_config(model)
+        records = self._build_batch_records(s3_key, analysis_types, options)
+
+        input_prefix = self._normalize_s3_prefix(input_prefix)
+        output_prefix = self._normalize_s3_prefix(output_prefix)
+
+        input_key = f"{input_prefix}/{job_name}.jsonl"
+        output_prefix_key = f"{output_prefix}/{job_name}/"
+
+        jsonl_body = "\n".join(json.dumps(record) for record in records)
+        self.s3_client.put_object(
+            Bucket=self.bucket_name,
+            Key=input_key,
+            Body=jsonl_body.encode('utf-8'),
+            ContentType='application/json'
+        )
+
+        job_arn = self._start_batch_job(
+            job_name=job_name,
+            model_id=config['id'],
+            role_arn=role_arn,
+            input_s3_uri=self._build_s3_uri(input_key),
+            output_s3_uri=self._build_s3_uri(output_prefix_key)
+        )
+
+        return {
+            'batch_job_arn': job_arn,
+            'batch_input_s3_key': input_key,
+            'batch_output_s3_prefix': output_prefix_key
+        }
+
+    @handle_bedrock_errors
+    def get_batch_job_status(self, batch_job_arn: str) -> Dict[str, Any]:
+        """Get current batch job status."""
+        response = self._get_batch_job(batch_job_arn)
+        status = response.get('status') or response.get('jobStatus') or response.get('batchStatus')
+        failure_message = response.get('failureMessage') or response.get('message')
+        return {
+            'status': status,
+            'failure_message': failure_message,
+            'raw': response
+        }
+
+    def fetch_batch_results(self, s3_prefix: str, model: str,
+                            analysis_types: List[str],
+                            options: Dict[str, Any]) -> Dict[str, Any]:
+        """Fetch and parse batch results from S3."""
+        results = {
+            'model': model,
+            'analysis_types': analysis_types,
+            'options': options,
+            'chunked': False,
+            'processing_mode': 'batch'
+        }
+
+        total_tokens = 0
+        total_cost = 0.0
+
+        prefix = self._normalize_s3_prefix(s3_prefix)
+        response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=prefix)
+        objects = response.get('Contents', [])
+
+        lines = []
+        for obj in objects:
+            key = obj['Key']
+            if not key.endswith('.jsonl'):
+                continue
+            obj_data = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
+            body = obj_data['Body'].read().decode('utf-8')
+            lines.extend([line for line in body.splitlines() if line.strip()])
+
+        record_outputs = {}
+        for line in lines:
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            record_id = payload.get('recordId') or payload.get('record_id')
+            output = payload.get('modelOutput') or payload.get('output') or payload.get('response') or {}
+            record_outputs[record_id] = output
+
+        if 'summary' in analysis_types and 'summary' in record_outputs:
+            output = record_outputs['summary']
+            summary_text = self._extract_text_from_batch_output(output) or ''
+            usage = self._extract_usage_from_batch_output(output)
+            summary_result = {
+                'text': summary_text,
+                'depth': options.get('summary_depth', 'standard'),
+                'language': options.get('language', 'auto'),
+                'word_count': len(summary_text.split()),
+                'generated_at': datetime.utcnow().isoformat(),
+                'model_used': model,
+                'model_id': self.get_model_config(model)['id'],
+                'tokens_used': usage['total_tokens'],
+                'tokens_input': usage['input_tokens'],
+                'tokens_output': usage['output_tokens'],
+                'cost_usd': self._calculate_cost(model, usage['input_tokens'], usage['output_tokens'], True),
+                'processing_time_seconds': 0.0
+            }
+            results['summary'] = summary_result
+            total_tokens += usage['total_tokens']
+            total_cost += summary_result['cost_usd']
+
+        if 'chapters' in analysis_types and 'chapters' in record_outputs:
+            output = record_outputs['chapters']
+            chapters_text = self._extract_text_from_batch_output(output) or '{}'
+            try:
+                parsed = self._parse_json_response(chapters_text)
+            except NovaError:
+                parsed = {}
+            chapters = parsed.get('chapters', [])
+            for chapter in chapters:
+                start_time = chapter.get('start_time')
+                end_time = chapter.get('end_time')
+                start_seconds = self._parse_timecode_to_seconds(start_time)
+                end_seconds = self._parse_timecode_to_seconds(end_time)
+                if end_seconds < start_seconds:
+                    end_seconds = start_seconds
+                chapter['start_seconds'] = start_seconds
+                chapter['end_seconds'] = end_seconds
+                duration_seconds = end_seconds - start_seconds
+                chapter['duration_seconds'] = duration_seconds
+                if duration_seconds >= 3600:
+                    hours = duration_seconds // 3600
+                    minutes = (duration_seconds % 3600) // 60
+                    seconds = duration_seconds % 60
+                    chapter['duration'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                else:
+                    chapter['duration'] = f"{duration_seconds // 60:02d}:{duration_seconds % 60:02d}"
+
+            usage = self._extract_usage_from_batch_output(output)
+            chapters_result = {
+                'chapters': chapters,
+                'total_chapters': len(chapters),
+                'detection_method': 'semantic_segmentation',
+                'model_used': model,
+                'model_id': self.get_model_config(model)['id'],
+                'tokens_used': usage['total_tokens'],
+                'cost_usd': self._calculate_cost(model, usage['input_tokens'], usage['output_tokens'], True),
+                'processing_time_seconds': 0.0,
+                'generated_at': datetime.utcnow().isoformat()
+            }
+            results['chapters'] = chapters_result
+            total_tokens += usage['total_tokens']
+            total_cost += chapters_result['cost_usd']
+
+        if 'elements' in analysis_types and 'elements' in record_outputs:
+            output = record_outputs['elements']
+            elements_text = self._extract_text_from_batch_output(output) or '{}'
+            try:
+                parsed = self._parse_json_response(elements_text)
+            except NovaError:
+                parsed = {}
+
+            equipment = parsed.get('equipment', [])
+            topics_discussed = parsed.get('topics_discussed', [])
+            people = parsed.get('people', {'max_count': 0, 'multiple_speakers': False})
+            speakers = parsed.get('speakers', [])
+
+            for equip in equipment:
+                equip['time_ranges'] = self._ensure_list(equip.get('time_ranges'))
+                equip['time_ranges_parsed'] = self._parse_time_ranges(equip['time_ranges'])
+                equip['discussed'] = bool(equip.get('discussed', False))
+                if 'confidence' not in equip:
+                    equip['confidence'] = 'medium'
+
+            for topic in topics_discussed:
+                topic['time_ranges'] = self._ensure_list(topic.get('time_ranges'))
+                topic['time_ranges_parsed'] = self._parse_time_ranges(topic['time_ranges'])
+                if 'importance' not in topic:
+                    topic['importance'] = 'medium'
+                topic['keywords'] = self._ensure_list(topic.get('keywords'))
+
+            for speaker in speakers:
+                speaker['time_ranges'] = self._ensure_list(speaker.get('time_ranges'))
+                speaker['time_ranges_parsed'] = self._parse_time_ranges(speaker['time_ranges'])
+                if 'speaking_percentage' in speaker:
+                    try:
+                        speaker['speaking_percentage'] = float(speaker['speaking_percentage'])
+                    except (TypeError, ValueError):
+                        speaker['speaking_percentage'] = None
+
+            if speakers and not people.get('multiple_speakers'):
+                people['multiple_speakers'] = len(speakers) > 1
+
+            topics_summary = []
+            for topic in topics_discussed:
+                name = str(topic.get('topic', '')).strip()
+                if not name:
+                    continue
+                topics_summary.append({
+                    'topic': name,
+                    'importance': topic.get('importance', 'medium'),
+                    'time_range_count': len(topic.get('time_ranges', []))
+                })
+
+            usage = self._extract_usage_from_batch_output(output)
+            elements_result = {
+                'equipment': equipment,
+                'topics_discussed': topics_discussed,
+                'topics_summary': topics_summary,
+                'people': people,
+                'speakers': speakers,
+                'model_used': model,
+                'model_id': self.get_model_config(model)['id'],
+                'tokens_used': usage['total_tokens'],
+                'cost_usd': self._calculate_cost(model, usage['input_tokens'], usage['output_tokens'], True),
+                'processing_time_seconds': 0.0,
+                'generated_at': datetime.utcnow().isoformat()
+            }
+            results['elements'] = elements_result
+            total_tokens += usage['total_tokens']
+            total_cost += elements_result['cost_usd']
+
+        results['totals'] = {
+            'tokens_total': total_tokens,
+            'cost_total_usd': round(total_cost, 4),
+            'processing_time_seconds': 0.0,
+            'analyses_completed': len([t for t in analysis_types if t in results])
+        }
+
+        if results['totals']['cost_total_usd'] == 0 and options.get('estimated_duration_seconds'):
+            estimate = self.estimate_cost(
+                model=model,
+                video_duration_seconds=options['estimated_duration_seconds'],
+                batch_mode=True
+            )
+            results['totals']['cost_total_usd'] = round(
+                estimate['total_cost_usd'] * len(analysis_types), 4
+            )
+
+        return results
+
     def _parse_json_response(self, text: str) -> Dict[str, Any]:
         """
         Parse JSON from Nova response, handling markdown code fences.
@@ -287,25 +739,83 @@ class NovaVideoService:
             logger.error(f"Response text: {text[:500]}")
             raise NovaError(f"Failed to parse Nova response as JSON: {e}")
 
-    # ============================================================================
-    # ANALYSIS METHODS
-    # ============================================================================
+    def _parse_timecode_to_seconds(self, timecode: str) -> int:
+        """Parse MM:SS or HH:MM:SS timecode into seconds."""
+        if not timecode:
+            return 0
 
-    def generate_summary(self, s3_key: str, model: str = 'lite',
-                        depth: str = 'standard', language: str = 'auto') -> Dict[str, Any]:
-        """
-        Generate video summary using Nova.
+        import re
 
-        Args:
-            s3_key: S3 key of the video
-            model: Nova model ('micro', 'lite', 'pro', 'premier')
-            depth: Summary depth ('brief', 'standard', 'detailed')
-            language: Target language ('auto' or ISO code like 'en', 'es')
+        cleaned = re.sub(r'[^0-9:]', '', str(timecode).strip())
+        if not cleaned:
+            return 0
 
-        Returns:
-            Dict with summary text and metadata
-        """
-        # Build prompt based on depth
+        parts = cleaned.split(':')
+        try:
+            if len(parts) == 3:
+                hours, minutes, seconds = parts
+            elif len(parts) == 2:
+                hours = 0
+                minutes, seconds = parts
+            elif len(parts) == 1:
+                hours = 0
+                minutes = 0
+                seconds = parts[0]
+            else:
+                return 0
+
+            return int(hours) * 3600 + int(minutes) * 60 + int(seconds)
+        except ValueError:
+            return 0
+
+    def _ensure_list(self, value: Any) -> List[str]:
+        """Normalize value into a list of strings."""
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value if item]
+        if isinstance(value, str):
+            return [value]
+        return [str(value)]
+
+    def _parse_time_range(self, time_range: str) -> Optional[Dict[str, Any]]:
+        """Parse a time range string into structured fields."""
+        if not time_range:
+            return None
+
+        import re
+
+        parts = re.split(r'\s*-\s*', str(time_range).strip())
+        if len(parts) == 2:
+            start_time, end_time = parts
+        else:
+            start_time = parts[0]
+            end_time = parts[0]
+
+        start_seconds = self._parse_timecode_to_seconds(start_time)
+        end_seconds = self._parse_timecode_to_seconds(end_time)
+        if end_seconds < start_seconds:
+            end_seconds = start_seconds
+
+        return {
+            'start_time': start_time.strip(),
+            'end_time': end_time.strip(),
+            'start_seconds': start_seconds,
+            'end_seconds': end_seconds,
+            'duration_seconds': end_seconds - start_seconds
+        }
+
+    def _parse_time_ranges(self, time_ranges: List[str]) -> List[Dict[str, Any]]:
+        """Parse a list of time range strings into structured fields."""
+        parsed = []
+        for time_range in time_ranges:
+            parsed_range = self._parse_time_range(time_range)
+            if parsed_range:
+                parsed.append(parsed_range)
+        return parsed
+
+    def _get_summary_prompt(self, depth: str, language: str) -> str:
+        """Build summary prompt based on depth and language."""
         prompts = {
             'brief': """Analyze this video and provide a concise 2-3 sentence summary of the main content and purpose.
 Focus on what the video is about and its primary objective. Keep it under 50 words.""",
@@ -334,6 +844,124 @@ Include specific examples and timestamps where relevant."""
 
         if language != 'auto':
             prompt += f"\n\nProvide the summary in {language} language."
+
+        return prompt
+
+    def _get_chapters_prompt(self) -> str:
+        """Build chapter detection prompt."""
+        return """Analyze this video and identify logical chapters based on content transitions and topic changes.
+
+For each chapter, provide:
+1. A descriptive title (3-8 words) that clearly indicates the chapter's content
+2. Start timestamp (MM:SS or HH:MM:SS if duration exceeds 59:59)
+3. End timestamp (MM:SS or HH:MM:SS if duration exceeds 59:59)
+4. A brief summary (2-3 sentences) of what happens in that chapter
+5. Key points covered (bullet list, 2-5 points)
+
+Return the results in this exact JSON format:
+{
+  "chapters": [
+    {
+      "index": 1,
+      "title": "...",
+      "start_time": "00:00",
+      "end_time": "03:00",
+      "summary": "...",
+      "key_points": ["point1", "point2"]
+    }
+  ]
+}
+
+Create chapters that align with natural content divisions. Aim for chapters between 2-10 minutes in length where appropriate.
+Use contiguous chapters that cover the full video without gaps when possible.
+Do NOT include any text outside the JSON structure."""
+
+    def _get_elements_prompt(self) -> str:
+        """Build element identification prompt."""
+        return """Analyze this video and identify:
+
+1. EQUIPMENT/TOOLS: All visible equipment, tools, and devices
+   For each item provide:
+   - Name (be specific - include brand/model if visible)
+   - Category (e.g., photography, computing, tools, kitchen, sports)
+   - Time ranges when visible (format: "MM:SS-MM:SS" or single "MM:SS" if brief)
+   - Whether it's discussed in audio (true/false)
+   - Confidence (high/medium/low)
+
+2. TOPICS DISCUSSED: Main topics covered in the video
+   For each topic provide:
+   - Topic name
+   - Time ranges when discussed (format: "MM:SS-MM:SS")
+   - Importance (high/medium/low)
+   - Brief description (1 sentence)
+   - Keywords (3-8 terms)
+
+3. PEOPLE: Count of people visible
+   - Maximum number of people visible at once
+   - Whether there are multiple speakers (true/false)
+
+4. SPEAKER DIARIZATION: If multiple speakers are present
+   For each speaker provide:
+   - Speaker ID (e.g., Speaker_1, Speaker_2)
+   - Role (host, instructor, interviewer, guest, etc.)
+   - Approximate time ranges when speaking
+   - Speaking percentage (0-100)
+
+Return as JSON:
+{
+  "equipment": [
+    {
+      "name": "...",
+      "category": "...",
+      "time_ranges": ["MM:SS-MM:SS"],
+      "discussed": true,
+      "confidence": "high"
+    }
+  ],
+  "topics_discussed": [
+    {
+      "topic": "...",
+      "time_ranges": ["MM:SS-MM:SS"],
+      "importance": "high",
+      "description": "...",
+      "keywords": ["..."]
+    }
+  ],
+  "people": {
+    "max_count": 2,
+    "multiple_speakers": true
+  },
+  "speakers": [
+    {
+      "speaker_id": "Speaker_1",
+      "role": "...",
+      "time_ranges": ["MM:SS-MM:SS"],
+      "speaking_percentage": 65
+    }
+  ]
+}
+
+Do NOT include any text outside the JSON structure."""
+
+    # ============================================================================
+    # ANALYSIS METHODS
+    # ============================================================================
+
+    def generate_summary(self, s3_key: str, model: str = 'lite',
+                        depth: str = 'standard', language: str = 'auto') -> Dict[str, Any]:
+        """
+        Generate video summary using Nova.
+
+        Args:
+            s3_key: S3 key of the video
+            model: Nova model ('micro', 'lite', 'pro', 'premier')
+            depth: Summary depth ('brief', 'standard', 'detailed')
+            language: Target language ('auto' or ISO code like 'en', 'es')
+
+        Returns:
+            Dict with summary text and metadata
+        """
+        prompt = self._get_summary_prompt(depth, language)
 
         # Invoke Nova
         response = self._invoke_nova(s3_key, model, prompt, max_tokens=2048, temperature=0.3)
@@ -367,31 +995,7 @@ Include specific examples and timestamps where relevant."""
         Returns:
             Dict with chapters array and metadata
         """
-        prompt = """Analyze this video and identify logical chapters based on content transitions and topic changes.
-
-For each chapter, provide:
-1. A descriptive title (3-8 words) that clearly indicates the chapter's content
-2. Start timestamp in MM:SS format
-3. End timestamp in MM:SS format
-4. A brief summary (2-3 sentences) of what happens in that chapter
-5. Key points covered (bullet list, 2-5 points)
-
-Return the results in this exact JSON format:
-{
-  "chapters": [
-    {
-      "index": 1,
-      "title": "...",
-      "start_time": "00:00",
-      "end_time": "03:00",
-      "summary": "...",
-      "key_points": ["point1", "point2"]
-    }
-  ]
-}
-
-Create chapters that align with natural content divisions. Aim for chapters between 2-10 minutes in length where appropriate.
-Do NOT include any text outside the JSON structure."""
+        prompt = self._get_chapters_prompt()
 
         # Invoke Nova
         response = self._invoke_nova(s3_key, model, prompt, max_tokens=4096, temperature=0.2)
@@ -402,17 +1006,25 @@ Do NOT include any text outside the JSON structure."""
 
         # Enhance chapters with computed fields
         for chapter in chapters:
-            # Convert MM:SS to seconds
-            start_parts = chapter['start_time'].split(':')
-            end_parts = chapter['end_time'].split(':')
+            start_time = chapter.get('start_time')
+            end_time = chapter.get('end_time')
 
-            start_seconds = int(start_parts[0]) * 60 + int(start_parts[1])
-            end_seconds = int(end_parts[0]) * 60 + int(end_parts[1])
+            start_seconds = self._parse_timecode_to_seconds(start_time)
+            end_seconds = self._parse_timecode_to_seconds(end_time)
+            if end_seconds < start_seconds:
+                end_seconds = start_seconds
 
             chapter['start_seconds'] = start_seconds
             chapter['end_seconds'] = end_seconds
-            chapter['duration_seconds'] = end_seconds - start_seconds
-            chapter['duration'] = f"{(end_seconds - start_seconds) // 60:02d}:{(end_seconds - start_seconds) % 60:02d}"
+            duration_seconds = end_seconds - start_seconds
+            chapter['duration_seconds'] = duration_seconds
+            if duration_seconds >= 3600:
+                hours = duration_seconds // 3600
+                minutes = (duration_seconds % 3600) // 60
+                seconds = duration_seconds % 60
+                chapter['duration'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                chapter['duration'] = f"{duration_seconds // 60:02d}:{duration_seconds % 60:02d}"
 
         # Build result
         chapters_result = {
@@ -440,51 +1052,7 @@ Do NOT include any text outside the JSON structure."""
         Returns:
             Dict with equipment, topics, and people information
         """
-        prompt = """Analyze this video and identify:
-
-1. EQUIPMENT/TOOLS: All visible equipment, tools, and devices
-   For each item provide:
-   - Name (be specific - include brand/model if visible)
-   - Category (e.g., photography, computing, tools, kitchen, sports)
-   - Time ranges when visible (format: "MM:SS-MM:SS" or single "MM:SS" if brief)
-   - Whether it's discussed in audio (true/false)
-
-2. TOPICS DISCUSSED: Main topics covered in the video
-   For each topic provide:
-   - Topic name
-   - Time ranges when discussed (format: "MM:SS-MM:SS")
-   - Importance (high/medium/low)
-   - Brief description (1 sentence)
-
-3. PEOPLE: Count of people visible
-   - Maximum number of people visible at once
-   - Whether there are multiple speakers (true/false)
-
-Return as JSON:
-{
-  "equipment": [
-    {
-      "name": "...",
-      "category": "...",
-      "time_ranges": ["MM:SS-MM:SS"],
-      "discussed": true
-    }
-  ],
-  "topics_discussed": [
-    {
-      "topic": "...",
-      "time_ranges": ["MM:SS-MM:SS"],
-      "importance": "high",
-      "description": "..."
-    }
-  ],
-  "people": {
-    "max_count": 2,
-    "multiple_speakers": true
-  }
-}
-
-Do NOT include any text outside the JSON structure."""
+        prompt = self._get_elements_prompt()
 
         # Invoke Nova
         response = self._invoke_nova(s3_key, model, prompt, max_tokens=4096, temperature=0.3)
@@ -492,11 +1060,55 @@ Do NOT include any text outside the JSON structure."""
         # Parse JSON response
         parsed = self._parse_json_response(response['text'])
 
+        equipment = parsed.get('equipment', [])
+        topics_discussed = parsed.get('topics_discussed', [])
+        people = parsed.get('people', {'max_count': 0, 'multiple_speakers': False})
+        speakers = parsed.get('speakers', [])
+
+        for equip in equipment:
+            equip['time_ranges'] = self._ensure_list(equip.get('time_ranges'))
+            equip['time_ranges_parsed'] = self._parse_time_ranges(equip['time_ranges'])
+            equip['discussed'] = bool(equip.get('discussed', False))
+            if 'confidence' not in equip:
+                equip['confidence'] = 'medium'
+
+        for topic in topics_discussed:
+            topic['time_ranges'] = self._ensure_list(topic.get('time_ranges'))
+            topic['time_ranges_parsed'] = self._parse_time_ranges(topic['time_ranges'])
+            if 'importance' not in topic:
+                topic['importance'] = 'medium'
+            topic['keywords'] = self._ensure_list(topic.get('keywords'))
+
+        for speaker in speakers:
+            speaker['time_ranges'] = self._ensure_list(speaker.get('time_ranges'))
+            speaker['time_ranges_parsed'] = self._parse_time_ranges(speaker['time_ranges'])
+            if 'speaking_percentage' in speaker:
+                try:
+                    speaker['speaking_percentage'] = float(speaker['speaking_percentage'])
+                except (TypeError, ValueError):
+                    speaker['speaking_percentage'] = None
+
+        if speakers and not people.get('multiple_speakers'):
+            people['multiple_speakers'] = len(speakers) > 1
+
+        topics_summary = []
+        for topic in topics_discussed:
+            name = str(topic.get('topic', '')).strip()
+            if not name:
+                continue
+            topics_summary.append({
+                'topic': name,
+                'importance': topic.get('importance', 'medium'),
+                'time_range_count': len(topic.get('time_ranges', []))
+            })
+
         # Build result
         elements_result = {
-            'equipment': parsed.get('equipment', []),
-            'topics_discussed': parsed.get('topics_discussed', []),
-            'people': parsed.get('people', {'max_count': 0, 'multiple_speakers': False}),
+            'equipment': equipment,
+            'topics_discussed': topics_discussed,
+            'topics_summary': topics_summary,
+            'people': people,
+            'speakers': speakers,
             'model_used': model,
             'model_id': response['model_id'],
             'tokens_used': response['tokens_total'],
@@ -509,15 +1121,18 @@ Do NOT include any text outside the JSON structure."""
 
     def analyze_video(self, s3_key: str, model: str = 'lite',
                      analysis_types: List[str] = None,
-                     options: Dict[str, Any] = None) -> Dict[str, Any]:
+                     options: Dict[str, Any] = None,
+                     progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]:
         """
         Comprehensive video analysis with multiple analysis types.
+        Automatically handles chunking for long videos exceeding model context windows.
 
         Args:
             s3_key: S3 key of the video
             model: Nova model to use
             analysis_types: List of analysis types: ['summary', 'chapters', 'elements']
             options: Dict with options like {'summary_depth': 'standard', 'language': 'auto'}
+            progress_callback: Optional callback function(current_chunk, total_chunks, status_message)
 
         Returns:
             Dict with all requested analyses and combined metadata
@@ -528,11 +1143,36 @@ Do NOT include any text outside the JSON structure."""
         if options is None:
             options = {}
 
+        # Get video metadata to determine if chunking is needed
+        try:
+            metadata = self.chunker.get_video_metadata(s3_key)
+            video_duration = metadata['duration_seconds']
+        except Exception as e:
+            logger.warning(f"Failed to get video metadata, assuming short video: {e}")
+            video_duration = 300  # Default to 5 minutes
+
+        # Check if chunking is needed
+        if self.chunker.needs_chunking(video_duration, model):
+            logger.info(f"Video duration {video_duration}s exceeds model {model} limit, using chunking")
+            return self.analyze_video_chunked(
+                s3_key=s3_key,
+                model=model,
+                analysis_types=analysis_types,
+                options=options,
+                video_duration=video_duration,
+                progress_callback=progress_callback
+            )
+
+        # Single-chunk analysis (original implementation)
+        logger.info(f"Video duration {video_duration}s fits in single request for model {model}")
+
         results = {
             'model': model,
             'analysis_types': analysis_types,
             'options': options,
-            's3_key': s3_key
+            's3_key': s3_key,
+            'chunked': False,
+            'processing_mode': 'realtime'
         }
 
         total_tokens = 0
@@ -562,6 +1202,231 @@ Do NOT include any text outside the JSON structure."""
             total_tokens += elements_result['tokens_used']
             total_cost += elements_result['cost_usd']
             total_processing_time += elements_result['processing_time_seconds']
+
+        # Add totals
+        results['totals'] = {
+            'tokens_total': total_tokens,
+            'cost_total_usd': round(total_cost, 4),
+            'processing_time_seconds': round(total_processing_time, 2),
+            'analyses_completed': len([t for t in analysis_types if t in results])
+        }
+
+        return results
+
+    def analyze_video_chunked(
+        self,
+        s3_key: str,
+        model: str,
+        analysis_types: List[str],
+        options: Dict[str, Any],
+        video_duration: float,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyze long video using chunking strategy.
+
+        Args:
+            s3_key: S3 key of the video
+            model: Nova model to use
+            analysis_types: List of analysis types
+            options: Analysis options
+            video_duration: Video duration in seconds
+            progress_callback: Optional callback for progress updates
+
+        Returns:
+            Dict with aggregated results from all chunks
+        """
+        logger.info(f"Starting chunked analysis for {s3_key} (duration: {video_duration}s)")
+
+        # Generate chunk boundaries
+        chunks = self.chunker.generate_chunk_boundaries(video_duration, model)
+        total_chunks = len(chunks)
+
+        logger.info(f"Split video into {total_chunks} chunks")
+
+        if progress_callback:
+            progress_callback(0, total_chunks, f"Splitting video into {total_chunks} chunks")
+
+        # Process each chunk
+        chunk_results = []
+        chunk_s3_keys = []  # Track chunk files for cleanup
+
+        try:
+            for i, chunk in enumerate(chunks):
+                chunk_index = chunk['index']
+                logger.info(f"Processing chunk {chunk_index + 1}/{total_chunks}")
+
+                if progress_callback:
+                    progress_callback(
+                        chunk_index,
+                        total_chunks,
+                        f"Processing chunk {chunk_index + 1}/{total_chunks}"
+                    )
+
+                # Extract video chunk
+                chunk_s3_key = self.chunker.get_chunk_s3_key(s3_key, chunk_index)
+                self.chunker.extract_video_segment(
+                    s3_key=s3_key,
+                    start_time=chunk['overlap_start'],
+                    end_time=chunk['overlap_end'],
+                    output_s3_key=chunk_s3_key
+                )
+                chunk_s3_keys.append(chunk_s3_key)
+
+                # Analyze chunk
+                chunk_result = self._analyze_chunk(
+                    chunk_s3_key=chunk_s3_key,
+                    chunk=chunk,
+                    chunk_index=chunk_index,
+                    total_chunks=total_chunks,
+                    model=model,
+                    analysis_types=analysis_types,
+                    options=options,
+                    previous_context=chunk_results[-1] if chunk_results else None
+                )
+
+                chunk_results.append(chunk_result)
+
+            # Aggregate results
+            if progress_callback:
+                progress_callback(total_chunks, total_chunks, "Aggregating results")
+
+            logger.info("Aggregating chunk results")
+            aggregated_results = self._aggregate_chunk_results(
+                chunk_results=chunk_results,
+                model=model,
+                analysis_types=analysis_types,
+                options=options
+            )
+
+            # Add metadata
+            params = self.chunker.calculate_chunk_parameters(model, video_duration)
+            aggregated_results['chunked'] = True
+            aggregated_results['chunk_metadata'] = {
+                'total_chunks': total_chunks,
+                'chunk_duration': params['chunk_duration'],
+                'overlap_seconds': params['overlap'],
+                'video_duration': video_duration
+            }
+            aggregated_results['processing_mode'] = 'realtime'
+
+            return aggregated_results
+
+        finally:
+            # Clean up temporary chunk files
+            logger.info(f"Cleaning up {len(chunk_s3_keys)} temporary chunk files")
+            for chunk_key in chunk_s3_keys:
+                try:
+                    self.chunker.delete_chunk(chunk_key)
+                except Exception as e:
+                    logger.warning(f"Failed to delete chunk {chunk_key}: {e}")
+
+    def _analyze_chunk(
+        self,
+        chunk_s3_key: str,
+        chunk: Dict[str, Any],
+        chunk_index: int,
+        total_chunks: int,
+        model: str,
+        analysis_types: List[str],
+        options: Dict[str, Any],
+        previous_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyze a single video chunk with context preservation.
+
+        Args:
+            chunk_s3_key: S3 key of the chunk file
+            chunk: Chunk metadata dict
+            chunk_index: Current chunk index
+            total_chunks: Total number of chunks
+            model: Nova model
+            analysis_types: List of analysis types
+            options: Analysis options
+            previous_context: Results from previous chunk (for context)
+
+        Returns:
+            Dict with chunk analysis results
+        """
+        result = {
+            'chunk': chunk,
+            'chunk_index': chunk_index
+        }
+
+        # Build context from previous chunk if available
+        context_summary = None
+        if previous_context and 'summary' in previous_context:
+            summary_data = previous_context['summary']
+            if isinstance(summary_data, dict):
+                context_summary = summary_data.get('text', '')
+            else:
+                context_summary = str(summary_data)
+
+        # Run analyses on chunk
+        if 'summary' in analysis_types:
+            depth = options.get('summary_depth', 'standard')
+            language = options.get('language', 'auto')
+            result['summary'] = self.generate_summary(chunk_s3_key, model, depth, language)
+
+        if 'chapters' in analysis_types:
+            result['chapters'] = self.detect_chapters(chunk_s3_key, model)
+
+        if 'elements' in analysis_types:
+            result['elements'] = self.identify_elements(chunk_s3_key, model)
+
+        return result
+
+    def _aggregate_chunk_results(
+        self,
+        chunk_results: List[Dict[str, Any]],
+        model: str,
+        analysis_types: List[str],
+        options: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Aggregate results from multiple chunks.
+
+        Args:
+            chunk_results: List of chunk result dictionaries
+            model: Nova model used
+            analysis_types: List of analysis types
+            options: Analysis options
+
+        Returns:
+            Dict with aggregated results
+        """
+        results = {
+            'model': model,
+            'analysis_types': analysis_types,
+            'options': options
+        }
+
+        total_tokens = 0
+        total_cost = 0.0
+        total_processing_time = 0.0
+
+        # Calculate totals from chunks
+        for cr in chunk_results:
+            for key in ['summary', 'chapters', 'elements']:
+                if key in cr:
+                    data = cr[key]
+                    if isinstance(data, dict):
+                        total_tokens += data.get('tokens_used', 0)
+                        total_cost += data.get('cost_usd', 0)
+                        total_processing_time += data.get('processing_time_seconds', 0)
+
+        # Aggregate each analysis type
+        if 'summary' in analysis_types:
+            results['summary'] = self.aggregator.aggregate_summaries(chunk_results, model)
+            total_tokens += results['summary'].get('tokens_used', 0)
+
+        if 'chapters' in analysis_types:
+            # Get overlap from first chunk
+            overlap = chunk_results[0]['chunk']['overlap_end'] - chunk_results[0]['chunk']['core_end']
+            results['chapters'] = self.aggregator.merge_chapters(chunk_results, overlap)
+
+        if 'elements' in analysis_types:
+            results['elements'] = self.aggregator.combine_elements(chunk_results)
 
         # Add totals
         results['totals'] = {

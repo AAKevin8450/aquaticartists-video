@@ -658,6 +658,34 @@ class Database:
                 UPDATE nova_jobs SET completed_at = CURRENT_TIMESTAMP WHERE id = ?
             ''', (nova_job_id,))
 
+    def update_nova_job_chunk_progress(self, nova_job_id: int, current_chunk: int,
+                                      total_chunks: int, status_message: str = None):
+        """Update Nova job chunk progress for multi-chunk processing."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Calculate progress percentage based on chunks
+            progress_percent = int((current_chunk / total_chunks) * 100) if total_chunks > 0 else 0
+
+            # Update chunk-specific metadata
+            update_data = {
+                'current_chunk': current_chunk,
+                'chunk_count': total_chunks,
+                'progress_percent': progress_percent,
+                'is_chunked': 1 if total_chunks > 1 else 0
+            }
+
+            if status_message:
+                update_data['chunk_status_message'] = status_message
+
+            # Build UPDATE query dynamically
+            fields = [f"{key} = ?" for key in update_data.keys()]
+            values = list(update_data.values())
+            values.append(nova_job_id)
+
+            query = f"UPDATE nova_jobs SET {', '.join(fields)} WHERE id = ?"
+            cursor.execute(query, values)
+
     def list_nova_jobs(self, status: Optional[str] = None, model: Optional[str] = None,
                       limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """List Nova jobs with optional filters."""
