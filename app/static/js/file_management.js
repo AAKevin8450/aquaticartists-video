@@ -9,8 +9,14 @@ let currentFilters = {
     file_type: '',
     has_proxy: null,
     has_transcription: null,
-    from_date: '',
-    to_date: '',
+    upload_from_date: '',
+    upload_to_date: '',
+    created_from_date: '',
+    created_to_date: '',
+    min_size: '',
+    max_size: '',
+    min_duration: '',
+    max_duration: '',
     sort_by: 'uploaded_at',
     sort_order: 'desc',
     page: 1,
@@ -62,6 +68,12 @@ function initializeEventListeners() {
     // Reset filters
     document.getElementById('resetFiltersBtn').addEventListener('click', resetFilters);
 
+    // Batch action buttons
+    document.getElementById('batchProxyBtn').addEventListener('click', () => startBatchAction('proxy'));
+    document.getElementById('batchTranscribeBtn').addEventListener('click', () => startBatchAction('transcribe'));
+    document.getElementById('batchNovaBtn').addEventListener('click', () => startBatchAction('nova'));
+    document.getElementById('batchRekognitionBtn').addEventListener('click', () => startBatchAction('rekognition'));
+
     // S3 files section (lazy load)
     const s3FilesCollapse = document.getElementById('s3FilesCollapse');
     s3FilesCollapse.addEventListener('show.bs.collapse', () => {
@@ -86,8 +98,23 @@ function applyFilters() {
     const transcriptionFilter = document.getElementById('transcriptionFilter').value;
     currentFilters.has_transcription = transcriptionFilter === '' ? null : transcriptionFilter === 'true';
 
-    currentFilters.from_date = document.getElementById('fromDate').value;
-    currentFilters.to_date = document.getElementById('toDate').value;
+    // Upload date filters
+    currentFilters.upload_from_date = document.getElementById('uploadFromDate').value;
+    currentFilters.upload_to_date = document.getElementById('uploadToDate').value;
+
+    // Created date filters
+    currentFilters.created_from_date = document.getElementById('createdFromDate').value;
+    currentFilters.created_to_date = document.getElementById('createdToDate').value;
+
+    // Size filters (convert MB to bytes for backend)
+    const minSize = document.getElementById('minSize').value;
+    const maxSize = document.getElementById('maxSize').value;
+    currentFilters.min_size = minSize ? parseInt(minSize) * 1024 * 1024 : '';
+    currentFilters.max_size = maxSize ? parseInt(maxSize) * 1024 * 1024 : '';
+
+    // Duration filters
+    currentFilters.min_duration = document.getElementById('minDuration').value;
+    currentFilters.max_duration = document.getElementById('maxDuration').value;
 
     currentFilters.page = 1;
     loadFiles();
@@ -99,8 +126,14 @@ function resetFilters() {
     document.getElementById('fileTypeFilter').value = '';
     document.getElementById('proxyFilter').value = '';
     document.getElementById('transcriptionFilter').value = '';
-    document.getElementById('fromDate').value = '';
-    document.getElementById('toDate').value = '';
+    document.getElementById('uploadFromDate').value = '';
+    document.getElementById('uploadToDate').value = '';
+    document.getElementById('createdFromDate').value = '';
+    document.getElementById('createdToDate').value = '';
+    document.getElementById('minSize').value = '';
+    document.getElementById('maxSize').value = '';
+    document.getElementById('minDuration').value = '';
+    document.getElementById('maxDuration').value = '';
 
     // Reset state
     currentFilters = {
@@ -108,8 +141,14 @@ function resetFilters() {
         file_type: '',
         has_proxy: null,
         has_transcription: null,
-        from_date: '',
-        to_date: '',
+        upload_from_date: '',
+        upload_to_date: '',
+        created_from_date: '',
+        created_to_date: '',
+        min_size: '',
+        max_size: '',
+        min_duration: '',
+        max_duration: '',
         sort_by: 'uploaded_at',
         sort_order: 'desc',
         page: 1,
@@ -182,18 +221,37 @@ function renderFiles(files) {
         return;
     }
 
+    const getSortIcon = (field) => {
+        if (currentFilters.sort_by !== field) {
+            return '<i class="bi bi-arrow-down-up text-muted"></i>';
+        }
+        return currentFilters.sort_order === 'asc'
+            ? '<i class="bi bi-arrow-up text-primary"></i>'
+            : '<i class="bi bi-arrow-down text-primary"></i>';
+    };
+
     const table = `
         <div class="table-responsive">
             <table class="table table-hover">
                 <thead>
                     <tr>
-                        <th style="width: 30%">File</th>
-                        <th style="width: 8%">Type</th>
-                        <th style="width: 10%">Size</th>
-                        <th style="width: 10%">Duration</th>
+                        <th style="width: 30%; cursor: pointer;" class="sortable" data-sort="filename">
+                            File ${getSortIcon('filename')}
+                        </th>
+                        <th style="width: 8%; cursor: pointer;" class="sortable" data-sort="file_type">
+                            Type ${getSortIcon('file_type')}
+                        </th>
+                        <th style="width: 10%; cursor: pointer;" class="sortable" data-sort="size_bytes">
+                            Size ${getSortIcon('size_bytes')}
+                        </th>
+                        <th style="width: 10%; cursor: pointer;" class="sortable" data-sort="duration_seconds">
+                            Duration ${getSortIcon('duration_seconds')}
+                        </th>
                         <th style="width: 12%">Resolution</th>
                         <th style="width: 15%">Status</th>
-                        <th style="width: 10%">Uploaded</th>
+                        <th style="width: 10%; cursor: pointer;" class="sortable" data-sort="uploaded_at">
+                            Uploaded ${getSortIcon('uploaded_at')}
+                        </th>
                         <th style="width: 15%">Actions</th>
                     </tr>
                 </thead>
@@ -206,6 +264,7 @@ function renderFiles(files) {
 
     container.innerHTML = table;
     attachFileEventListeners();
+    attachSortListeners();
 }
 
 function renderFileRow(file) {
@@ -329,6 +388,26 @@ function renderActionsDropdown(file) {
             </ul>
         </div>
     `;
+}
+
+function attachSortListeners() {
+    const sortableHeaders = document.querySelectorAll('.sortable');
+    sortableHeaders.forEach(header => {
+        header.addEventListener('click', () => {
+            const sortField = header.dataset.sort;
+
+            // Toggle sort order if clicking same field, otherwise default to desc
+            if (currentFilters.sort_by === sortField) {
+                currentFilters.sort_order = currentFilters.sort_order === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentFilters.sort_by = sortField;
+                currentFilters.sort_order = 'desc';
+            }
+
+            currentFilters.page = 1;
+            loadFiles();
+        });
+    });
 }
 
 function attachFileEventListeners() {
@@ -477,6 +556,12 @@ function renderPagination(pagination) {
 function updateFilesCount(total) {
     const badge = document.getElementById('filesTotalBadge');
     badge.textContent = `${total} file${total !== 1 ? 's' : ''}`;
+
+    // Update batch files count
+    const batchCount = document.getElementById('batchFilesCount');
+    if (batchCount) {
+        batchCount.textContent = `${total} file${total !== 1 ? 's' : ''}`;
+    }
 }
 
 function updateSummary(summary) {
@@ -1126,4 +1211,276 @@ function getStatusBadgeClass(status) {
         'PENDING': 'secondary'
     };
     return statusMap[status] || 'secondary';
+}
+
+// ============================================================================
+// BATCH PROCESSING
+// ============================================================================
+
+let currentBatchJob = null;
+let batchProgressModal = null;
+let batchStatusInterval = null;
+
+async function startBatchAction(actionType) {
+    // Get confirmation and options based on action type
+    const options = await getBatchOptions(actionType);
+    if (!options) {
+        return; // User cancelled
+    }
+
+    try {
+        // Extract file IDs from currently displayed/filtered files
+        // This ensures batch operations only affect the files the user can currently see
+        const fileIds = currentFiles.map(file => file.id).filter(id => id > 0);
+
+        if (fileIds.length === 0) {
+            showAlert('No files to process in the current view', 'warning');
+            return;
+        }
+
+        // Build request body with file IDs and options
+        const requestBody = {
+            file_ids: fileIds,
+            ...options
+        };
+
+        // Start batch job
+        const response = await fetch(`/api/batch/${actionType}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to start batch job');
+        }
+
+        const data = await response.json();
+        currentBatchJob = data.job_id;
+
+        // Show progress modal
+        showBatchProgressModal(actionType, data.total_files);
+
+        // Start polling for progress
+        startBatchProgressPolling();
+
+    } catch (error) {
+        console.error('Start batch error:', error);
+        showAlert(`Failed to start batch ${actionType}: ${error.message}`, 'danger');
+    }
+}
+
+async function getBatchOptions(actionType) {
+    switch (actionType) {
+        case 'proxy':
+            return confirm('Create proxy videos (720p/15fps) for all filtered files?') ? {} : null;
+
+        case 'transcribe':
+            const model = prompt('Enter Whisper model (tiny, base, small, medium, large-v2, large-v3):', 'medium');
+            if (!model) return null;
+
+            const language = prompt('Enter language code (optional, e.g., "en" for English):', '');
+            return {
+                model_name: model,
+                language: language || undefined
+            };
+
+        case 'nova':
+            if (!confirm('Start Nova analysis (summary + chapters) for all filtered files with proxies?')) {
+                return null;
+            }
+            return {
+                model: 'us.amazon.nova-lite-v1:0',
+                analysis_types: ['summary', 'chapters']
+            };
+
+        case 'rekognition':
+            if (!confirm('Start Rekognition label detection for all filtered files?')) {
+                return null;
+            }
+            return {
+                analysis_types: ['label_detection'],
+                use_proxy: true
+            };
+
+        default:
+            return null;
+    }
+}
+
+function showBatchProgressModal(actionType, totalFiles) {
+    // Initialize modal if not already done
+    if (!batchProgressModal) {
+        batchProgressModal = new bootstrap.Modal(document.getElementById('batchProgressModal'));
+    }
+
+    // Set title
+    const titles = {
+        'proxy': 'Generating Proxy Videos',
+        'transcribe': 'Transcribing Videos',
+        'nova': 'Running Nova Analysis',
+        'rekognition': 'Running Rekognition Analysis'
+    };
+    document.getElementById('batchActionTitle').textContent = titles[actionType] || 'Processing...';
+
+    // Reset progress
+    updateBatchProgress({
+        status: 'RUNNING',
+        progress_percent: 0,
+        total_files: totalFiles,
+        completed_files: 0,
+        failed_files: 0,
+        current_file: null,
+        elapsed_seconds: 0,
+        errors: []
+    });
+
+    // Show modal
+    batchProgressModal.show();
+
+    // Setup cancel button
+    const cancelBtn = document.getElementById('batchCancelBtn');
+    cancelBtn.onclick = cancelBatchJob;
+    cancelBtn.style.display = 'inline-block';
+
+    // Hide done button
+    document.getElementById('batchDoneBtn').style.display = 'none';
+
+    // Disable close button
+    document.getElementById('batchCloseBtn').disabled = true;
+}
+
+function updateBatchProgress(data) {
+    // Progress bar
+    const progressBar = document.getElementById('batchProgressBar');
+    const progressText = document.getElementById('batchProgressText');
+    progressBar.style.width = `${data.progress_percent}%`;
+    progressText.textContent = `${data.progress_percent.toFixed(1)}%`;
+
+    // Update bar color based on status
+    progressBar.className = 'progress-bar';
+    if (data.status === 'COMPLETED') {
+        progressBar.classList.add('bg-success');
+    } else if (data.status === 'FAILED' || data.status === 'CANCELLED') {
+        progressBar.classList.add('bg-danger');
+        progressBar.classList.remove('progress-bar-striped', 'progress-bar-animated');
+    } else {
+        progressBar.classList.add('progress-bar-striped', 'progress-bar-animated');
+    }
+
+    // Status text
+    document.getElementById('batchStatusText').textContent = data.status;
+
+    // Count text
+    document.getElementById('batchCountText').textContent =
+        `${data.completed_files + data.failed_files} / ${data.total_files}`;
+
+    // Current file
+    const currentFileDiv = document.getElementById('batchCurrentFile');
+    const currentFileName = document.getElementById('batchCurrentFileName');
+    if (data.current_file) {
+        currentFileName.textContent = data.current_file;
+        currentFileDiv.style.display = 'block';
+    } else {
+        currentFileDiv.style.display = 'none';
+    }
+
+    // Statistics
+    if (data.status === 'RUNNING' || data.status === 'COMPLETED') {
+        document.getElementById('batchStats').style.display = 'flex';
+        document.getElementById('batchCompleted').textContent = data.completed_files;
+        document.getElementById('batchFailed').textContent = data.failed_files;
+        document.getElementById('batchElapsed').textContent = `${data.elapsed_seconds.toFixed(1)}s`;
+    }
+
+    // Errors
+    if (data.errors && data.errors.length > 0) {
+        document.getElementById('batchErrorsSection').style.display = 'block';
+        document.getElementById('batchErrorCount').textContent = data.errors.length;
+
+        const errorsContainer = document.getElementById('batchErrorsContainer');
+        errorsContainer.innerHTML = data.errors.map(error => `
+            <div class="list-group-item list-group-item-danger">
+                <strong>${escapeHtml(error.filename || 'Unknown file')}</strong><br>
+                <small>${escapeHtml(error.error)}</small>
+            </div>
+        `).join('');
+    }
+
+    // Handle completion
+    if (data.status === 'COMPLETED' || data.status === 'CANCELLED' || data.status === 'FAILED') {
+        stopBatchProgressPolling();
+
+        // Hide cancel, show done
+        document.getElementById('batchCancelBtn').style.display = 'none';
+        document.getElementById('batchDoneBtn').style.display = 'inline-block';
+
+        // Enable close button
+        document.getElementById('batchCloseBtn').disabled = false;
+
+        // Reload files
+        loadFiles();
+
+        // Show completion alert
+        if (data.status === 'COMPLETED') {
+            const msg = `Batch processing completed: ${data.completed_files} succeeded, ${data.failed_files} failed`;
+            showAlert(msg, data.failed_files > 0 ? 'warning' : 'success');
+        }
+    }
+}
+
+function startBatchProgressPolling() {
+    // Poll every 2 seconds
+    batchStatusInterval = setInterval(async () => {
+        if (!currentBatchJob) {
+            stopBatchProgressPolling();
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/batch/${currentBatchJob}/status`);
+            if (!response.ok) {
+                throw new Error('Failed to get batch status');
+            }
+
+            const data = await response.json();
+            updateBatchProgress(data);
+
+        } catch (error) {
+            console.error('Batch status polling error:', error);
+        }
+    }, 2000);
+}
+
+function stopBatchProgressPolling() {
+    if (batchStatusInterval) {
+        clearInterval(batchStatusInterval);
+        batchStatusInterval = null;
+    }
+}
+
+async function cancelBatchJob() {
+    if (!currentBatchJob) return;
+
+    if (!confirm('Cancel this batch job?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/batch/${currentBatchJob}/cancel`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to cancel batch job');
+        }
+
+        showAlert('Batch job cancelled', 'info');
+
+    } catch (error) {
+        console.error('Cancel batch error:', error);
+        showAlert(`Failed to cancel batch job: ${error.message}`, 'danger');
+    }
 }

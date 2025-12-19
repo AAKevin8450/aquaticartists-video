@@ -39,6 +39,8 @@ Critical environment variables are stored in .env file (not in git):
 7. **Analysis API** (app/routes/analysis.py) - Multi-select analysis endpoint (supports arrays of analysis types)
 8. **Nova API** (app/routes/nova_analysis.py) - Nova video analysis endpoints (5 endpoints: /analyze, /status, /results, /models, /estimate-cost)
 9. **File Management API** (app/routes/file_management.py) - Centralized file management with search/filter/actions (10 endpoints: list, details, create-proxy, start-analysis, start-transcription, start-nova, delete-cascade, s3-files)
+   - Batch operations (proxy, transcribe, nova, rekognition) process only currently filtered/displayed files
+   - Batch proxy creation creates local-only proxies (no S3 upload) to save costs for large video libraries
 
 ### Frontend Components
 **Templates** (app/templates/):
@@ -68,6 +70,7 @@ Critical environment variables are stored in .env file (not in git):
 - Excel export: Professional formatted Excel files with Summary and Data sheets using openpyxl
 - Visual dashboard: Interactive charts, graphs, and insights for video analysis results (accessible via /dashboard/<job_id>)
 - File management: Centralized file view showing 3,161+ files (uploaded + transcribed) with summary statistics (count, total size, total duration), full-text search, advanced filtering, status badges, quick actions, and S3 file operations (view/download/delete)
+- Batch operations: All batch actions (proxy creation, transcription, Nova analysis, Rekognition analysis) respect current search/filter criteria and only process displayed files
 
 ### Running the Application
 ```bash

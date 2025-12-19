@@ -7,8 +7,57 @@ from app.services.s3_service import get_s3_service
 from app.utils.formatters import format_timestamp, format_file_size, format_duration
 from pathlib import Path
 import os
+import threading
+import uuid
+import time
+from typing import Dict, Any, List
 
 bp = Blueprint('file_management', __name__)
+
+# ============================================================================
+# BATCH PROCESSING STATE
+# ============================================================================
+
+# Global batch jobs dictionary: {job_id: BatchJob}
+_batch_jobs: Dict[str, 'BatchJob'] = {}
+_batch_jobs_lock = threading.Lock()
+
+
+class BatchJob:
+    """Tracks batch processing job state."""
+
+    def __init__(self, job_id: str, action_type: str, total_files: int, file_ids: List[int]):
+        self.job_id = job_id
+        self.action_type = action_type  # 'proxy', 'transcribe', 'nova', 'rekognition'
+        self.total_files = total_files
+        self.file_ids = file_ids
+        self.completed_files = 0
+        self.failed_files = 0
+        self.current_file = None
+        self.status = 'RUNNING'  # RUNNING, COMPLETED, CANCELLED, FAILED
+        self.errors = []
+        self.start_time = time.time()
+        self.end_time = None
+        self.results = []  # List of result dicts for each file
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON response."""
+        elapsed = (self.end_time or time.time()) - self.start_time
+        progress = (self.completed_files + self.failed_files) / self.total_files * 100 if self.total_files > 0 else 0
+
+        return {
+            'job_id': self.job_id,
+            'action_type': self.action_type,
+            'status': self.status,
+            'total_files': self.total_files,
+            'completed_files': self.completed_files,
+            'failed_files': self.failed_files,
+            'current_file': self.current_file,
+            'progress_percent': round(progress, 1),
+            'elapsed_seconds': round(elapsed, 1),
+            'errors': self.errors,
+            'results': self.results
+        }
 
 
 # ============================================================================
@@ -59,8 +108,23 @@ def list_files():
         has_proxy_str = request.args.get('has_proxy')
         has_transcription_str = request.args.get('has_transcription')
         search = request.args.get('search', '').strip()
-        from_date = request.args.get('from_date')
-        to_date = request.args.get('to_date')
+
+        # Upload date filters
+        upload_from_date = request.args.get('upload_from_date')
+        upload_to_date = request.args.get('upload_to_date')
+
+        # Created date filters (for now, both filter on uploaded_at until we store actual file creation dates)
+        created_from_date = request.args.get('created_from_date')
+        created_to_date = request.args.get('created_to_date')
+
+        # Combine date filters (use whichever is set, prefer upload dates)
+        from_date = upload_from_date or created_from_date
+        to_date = upload_to_date or created_to_date
+
+        min_size = request.args.get('min_size')
+        max_size = request.args.get('max_size')
+        min_duration = request.args.get('min_duration')
+        max_duration = request.args.get('max_duration')
         sort_by = request.args.get('sort_by', 'uploaded_at')
         sort_order = request.args.get('sort_order', 'desc')
         page = int(request.args.get('page', 1))
@@ -75,6 +139,12 @@ def list_files():
         if has_transcription_str:
             has_transcription = has_transcription_str.lower() in ('true', '1', 'yes')
 
+        # Convert size and duration to integers
+        min_size = int(min_size) if min_size else None
+        max_size = int(max_size) if max_size else None
+        min_duration = int(min_duration) if min_duration else None
+        max_duration = int(max_duration) if max_duration else None
+
         # Calculate pagination
         offset = (page - 1) * per_page
 
@@ -87,6 +157,10 @@ def list_files():
             search=search or None,
             from_date=from_date,
             to_date=to_date,
+            min_size=min_size,
+            max_size=max_size,
+            min_duration=min_duration,
+            max_duration=max_duration,
             sort_by=sort_by,
             sort_order=sort_order,
             limit=per_page,
@@ -100,7 +174,11 @@ def list_files():
             has_transcription=has_transcription,
             search=search or None,
             from_date=from_date,
-            to_date=to_date
+            to_date=to_date,
+            min_size=min_size,
+            max_size=max_size,
+            min_duration=min_duration,
+            max_duration=max_duration
         )
 
         # Get summary statistics
@@ -110,7 +188,11 @@ def list_files():
             has_transcription=has_transcription,
             search=search or None,
             from_date=from_date,
-            to_date=to_date
+            to_date=to_date,
+            min_size=min_size,
+            max_size=max_size,
+            min_duration=min_duration,
+            max_duration=max_duration
         )
 
         # Format files for display
@@ -762,3 +844,670 @@ def delete_all_s3_files():
     except Exception as e:
         current_app.logger.error(f"Delete all S3 files error: {e}", exc_info=True)
         return jsonify({'error': f'Failed to delete files: {str(e)}'}), 500
+
+
+# ============================================================================
+# BATCH PROCESSING ENDPOINTS
+# ============================================================================
+
+def _convert_filter_param(value):
+    """Convert filter parameter to proper boolean or None."""
+    if value is None or value == '' or value == 'null':
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ('true', '1', 'yes')
+    return bool(value)
+
+
+@bp.route('/api/batch/proxy', methods=['POST'])
+def batch_create_proxy():
+    """
+    Create proxies for specified files (from currently filtered view).
+
+    Request body:
+        {
+            "file_ids": [1, 2, 3, ...]  # List of file IDs to process
+        }
+
+    Returns:
+        {
+            "job_id": "batch-xxx",
+            "total_files": 10,
+            "message": "Batch proxy creation started"
+        }
+    """
+    try:
+        data = request.get_json() or {}
+        current_app.logger.info(f"Batch proxy request received with data: {data}")
+
+        # Get file IDs from request
+        file_ids = data.get('file_ids', [])
+
+        if not file_ids:
+            current_app.logger.warning("No file IDs provided")
+            return jsonify({'error': 'No file IDs provided'}), 400
+
+        current_app.logger.info(f"Processing batch proxy for {len(file_ids)} file IDs")
+
+        # Validate files exist and are eligible for proxy creation
+        db = get_db()
+        eligible_file_ids = []
+
+        for file_id in file_ids:
+            file = db.get_file(file_id)
+            if not file:
+                current_app.logger.warning(f"File {file_id} not found, skipping")
+                continue
+
+            # Check if it's a video with local path
+            if file.get('file_type') != 'video':
+                current_app.logger.warning(f"File {file_id} is not a video, skipping")
+                continue
+
+            if not file.get('local_path'):
+                current_app.logger.warning(f"File {file_id} has no local path, skipping")
+                continue
+
+            # Check if proxy already exists
+            existing_proxy = db.get_proxy_for_source(file_id)
+            if existing_proxy:
+                current_app.logger.info(f"File {file_id} already has a proxy, skipping")
+                continue
+
+            eligible_file_ids.append(file_id)
+
+        if not eligible_file_ids:
+            current_app.logger.warning("No eligible files for proxy creation")
+            return jsonify({'error': 'No eligible files for proxy creation (need videos with local paths, without existing proxies)'}), 404
+
+        current_app.logger.info(f"Found {len(eligible_file_ids)} eligible files for proxy creation")
+
+        # Create batch job
+        job_id = f"batch-proxy-{uuid.uuid4().hex[:8]}"
+        job = BatchJob(job_id, 'proxy', len(eligible_file_ids), eligible_file_ids)
+
+        with _batch_jobs_lock:
+            _batch_jobs[job_id] = job
+
+        current_app.logger.info(f"Created batch job {job_id} for {len(eligible_file_ids)} files")
+
+        # Start background thread
+        thread = threading.Thread(target=_run_batch_proxy, args=(job,))
+        thread.daemon = True
+        thread.start()
+
+        current_app.logger.info(f"Started background thread for batch job {job_id}")
+
+        return jsonify({
+            'job_id': job_id,
+            'total_files': len(eligible_file_ids),
+            'message': f'Batch proxy creation started for {len(eligible_file_ids)} file(s)'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Batch proxy error: {e}", exc_info=True)
+        import traceback
+        current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
+        return jsonify({'error': f'Batch proxy error: {str(e)}'}), 500
+
+
+@bp.route('/api/batch/transcribe', methods=['POST'])
+def batch_transcribe():
+    """
+    Transcribe specified files (from currently filtered view).
+
+    Request body:
+        {
+            "file_ids": [1, 2, 3, ...],
+            "model_name": "medium",
+            "language": "en",
+            "force": false
+        }
+
+    Returns:
+        {
+            "job_id": "batch-xxx",
+            "total_files": 10,
+            "message": "Batch transcription started"
+        }
+    """
+    try:
+        data = request.get_json() or {}
+
+        # Get file IDs from request
+        file_ids = data.get('file_ids', [])
+
+        if not file_ids:
+            return jsonify({'error': 'No file IDs provided'}), 400
+
+        # Transcription options
+        model_name = data.get('model_name', 'medium')
+        language = data.get('language')
+        force = data.get('force', False)
+
+        # Validate files exist and are eligible for transcription
+        db = get_db()
+        eligible_file_ids = []
+
+        for file_id in file_ids:
+            file = db.get_file(file_id)
+            if not file:
+                current_app.logger.warning(f"File {file_id} not found, skipping")
+                continue
+
+            # Check if it's a video with local path
+            if file.get('file_type') != 'video':
+                current_app.logger.warning(f"File {file_id} is not a video, skipping")
+                continue
+
+            local_path = file.get('local_path')
+            if not local_path or not Path(local_path).exists():
+                current_app.logger.warning(f"File {file_id} has no local path, skipping")
+                continue
+
+            eligible_file_ids.append(file_id)
+
+        if not eligible_file_ids:
+            return jsonify({'error': 'No eligible files for transcription (need videos with local paths)'}), 404
+
+        # Create batch job
+        job_id = f"batch-transcribe-{uuid.uuid4().hex[:8]}"
+        job = BatchJob(job_id, 'transcribe', len(eligible_file_ids), eligible_file_ids)
+        job.options = {'model_name': model_name, 'language': language, 'force': force}
+
+        with _batch_jobs_lock:
+            _batch_jobs[job_id] = job
+
+        # Start background thread
+        thread = threading.Thread(target=_run_batch_transcribe, args=(job,))
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'job_id': job_id,
+            'total_files': len(eligible_file_ids),
+            'message': f'Batch transcription started for {len(eligible_file_ids)} file(s)'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Batch transcribe error: {e}", exc_info=True)
+        import traceback
+        current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
+        return jsonify({'error': f'Batch transcribe error: {str(e)}'}), 500
+
+
+@bp.route('/api/batch/nova', methods=['POST'])
+def batch_nova():
+    """
+    Start Nova analysis for specified files (from currently filtered view).
+
+    Request body:
+        {
+            "file_ids": [1, 2, 3, ...],
+            "model": "us.amazon.nova-lite-v1:0",
+            "analysis_types": ["summary", "chapters"],
+            "options": {}
+        }
+
+    Returns:
+        {
+            "job_id": "batch-xxx",
+            "total_files": 10,
+            "message": "Batch Nova analysis started"
+        }
+    """
+    try:
+        data = request.get_json() or {}
+
+        # Get file IDs from request
+        file_ids = data.get('file_ids', [])
+
+        if not file_ids:
+            return jsonify({'error': 'No file IDs provided'}), 400
+
+        # Nova options
+        model = data.get('model', 'us.amazon.nova-lite-v1:0')
+        analysis_types = data.get('analysis_types', ['summary'])
+        options = data.get('options', {})
+
+        # Validate files exist and have proxies (Nova requires S3 files)
+        db = get_db()
+        eligible_file_ids = []
+
+        for file_id in file_ids:
+            file = db.get_file(file_id)
+            if not file:
+                current_app.logger.warning(f"File {file_id} not found, skipping")
+                continue
+
+            # Check if it's a video
+            if file.get('file_type') != 'video':
+                current_app.logger.warning(f"File {file_id} is not a video, skipping")
+                continue
+
+            # Check if proxy exists
+            proxy = db.get_proxy_for_source(file_id)
+            if not proxy:
+                current_app.logger.warning(f"File {file_id} has no proxy, skipping")
+                continue
+
+            eligible_file_ids.append(file_id)
+
+        if not eligible_file_ids:
+            return jsonify({'error': 'No eligible files for Nova analysis (need videos with proxies)'}), 404
+
+        # Create batch job
+        job_id = f"batch-nova-{uuid.uuid4().hex[:8]}"
+        job = BatchJob(job_id, 'nova', len(eligible_file_ids), eligible_file_ids)
+        job.options = {'model': model, 'analysis_types': analysis_types, 'user_options': options}
+
+        with _batch_jobs_lock:
+            _batch_jobs[job_id] = job
+
+        # Start background thread
+        thread = threading.Thread(target=_run_batch_nova, args=(job,))
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'job_id': job_id,
+            'total_files': len(eligible_file_ids),
+            'message': f'Batch Nova analysis started for {len(eligible_file_ids)} file(s)'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Batch Nova error: {e}", exc_info=True)
+        import traceback
+        current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
+        return jsonify({'error': f'Batch Nova error: {str(e)}'}), 500
+
+
+@bp.route('/api/batch/rekognition', methods=['POST'])
+def batch_rekognition():
+    """
+    Start Rekognition analysis for specified files (from currently filtered view).
+
+    Request body:
+        {
+            "file_ids": [1, 2, 3, ...],
+            "analysis_types": ["label_detection", "face_detection"],
+            "use_proxy": true
+        }
+
+    Returns:
+        {
+            "job_id": "batch-xxx",
+            "total_files": 10,
+            "message": "Batch Rekognition analysis started"
+        }
+    """
+    try:
+        data = request.get_json() or {}
+
+        # Get file IDs from request
+        file_ids = data.get('file_ids', [])
+
+        if not file_ids:
+            return jsonify({'error': 'No file IDs provided'}), 400
+
+        # Rekognition options
+        analysis_types = data.get('analysis_types', ['label_detection'])
+        use_proxy = data.get('use_proxy', True)
+
+        # Validate files exist (proxy check done later in worker if use_proxy=True)
+        db = get_db()
+        eligible_file_ids = []
+
+        for file_id in file_ids:
+            file = db.get_file(file_id)
+            if not file:
+                current_app.logger.warning(f"File {file_id} not found, skipping")
+                continue
+
+            # If using proxy, check if proxy exists
+            if use_proxy:
+                proxy = db.get_proxy_for_source(file_id)
+                if not proxy:
+                    current_app.logger.warning(f"File {file_id} has no proxy, skipping")
+                    continue
+
+            eligible_file_ids.append(file_id)
+
+        if not eligible_file_ids:
+            error_msg = 'No eligible files for Rekognition analysis'
+            if use_proxy:
+                error_msg += ' (need files with proxies)'
+            return jsonify({'error': error_msg}), 404
+
+        # Create batch job
+        job_id = f"batch-rekognition-{uuid.uuid4().hex[:8]}"
+        job = BatchJob(job_id, 'rekognition', len(eligible_file_ids), eligible_file_ids)
+        job.options = {'analysis_types': analysis_types, 'use_proxy': use_proxy}
+
+        with _batch_jobs_lock:
+            _batch_jobs[job_id] = job
+
+        # Start background thread
+        thread = threading.Thread(target=_run_batch_rekognition, args=(job,))
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'job_id': job_id,
+            'total_files': len(eligible_file_ids),
+            'message': f'Batch Rekognition analysis started for {len(eligible_file_ids)} file(s)'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Batch Rekognition error: {e}", exc_info=True)
+        import traceback
+        current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
+        return jsonify({'error': f'Batch Rekognition error: {str(e)}'}), 500
+
+
+@bp.route('/api/batch/<job_id>/status', methods=['GET'])
+def get_batch_status(job_id: str):
+    """
+    Get batch job status.
+
+    Returns:
+        {
+            "job_id": "batch-xxx",
+            "status": "RUNNING",
+            "progress_percent": 45.5,
+            "total_files": 10,
+            "completed_files": 4,
+            "failed_files": 1,
+            "current_file": "video.mp4",
+            "elapsed_seconds": 123.4,
+            "errors": [...],
+            "results": [...]
+        }
+    """
+    try:
+        with _batch_jobs_lock:
+            job = _batch_jobs.get(job_id)
+
+        if not job:
+            return jsonify({'error': 'Batch job not found'}), 404
+
+        return jsonify(job.to_dict()), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Get batch status error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/api/batch/<job_id>/cancel', methods=['POST'])
+def cancel_batch_job(job_id: str):
+    """
+    Cancel a running batch job.
+
+    Returns:
+        {
+            "message": "Batch job cancelled"
+        }
+    """
+    try:
+        with _batch_jobs_lock:
+            job = _batch_jobs.get(job_id)
+
+        if not job:
+            return jsonify({'error': 'Batch job not found'}), 404
+
+        if job.status in ('COMPLETED', 'CANCELLED', 'FAILED'):
+            return jsonify({'error': f'Job already {job.status.lower()}'}), 400
+
+        job.status = 'CANCELLED'
+        job.end_time = time.time()
+
+        return jsonify({'message': 'Batch job cancelled'}), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Cancel batch error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# BATCH PROCESSING WORKERS
+# ============================================================================
+
+def _run_batch_proxy(job: BatchJob):
+    """Background worker for batch proxy creation."""
+    from app.routes.upload import create_proxy_internal
+    import traceback
+    import logging
+
+    logger = logging.getLogger('app')
+    logger.info(f"Batch proxy worker started for job {job.job_id} with {len(job.file_ids)} files")
+    print(f"[BATCH PROXY] Worker started for job {job.job_id} with {len(job.file_ids)} files", flush=True)
+
+    for file_id in job.file_ids:
+        if job.status == 'CANCELLED':
+            logger.info(f"Batch job {job.job_id} was cancelled")
+            print(f"[BATCH PROXY] Job {job.job_id} was cancelled", flush=True)
+            break
+
+        try:
+            # Get file info
+            db = get_db()
+            file = db.get_file(file_id)
+            if not file:
+                raise Exception(f'File {file_id} not found')
+
+            job.current_file = file['filename']
+            logger.info(f"Processing file {file_id}: {file['filename']}")
+            print(f"[BATCH PROXY] Processing file {file_id}: {file['filename']}", flush=True)
+
+            # Create proxy (local only, no S3 upload)
+            result = create_proxy_internal(file_id, upload_to_s3=False)
+
+            job.completed_files += 1
+            job.results.append({
+                'file_id': file_id,
+                'filename': file['filename'],
+                'success': True,
+                'result': result
+            })
+            logger.info(f"Successfully created proxy for file {file_id}: {file['filename']}")
+            print(f"[BATCH PROXY] Successfully created proxy for file {file_id}: {file['filename']}", flush=True)
+
+        except Exception as e:
+            job.failed_files += 1
+            error_msg = str(e)
+            tb = traceback.format_exc()
+            job.errors.append({
+                'file_id': file_id,
+                'filename': file.get('filename', f'File {file_id}') if file else f'File {file_id}',
+                'error': error_msg
+            })
+            logger.error(f"Batch proxy error for file {file_id}: {e}", exc_info=True)
+            print(f"[BATCH PROXY ERROR] File {file_id}: {e}", flush=True)
+            print(f"[BATCH PROXY ERROR] Full traceback:\n{tb}", flush=True)
+
+    # Mark job as complete
+    job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+    job.end_time = time.time()
+    job.current_file = None
+    logger.info(
+        f"Batch proxy job {job.job_id} completed: {job.completed_files} succeeded, "
+        f"{job.failed_files} failed, status: {job.status}"
+    )
+    print(
+        f"[BATCH PROXY] Job {job.job_id} completed: {job.completed_files} succeeded, "
+        f"{job.failed_files} failed, status: {job.status}", flush=True
+    )
+
+
+def _run_batch_transcribe(job: BatchJob):
+    """Background worker for batch transcription."""
+    from app.services.transcription_service import TranscriptionService
+
+    options = job.options
+    service = TranscriptionService(model_name=options['model_name'])
+
+    for file_id in job.file_ids:
+        if job.status == 'CANCELLED':
+            break
+
+        try:
+            # Get file info
+            db = get_db()
+            file = db.get_file(file_id)
+            if not file:
+                raise Exception(f'File {file_id} not found')
+
+            local_path = file.get('local_path')
+            if not local_path or not Path(local_path).exists():
+                raise Exception(f'Local file not found: {local_path}')
+
+            job.current_file = file['filename']
+
+            # Transcribe
+            transcript_id = service.transcribe_file(
+                file_path=local_path,
+                language=options.get('language'),
+                force=options.get('force', False)
+            )
+
+            job.completed_files += 1
+            job.results.append({
+                'file_id': file_id,
+                'filename': file['filename'],
+                'success': True,
+                'transcript_id': transcript_id
+            })
+
+        except Exception as e:
+            job.failed_files += 1
+            error_msg = str(e)
+            job.errors.append({
+                'file_id': file_id,
+                'filename': file.get('filename', f'File {file_id}'),
+                'error': error_msg
+            })
+            current_app.logger.error(f"Batch transcribe error for file {file_id}: {e}")
+
+    # Mark job as complete
+    job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+    job.end_time = time.time()
+    job.current_file = None
+
+
+def _run_batch_nova(job: BatchJob):
+    """Background worker for batch Nova analysis."""
+    from app.routes.nova_analysis import start_nova_analysis
+
+    options = job.options
+
+    for file_id in job.file_ids:
+        if job.status == 'CANCELLED':
+            break
+
+        try:
+            # Get file and proxy
+            db = get_db()
+            file = db.get_file(file_id)
+            if not file:
+                raise Exception(f'File {file_id} not found')
+
+            proxy = db.get_proxy_for_source(file_id)
+            if not proxy:
+                raise Exception(f'Proxy not found for file {file_id}')
+
+            job.current_file = file['filename']
+
+            # Start Nova analysis
+            result = start_nova_analysis(
+                file_id=proxy['id'],
+                model=options['model'],
+                analysis_types=options['analysis_types'],
+                user_options=options.get('user_options', {})
+            )
+
+            job.completed_files += 1
+            job.results.append({
+                'file_id': file_id,
+                'filename': file['filename'],
+                'success': True,
+                'nova_job_id': result.get('nova_job_id'),
+                'job_id': result.get('job_id')
+            })
+
+        except Exception as e:
+            job.failed_files += 1
+            error_msg = str(e)
+            job.errors.append({
+                'file_id': file_id,
+                'filename': file.get('filename', f'File {file_id}'),
+                'error': error_msg
+            })
+            current_app.logger.error(f"Batch Nova error for file {file_id}: {e}")
+
+    # Mark job as complete
+    job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+    job.end_time = time.time()
+    job.current_file = None
+
+
+def _run_batch_rekognition(job: BatchJob):
+    """Background worker for batch Rekognition analysis."""
+    from app.routes.analysis import start_analysis_job
+
+    options = job.options
+    use_proxy = options['use_proxy']
+    analysis_types = options['analysis_types']
+
+    for file_id in job.file_ids:
+        if job.status == 'CANCELLED':
+            break
+
+        try:
+            # Get file
+            db = get_db()
+            file = db.get_file(file_id)
+            if not file:
+                raise Exception(f'File {file_id} not found')
+
+            job.current_file = file['filename']
+
+            # Determine target file (proxy or source)
+            if use_proxy:
+                proxy = db.get_proxy_for_source(file_id)
+                if not proxy:
+                    raise Exception(f'Proxy not found for file {file_id}')
+                target_file_id = proxy['id']
+            else:
+                target_file_id = file_id
+
+            # Start analysis for each type
+            job_ids = []
+            for analysis_type in analysis_types:
+                result = start_analysis_job(target_file_id, analysis_type)
+                if result and 'job_id' in result:
+                    job_ids.append(result['job_id'])
+
+            job.completed_files += 1
+            job.results.append({
+                'file_id': file_id,
+                'filename': file['filename'],
+                'success': True,
+                'job_ids': job_ids
+            })
+
+        except Exception as e:
+            job.failed_files += 1
+            error_msg = str(e)
+            job.errors.append({
+                'file_id': file_id,
+                'filename': file.get('filename', f'File {file_id}'),
+                'error': error_msg
+            })
+            current_app.logger.error(f"Batch Rekognition error for file {file_id}: {e}")
+
+    # Mark job as complete
+    job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+    job.end_time = time.time()
+    job.current_file = None
