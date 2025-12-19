@@ -1,7 +1,7 @@
 # AWS Nova Integration Progress Tracker
 
 **Started**: 2025-12-18
-**Current Phase**: Phase 1 - Foundation (Core Nova Integration)
+**Current Phase**: Phase 3 - Chapter Detection & Element Identification
 **Status**: In Progress
 
 ## Implementation Phases Overview
@@ -21,11 +21,11 @@
 
 ### Phase 2: Chunking & Long Video Support ⏸️
 **Goal**: Handle videos of any length via automatic chunking
-- Not started
+- In progress (code implemented, testing pending)
 
 ### Phase 3: Chapter Detection & Element Identification ⏸️
 **Goal**: Full feature implementation with all analysis types
-- Not started
+- In progress
 
 ### Phase 4: UI/UX Integration ⏸️
 **Goal**: Complete user interface integration with Nova features
@@ -155,6 +155,15 @@ From implementation plan section 10:
 18. ❓ Is Nova embedding model available for semantic search?
 
 **Status**: These will be resolved through AWS documentation review and initial testing.
+
+### 2025-12-18 Session 2
+**Focus**: Phase 3 Prompting and Parsing Enhancements
+
+#### Actions Taken:
+1. Enhanced chapter detection prompt to support HH:MM:SS and contiguous coverage
+2. Expanded element identification prompt to include confidence, keywords, and speaker diarization
+3. Added robust time parsing and normalization for time ranges
+4. Added topic summaries and speaker aggregation for chunked analyses
 
 ---
 

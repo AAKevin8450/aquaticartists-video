@@ -40,7 +40,7 @@ def list_jobs():
         # Format job data
         formatted_jobs = []
         for job in jobs:
-            formatted_jobs.append({
+            job_data = {
                 'id': job['id'],
                 'job_id': job['job_id'],
                 'file_id': job['file_id'],
@@ -51,7 +51,19 @@ def list_jobs():
                 'completed_at': format_timestamp(job['completed_at']),
                 'has_results': job.get('results') is not None,
                 'has_error': job.get('error_message') is not None
-            })
+            }
+
+            if job['analysis_type'] == 'nova':
+                nova_job = db.get_nova_job_by_analysis_job(job['id'])
+                if nova_job:
+                    job_data['nova_job_id'] = nova_job['id']
+                    job_data['nova_status'] = nova_job.get('status')
+                    job_data['nova_progress_percent'] = nova_job.get('progress_percent')
+                    job_data['nova_model'] = nova_job.get('model')
+                    job_data['nova_chunk_count'] = nova_job.get('chunk_count')
+                    job_data['nova_batch_status'] = nova_job.get('batch_status')
+                    job_data['nova_batch_mode'] = nova_job.get('batch_mode')
+            formatted_jobs.append(job_data)
 
         return jsonify({
             'jobs': formatted_jobs,
@@ -103,6 +115,15 @@ def get_job_details(job_id):
             'started_at': format_timestamp(job['started_at']),
             'completed_at': format_timestamp(job['completed_at'])
         }
+
+        if job['analysis_type'] == 'nova':
+            nova_job = db.get_nova_job_by_analysis_job(job['id'])
+            if nova_job:
+                response['nova_job_id'] = nova_job['id']
+                response['nova_status'] = nova_job.get('status')
+                response['nova_progress_percent'] = nova_job.get('progress_percent')
+                response['nova_batch_status'] = nova_job.get('batch_status')
+                response['nova_batch_mode'] = nova_job.get('batch_mode')
 
         return jsonify(response), 200
 
@@ -171,6 +192,15 @@ def download_job_results(job_id):
             'started_at': format_timestamp(job['started_at']),
             'completed_at': format_timestamp(job['completed_at'])
         }
+
+        if job['analysis_type'] == 'nova':
+            nova_job = db.get_nova_job_by_analysis_job(job['id'])
+            if nova_job:
+                job_data['nova_job_id'] = nova_job['id']
+                job_data['nova_status'] = nova_job.get('status')
+                job_data['nova_progress_percent'] = nova_job.get('progress_percent')
+                job_data['nova_batch_status'] = nova_job.get('batch_status')
+                job_data['nova_batch_mode'] = nova_job.get('batch_mode')
 
         if format_type == 'excel':
             # Generate Excel file

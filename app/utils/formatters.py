@@ -151,6 +151,11 @@ def format_job_status(status: str) -> dict:
             'class': 'badge bg-primary',
             'icon': 'bi-arrow-repeat'
         },
+        'COMPLETED': {
+            'label': 'Completed',
+            'class': 'badge bg-success',
+            'icon': 'bi-check-circle'
+        },
         'SUCCEEDED': {
             'label': 'Completed',
             'class': 'badge bg-success',
@@ -181,6 +186,7 @@ def format_analysis_type(analysis_type: str) -> str:
         Formatted display name
     """
     type_map = {
+        'nova': 'Nova Video Understanding',
         'video_labels': 'Video Label Detection',
         'video_faces': 'Video Face Detection',
         'video_face_search': 'Video Face Search',

@@ -1221,3 +1221,40 @@ Testing:
 - S3 bucket access verified via AWS CLI
 - Rekognition API access verified
 - CORS configuration tested for browser upload compatibility
+2025-12-18 22:22:05 - Updated by Codex
+
+[Category: Feature Implementation / Infrastructure / API / Database / Documentation]
+Add Nova preview models and batch processing with discounted cost estimation, batch job orchestration, and UI support
+
+[Purpose]
+Enable Nova 2 preview models and asynchronous Batch inference to cut costs by 50% while preserving Nova analysis and UI workflows. Adds batch job submission, polling, and result ingestion, plus updated configuration and documentation for IAM and environment setup.
+
+[Changes Made]
+- Added Nova batch processing support and preview models across service, API, and UI layers
+- Added new batch metadata fields and migrations for Nova jobs
+- Updated IAM docs/policies and environment config for batch processing
+
+[Files Updated]
+- .env.example: Added batch role and S3 prefix configuration examples
+- AGENTS.md: Documented Nova batch mode configuration and preview model keys
+- NOVA_PROGRESS.md: Progress note updates for Nova phases
+- app/config.py: Added Bedrock batch role and batch S3 prefix settings
+- app/database.py: Nova job schema helpers and updates (batch metadata support)
+- app/routes/history.py: Surfaced batch status metadata for Nova jobs
+- app/routes/nova_analysis.py: Batch mode submission, status polling, and result ingestion
+- app/services/nova_service.py: Added preview models, batch job orchestration, and cost discount handling
+- app/services/nova_aggregator.py: Added preview model ID mapping
+- app/services/video_chunker.py: Added chunk configs for preview models
+- app/static/css/style.css: Nova dashboard styling tweaks
+- app/static/js/dashboard.js: Allow COMPLETED status for dashboards
+- app/static/js/nova-dashboard.js: New Nova-specific dashboard renderer
+- app/static/js/utils.js: Added Nova analysis type label
+- app/templates/dashboard.html: Nova dashboard layout + switch between Nova/Rekognition views
+- app/templates/history.html: Nova batch status display and batch-aware polling
+- app/templates/video_analysis.html: Nova batch toggle, new model list, and cost estimation updates
+- app/utils/excel_exporter.py: Nova batch-aware Excel export sheets
+- app/utils/formatters.py: Nova analysis type and status display updates
+- docs/IAM_POLICY_NOVA.json: Added preview model ARNs and batch permissions
+- docs/NOVA_IAM_SETUP.md: Documented preview models and batch IAM requirements
+- migrations/002_add_chunk_progress.sql: Tracked migration for chunk progress
+- migrations/003_add_nova_batch_fields.sql: Added batch fields to nova_jobs

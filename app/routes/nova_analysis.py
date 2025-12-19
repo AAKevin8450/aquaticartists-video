@@ -60,6 +60,8 @@ def start_nova_analysis():
         model = data.get('model', 'lite')
         analysis_types = data.get('analysis_types', ['summary'])
         options = data.get('options', {})
+        processing_mode = data.get('processing_mode', options.get('processing_mode', 'realtime'))
+        options['processing_mode'] = processing_mode
 
         # Validate inputs
         if not file_id:
@@ -68,9 +70,12 @@ def start_nova_analysis():
         if not isinstance(analysis_types, list) or not analysis_types:
             return jsonify({'error': 'analysis_types must be a non-empty array'}), 400
 
-        valid_models = ['micro', 'lite', 'pro', 'premier']
+        valid_models = ['micro', 'lite', 'pro', 'pro_2_preview', 'omni_2_preview', 'premier']
         if model not in valid_models:
             return jsonify({'error': f'model must be one of: {valid_models}'}), 400
+
+        if processing_mode not in ('realtime', 'batch'):
+            return jsonify({'error': 'processing_mode must be "realtime" or "batch"'}), 400
 
         valid_analysis_types = ['summary', 'chapters', 'elements']
         invalid_types = [t for t in analysis_types if t not in valid_analysis_types]
@@ -89,6 +94,10 @@ def start_nova_analysis():
 
         s3_key = file['s3_key']
 
+        # Estimate duration for cost estimates and batch fallback
+        estimated_duration = file.get('metadata', {}).get('duration_seconds', 300)
+        options['estimated_duration_seconds'] = estimated_duration
+
         # Create analysis job record
         analysis_job_id = db.create_analysis_job(
             file_id=file_id,
@@ -98,7 +107,8 @@ def start_nova_analysis():
             parameters=json.dumps({
                 'model': model,
                 'analysis_types': analysis_types,
-                'options': options
+                'options': options,
+                'processing_mode': processing_mode
             })
         )
 
@@ -113,20 +123,72 @@ def start_nova_analysis():
         logger.info(f"Created Nova job {nova_job_id} for file {file_id}, model: {model}, types: {analysis_types}")
 
         # Get Nova service
+        if processing_mode not in ('realtime', 'batch'):
+            return jsonify({'error': 'processing_mode must be "realtime" or "batch"'}), 400
+
         nova_service = get_nova_service()
 
         # Estimate cost
-        # TODO: Get actual video duration from metadata
-        estimated_duration = file.get('metadata', {}).get('duration_seconds', 300)  # Default 5 min
         cost_estimate = nova_service.estimate_cost(
             model=model,
-            video_duration_seconds=estimated_duration
+            video_duration_seconds=estimated_duration,
+            batch_mode=(processing_mode == 'batch')
         )
 
         try:
+            if processing_mode == 'batch':
+                batch_job_name = f"nova-batch-{nova_job_id}-{int(datetime.utcnow().timestamp())}"
+                batch_response = nova_service.start_batch_analysis(
+                    s3_key=s3_key,
+                    model=model,
+                    analysis_types=analysis_types,
+                    options=options,
+                    role_arn=current_app.config.get('BEDROCK_BATCH_ROLE_ARN'),
+                    input_prefix=current_app.config.get('NOVA_BATCH_INPUT_PREFIX', 'nova/batch/input'),
+                    output_prefix=current_app.config.get('NOVA_BATCH_OUTPUT_PREFIX', 'nova/batch/output'),
+                    job_name=batch_job_name
+                )
+
+                db.update_nova_job(nova_job_id, {
+                    'status': 'IN_PROGRESS',
+                    'progress_percent': 0,
+                    'batch_mode': 1,
+                    'batch_job_arn': batch_response['batch_job_arn'],
+                    'batch_status': 'SUBMITTED',
+                    'batch_input_s3_key': batch_response['batch_input_s3_key'],
+                    'batch_output_s3_prefix': batch_response['batch_output_s3_prefix']
+                })
+                db.update_nova_job_started_at(nova_job_id)
+                db.update_analysis_job(analysis_job_id, status='IN_PROGRESS')
+
+                return jsonify({
+                    'nova_job_id': nova_job_id,
+                    'analysis_job_id': analysis_job_id,
+                    'status': 'IN_PROGRESS',
+                    'model': model,
+                    'analysis_types': analysis_types,
+                    'processing_mode': 'batch',
+                    'batch_job_arn': batch_response['batch_job_arn'],
+                    'estimated_cost': cost_estimate
+                }), 202
+
             # Update status to IN_PROGRESS
             db.update_nova_job_status(nova_job_id, 'IN_PROGRESS', 0)
             db.update_nova_job_started_at(nova_job_id)
+
+            # Define progress callback for chunk progress tracking
+            def progress_callback(current_chunk: int, total_chunks: int, status_message: str):
+                """Update database with chunk progress."""
+                try:
+                    db.update_nova_job_chunk_progress(
+                        nova_job_id=nova_job_id,
+                        current_chunk=current_chunk,
+                        total_chunks=total_chunks,
+                        status_message=status_message
+                    )
+                    logger.info(f"Job {nova_job_id}: {status_message}")
+                except Exception as e:
+                    logger.warning(f"Failed to update chunk progress: {e}")
 
             # Run analysis
             logger.info(f"Starting Nova analysis for job {nova_job_id}, S3 key: {s3_key}")
@@ -134,7 +196,8 @@ def start_nova_analysis():
                 s3_key=s3_key,
                 model=model,
                 analysis_types=analysis_types,
-                options=options
+                options=options,
+                progress_callback=progress_callback
             )
 
             # Store results in database
@@ -147,6 +210,14 @@ def start_nova_analysis():
                 'processing_time_seconds': results['totals']['processing_time_seconds'],
                 'cost_usd': results['totals']['cost_total_usd']
             }
+
+            # Store chunk metadata if video was chunked
+            if results.get('chunked', False) and 'chunk_metadata' in results:
+                chunk_meta = results['chunk_metadata']
+                update_data['is_chunked'] = 1
+                update_data['chunk_count'] = chunk_meta['total_chunks']
+                update_data['chunk_duration'] = chunk_meta['chunk_duration']
+                update_data['overlap_duration'] = chunk_meta['overlap_seconds']
 
             # Store individual analysis results
             if 'summary' in results:
@@ -179,6 +250,7 @@ def start_nova_analysis():
                 'status': 'COMPLETED',
                 'model': model,
                 'analysis_types': analysis_types,
+                'processing_mode': processing_mode,
                 'results_summary': {
                     'tokens_used': results['totals']['tokens_total'],
                     'cost_usd': results['totals']['cost_total_usd'],
@@ -273,6 +345,93 @@ def get_nova_status(nova_job_id):
             'started_at': job['started_at'],
             'completed_at': job['completed_at']
         }
+        response['processing_mode'] = 'batch' if job.get('batch_mode') else 'realtime'
+
+        if job.get('batch_mode'):
+            response['processing_mode'] = 'batch'
+            response['batch_job_arn'] = job.get('batch_job_arn')
+            response['batch_status'] = job.get('batch_status')
+
+        # Include chunk progress information if video is being chunked
+        if job.get('is_chunked') or job.get('chunk_count', 0) > 1:
+            response['chunk_progress'] = {
+                'is_chunked': bool(job.get('is_chunked', 0)),
+                'current_chunk': job.get('current_chunk', 0),
+                'total_chunks': job.get('chunk_count', 0),
+                'status_message': job.get('chunk_status_message'),
+                'chunk_duration': job.get('chunk_duration'),
+                'overlap_duration': job.get('overlap_duration')
+            }
+
+        if job.get('batch_job_arn') and job['status'] not in ('COMPLETED', 'FAILED'):
+            nova_service = get_nova_service()
+            batch_status = nova_service.get_batch_job_status(job['batch_job_arn'])
+            response['batch_status'] = batch_status['status']
+            batch_state = (batch_status['status'] or '').upper()
+            if batch_status['status']:
+                db.update_nova_job(nova_job_id, {
+                    'batch_status': batch_status['status']
+                })
+
+            if batch_state in ('COMPLETED', 'SUCCEEDED'):
+                results = nova_service.fetch_batch_results(
+                    s3_prefix=job.get('batch_output_s3_prefix', ''),
+                    model=job['model'],
+                    analysis_types=json.loads(job['analysis_types']),
+                    options=json.loads(job.get('user_options') or '{}')
+                )
+
+                update_data = {
+                    'status': 'COMPLETED',
+                    'progress_percent': 100,
+                    'tokens_total': results['totals']['tokens_total'],
+                    'processing_time_seconds': results['totals']['processing_time_seconds'],
+                    'cost_usd': results['totals']['cost_total_usd'],
+                    'batch_status': 'COMPLETED'
+                }
+
+                if 'summary' in results:
+                    update_data['summary_result'] = json.dumps(results['summary'])
+                    update_data['tokens_input'] = results['summary'].get('tokens_input')
+                    update_data['tokens_output'] = results['summary'].get('tokens_output')
+
+                if 'chapters' in results:
+                    update_data['chapters_result'] = json.dumps(results['chapters'])
+
+                if 'elements' in results:
+                    update_data['elements_result'] = json.dumps(results['elements'])
+
+                db.update_nova_job(nova_job_id, update_data)
+                db.update_nova_job_completed_at(nova_job_id)
+
+                db.update_analysis_job(
+                    job['analysis_job_id'],
+                    status='COMPLETED',
+                    results=json.dumps(results)
+                )
+
+                response['status'] = 'COMPLETED'
+                response['progress_percent'] = 100
+                response['results_summary'] = {
+                    'tokens_total': results['totals']['tokens_total'],
+                    'cost_usd': results['totals']['cost_total_usd'],
+                    'processing_time_seconds': results['totals']['processing_time_seconds']
+                }
+
+            elif batch_state == 'FAILED':
+                error_msg = batch_status.get('failure_message') or 'Batch job failed'
+                db.update_nova_job(nova_job_id, {
+                    'status': 'FAILED',
+                    'error_message': error_msg,
+                    'batch_status': 'FAILED'
+                })
+                db.update_analysis_job(
+                    job['analysis_job_id'],
+                    status='FAILED',
+                    error_message=error_msg
+                )
+                response['status'] = 'FAILED'
+                response['error_message'] = error_msg
 
         if job['status'] == 'COMPLETED':
             response['results_summary'] = {
@@ -354,7 +513,8 @@ def get_nova_results(nova_job_id):
                 'processing_time_seconds': job['processing_time_seconds'],
                 'created_at': job['created_at'],
                 'started_at': job['started_at'],
-                'completed_at': job['completed_at']
+                'completed_at': job['completed_at'],
+                'processing_mode': 'batch' if job.get('batch_mode') else 'realtime'
             }
         }
 
@@ -399,7 +559,8 @@ def get_available_models():
                 'max_video_minutes': config['max_video_minutes'],
                 'price_input_per_1k': config['price_input_per_1k'],
                 'price_output_per_1k': config['price_output_per_1k'],
-                'best_for': config['best_for']
+                'best_for': config['best_for'],
+                'supports_batch': config.get('supports_batch', False)
             })
 
         return jsonify({'models': models}), 200
@@ -438,13 +599,15 @@ def estimate_analysis_cost():
         model = data.get('model', 'lite')
         video_duration_seconds = data.get('video_duration_seconds', 300)
         analysis_types = data.get('analysis_types', ['summary'])
+        processing_mode = data.get('processing_mode', 'realtime')
 
         nova_service = get_nova_service()
 
         # Estimate base cost
         base_estimate = nova_service.estimate_cost(
             model=model,
-            video_duration_seconds=video_duration_seconds
+            video_duration_seconds=video_duration_seconds,
+            batch_mode=(processing_mode == 'batch')
         )
 
         # Multiply by number of analysis types (each requires separate API call in current implementation)
@@ -462,7 +625,8 @@ def estimate_analysis_cost():
             'total_cost_usd': round(total_cost, 4),
             'analysis_count': analysis_count,
             'price_per_1k_input': base_estimate['price_per_1k_input'],
-            'price_per_1k_output': base_estimate['price_per_1k_output']
+            'price_per_1k_output': base_estimate['price_per_1k_output'],
+            'batch_discount_applied': base_estimate.get('batch_discount_applied', False)
         }), 200
 
     except Exception as e:

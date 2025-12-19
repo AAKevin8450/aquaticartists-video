@@ -34,6 +34,8 @@ You have two options:
     "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-micro-v1:0",
     "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-lite-v1:0",
     "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-pro-v1:0",
+    "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-pro-v2:0",
+    "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-omni-v2:0",
     "arn:aws:bedrock:us-east-1::foundation-model/us.amazon.nova-premier-v1:0"
   ]
 },
@@ -60,6 +62,32 @@ You have two options:
 5. Name it: `NovaVideoAnalysisPolicy`
 6. Click **Create policy**
 7. Attach the new policy to your IAM user/role
+
+### Step 2.5: Batch Mode Permissions (Optional)
+
+If you plan to use Nova Batch mode (50% cost reduction, async), add these permissions:
+
+```json
+{
+  "Sid": "BedrockBatchInference",
+  "Effect": "Allow",
+  "Action": [
+    "bedrock:CreateModelInvocationJob",
+    "bedrock:GetModelInvocationJob",
+    "bedrock:ListModelInvocationJobs",
+    "bedrock:StopModelInvocationJob"
+  ],
+  "Resource": "*"
+},
+{
+  "Sid": "IAMPassRoleForBatch",
+  "Effect": "Allow",
+  "Action": "iam:PassRole",
+  "Resource": "arn:aws:iam::123456789012:role/BedrockBatchRole"
+}
+```
+
+Also ensure the batch role has S3 read/write to the Nova batch input/output prefixes.
 
 ### Step 3: Enable Bedrock Model Access
 

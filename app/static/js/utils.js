@@ -245,6 +245,7 @@ export async function fetchWithTimeout(url, options = {}, timeout = 30000) {
  */
 export function formatAnalysisType(analysisType) {
     const types = {
+        'nova': 'Nova Understanding',
         'label_detection': 'Label Detection',
         'face_detection': 'Face Detection',
         'celebrity_recognition': 'Celebrity Recognition',
