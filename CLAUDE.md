@@ -1,15 +1,15 @@
 # Project-Specific Instructions for Claude Code
 
 ## Project Overview
-AWS Video & Image Analysis Application - Flask-based web application for analyzing videos and images using Amazon Rekognition. Supports 8 video analysis types, 8 image analysis types, face collection management, local video transcription, and comprehensive file upload/history tracking.
+AWS Video & Image Analysis Application - Flask-based web application for analyzing videos and images using Amazon Rekognition and Amazon Bedrock Nova. Supports 8 Rekognition video analysis types, 8 image analysis types, 3 Nova intelligent analysis types (summary, chapters, elements), face collection management, local video transcription, and comprehensive file upload/history tracking.
 
 ## AWS Configuration
 
 ### Current Setup
 - **S3 Bucket**: video-analysis-app-676206912644 (us-east-1)
-- **IAM Policy**: VideoAnalysisAppPolicy (v2 - explicit permissions)
+- **IAM Policy**: VideoAnalysisAppPolicy (v3 - Rekognition + Bedrock Nova permissions)
 - **CORS**: Configured for localhost:5700 browser uploads
-- **Services**: S3, Amazon Rekognition
+- **Services**: S3, Amazon Rekognition, Amazon Bedrock (Nova models)
 
 ### Environment Variables (.env)
 Critical environment variables are stored in .env file (not in git):
@@ -27,7 +27,7 @@ Critical environment variables are stored in .env file (not in git):
 - Virtual Environment: .venv (already configured)
 - Database: SQLite (data/app.db)
 - File Storage: AWS S3 (direct browser uploads via presigned URLs)
-- Analysis Engine: Amazon Rekognition (async for video, sync for images)
+- Analysis Engines: Amazon Rekognition (async for video, sync for images), Amazon Bedrock Nova (intelligent video analysis)
 
 ### Key Services
 1. **S3 Service** (app/services/s3_service.py) - Handles file upload/download
@@ -35,7 +35,9 @@ Critical environment variables are stored in .env file (not in git):
 3. **Rekognition Image** (app/services/rekognition_image.py) - Sync image analysis
 4. **Face Collections** (app/services/face_collection_service.py) - Face management
 5. **Transcription Service** (app/services/transcription_service.py) - Local video transcription using faster-whisper
-6. **Analysis API** (app/routes/analysis.py) - Multi-select analysis endpoint (supports arrays of analysis types)
+6. **Nova Service** (app/services/nova_service.py) - AWS Bedrock Nova intelligent video analysis (summary, chapters, elements)
+7. **Analysis API** (app/routes/analysis.py) - Multi-select analysis endpoint (supports arrays of analysis types)
+8. **Nova API** (app/routes/nova_analysis.py) - Nova video analysis endpoints (5 endpoints: /analyze, /status, /results, /models, /estimate-cost)
 
 ### Frontend Components
 **Templates** (app/templates/):
@@ -80,7 +82,10 @@ python run.py
 - Never commit .env file to git
 - S3 bucket has no public access
 - Use presigned URLs with short expiration for uploads
-- IAM policy v2 uses explicit permissions (31 specific Rekognition actions) instead of wildcard
+- IAM policy v3 uses explicit permissions:
+  - 31 specific Rekognition actions (video/image analysis, collections)
+  - 4 Bedrock actions (bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream, bedrock:GetFoundationModel, bedrock:ListFoundationModels)
+  - Model-specific ARNs for Nova Micro, Lite, Pro, Premier in us-east-1
 - Policy follows principle of least privilege with granular action permissions
 - S3 CORS updated to support all headers (*) and methods (GET, POST, PUT, DELETE, HEAD) for localhost:5700 and 127.0.0.1:5700
 
@@ -304,14 +309,28 @@ Comprehensive implementation plan for integrating Amazon Nova multimodal models 
 - Lite: 0.1-0.3x realtime (5 min video = 1-2 minutes)
 - Pro: 0.13-0.27x realtime (30 min video = 4-7 minutes)
 
-**Database Schema**: `nova_jobs` table with 25 fields linking to existing `jobs` table via foreign key, storing chunking metadata, JSON results, performance metrics, and cost tracking.
+**Database Schema**: `nova_jobs` table with 25 fields linking to `analysis_jobs` table via foreign key, storing chunking metadata, JSON results, performance metrics, and cost tracking.
 
-**Next Steps**: Resolve 18 open questions → Phase 1 implementation → Iterative rollout through Phase 5.
+**Implementation Status**:
+- ✅ **Phase 1 Complete** (100%): Core Nova integration with 4 models, 3 analysis types, 5 API endpoints, database schema, IAM permissions
+- ⏸️ Phase 2-5: Not started (chunking, enhanced detection, UI, optimization)
+
+**Current Capabilities** (Phase 1):
+- Video summarization (3 depth levels: brief/standard/detailed)
+- Chapter detection with semantic segmentation and AI-generated titles
+- Element identification (equipment, topics, people detection)
+- Cost estimation and tracking per analysis
+- Support for videos < 30 minutes (single-chunk processing)
+- REST API: POST /api/nova/analyze, GET /api/nova/status, GET /api/nova/results, GET /api/nova/models, POST /api/nova/estimate-cost
+
+**Testing Status**: All integration tests passed, ready for live video analysis with estimated cost < $0.50 for initial testing.
 
 ## Important Constraints
 - Video files: Max 10GB, formats: MP4, MOV, AVI, MKV
 - Image files: Max 15MB, formats: JPEG, PNG
 - Rekognition available in us-east-1 region
+- Nova models available in us-east-1 via Bedrock (22 models including Micro/Lite/Pro/Premier)
 - CORS configured for localhost:5700 and 127.0.0.1:5700 (update for production)
 - Timezone display: Eastern Time (requires tzdata package on Windows)
 - **Transcription**: Requires FFmpeg installed on system, GPU optional but recommended for large batches
+- **Nova**: Videos < 30 minutes supported (Phase 1), longer videos require Phase 2 chunking implementation
