@@ -239,7 +239,7 @@ def start_nova_analysis():
             db.update_analysis_job(
                 analysis_job_id,
                 status='COMPLETED',
-                results=json.dumps(results)
+                results=results
             )
 
             logger.info(f"Nova analysis completed for job {nova_job_id}. Cost: ${results['totals']['cost_total_usd']:.4f}")
@@ -407,7 +407,7 @@ def get_nova_status(nova_job_id):
                 db.update_analysis_job(
                     job['analysis_job_id'],
                     status='COMPLETED',
-                    results=json.dumps(results)
+                    results=results
                 )
 
                 response['status'] = 'COMPLETED'

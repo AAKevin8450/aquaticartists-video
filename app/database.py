@@ -164,6 +164,24 @@ class Database:
                 ON transcripts(file_name)
             ''')
 
+    def _parse_json_field(self, value: Any, default: Any = None, max_depth: int = 1) -> Any:
+        """Parse a JSON field safely, returning default on errors."""
+        if value is None:
+            return default
+        if isinstance(value, (dict, list)):
+            return value
+        if isinstance(value, str):
+            parsed = value
+            depth = 0
+            while depth < max_depth and isinstance(parsed, str):
+                try:
+                    parsed = json.loads(parsed)
+                except json.JSONDecodeError:
+                    return default if default is not None else value
+                depth += 1
+            return parsed
+        return value
+
     # File operations
     def create_file(self, filename: str, s3_key: str, file_type: str,
                     size_bytes: int, content_type: str, metadata: Optional[Dict] = None) -> int:
@@ -182,7 +200,12 @@ class Database:
             cursor = conn.cursor()
             cursor.execute('SELECT * FROM files WHERE id = ?', (file_id,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            file = dict(row)
+            if 'metadata' in file:
+                file['metadata'] = self._parse_json_field(file['metadata'], default={})
+            return file
 
     def get_file_by_s3_key(self, s3_key: str) -> Optional[Dict[str, Any]]:
         """Get file by S3 key."""
@@ -190,7 +213,12 @@ class Database:
             cursor = conn.cursor()
             cursor.execute('SELECT * FROM files WHERE s3_key = ?', (s3_key,))
             row = cursor.fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            file = dict(row)
+            if 'metadata' in file:
+                file['metadata'] = self._parse_json_field(file['metadata'], default={})
+            return file
 
     def list_files(self, file_type: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """List files with optional type filter."""
@@ -205,7 +233,11 @@ class Database:
                 cursor.execute('''
                     SELECT * FROM files ORDER BY uploaded_at DESC LIMIT ? OFFSET ?
                 ''', (limit, offset))
-            return [dict(row) for row in cursor.fetchall()]
+            files = [dict(row) for row in cursor.fetchall()]
+            for file in files:
+                if 'metadata' in file:
+                    file['metadata'] = self._parse_json_field(file['metadata'], default={})
+            return files
 
     def delete_file(self, file_id: int) -> bool:
         """Delete file record."""
@@ -236,9 +268,9 @@ class Database:
                 job = dict(row)
                 # Parse JSON fields
                 if job.get('parameters'):
-                    job['parameters'] = json.loads(job['parameters'])
+                    job['parameters'] = self._parse_json_field(job['parameters'], max_depth=2)
                 if job.get('results'):
-                    job['results'] = json.loads(job['results'])
+                    job['results'] = self._parse_json_field(job['results'], max_depth=2)
                 return job
             return None
 
@@ -284,9 +316,9 @@ class Database:
             for row in cursor.fetchall():
                 job = dict(row)
                 if job.get('parameters'):
-                    job['parameters'] = json.loads(job['parameters'])
+                    job['parameters'] = self._parse_json_field(job['parameters'], max_depth=2)
                 if job.get('results'):
-                    job['results'] = json.loads(job['results'])
+                    job['results'] = self._parse_json_field(job['results'], max_depth=2)
                 jobs.append(job)
             return jobs
 
