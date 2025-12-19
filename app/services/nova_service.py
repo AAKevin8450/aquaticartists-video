@@ -60,18 +60,19 @@ class NovaVideoService:
             'name': 'Nova Micro',
             'context_tokens': 128000,
             'max_video_minutes': 12,
-            'price_input_per_1k': 0.035,
-            'price_output_per_1k': 0.14,
+            'price_input_per_1k': 0.000035,
+            'price_output_per_1k': 0.00014,
             'best_for': 'Quick summaries, batch processing',
             'supports_batch': True
         },
         'lite': {
-            'id': 'us.amazon.nova-lite-v1:0',
-            'name': 'Nova Lite',
+            'id': 'amazon.nova-2-lite-v1:0',
+            'inference_profile_id': 'us.amazon.nova-2-lite-v1:0',
+            'name': 'Nova 2 Lite',
             'context_tokens': 300000,
             'max_video_minutes': 30,
-            'price_input_per_1k': 0.06,
-            'price_output_per_1k': 0.24,
+            'price_input_per_1k': 0.00033,
+            'price_output_per_1k': 0.00275,
             'best_for': 'General video understanding (recommended)',
             'supports_batch': True
         },
@@ -80,8 +81,8 @@ class NovaVideoService:
             'name': 'Nova Pro',
             'context_tokens': 300000,
             'max_video_minutes': 30,
-            'price_input_per_1k': 0.80,
-            'price_output_per_1k': 3.20,
+            'price_input_per_1k': 0.0008,
+            'price_output_per_1k': 0.0032,
             'best_for': 'Complex reasoning, detailed analysis',
             'supports_batch': True
         },
@@ -110,8 +111,8 @@ class NovaVideoService:
             'name': 'Nova Premier',
             'context_tokens': 1000000,
             'max_video_minutes': 90,
-            'price_input_per_1k': 2.00,  # Estimated
-            'price_output_per_1k': 8.00,  # Estimated
+            'price_input_per_1k': 0.0025,
+            'price_output_per_1k': 0.0125,
             'best_for': 'Enterprise critical analysis',
             'supports_batch': True
         }
@@ -245,9 +246,11 @@ class NovaVideoService:
         logger.info(f"Invoking Nova {model} for video: {s3_key}")
         logger.info(f"S3 URI: {s3_uri}, Format: {video_format}")
 
+        runtime_model_id = config.get('inference_profile_id', config['id'])
+
         # Prepare request body using Converse API
         request_body = {
-            "modelId": config['id'],
+            "modelId": runtime_model_id,
             "messages": [
                 {
                     "role": "user",
@@ -313,6 +316,7 @@ class NovaVideoService:
             'processing_time_seconds': round(processing_time, 2),
             'model': model,
             'model_id': config['id'],
+            'runtime_model_id': runtime_model_id,
             'stop_reason': response.get('stopReason', 'end_turn'),
             'timestamp': datetime.utcnow().isoformat() + 'Z'
         }

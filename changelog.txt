@@ -1,3 +1,27 @@
+2025-12-18 23:10:05 - Updated by Codex
+
+[Category: Bug Fix, API, Infrastructure, Refactoring]
+Fix Nova job result storage, align Nova model IDs/pricing, and support inference-profile-only Nova 2 Lite runtime calls.
+
+[Purpose]
+Resolve missing Nova results in history views by avoiding double-encoded JSON, update Nova model IDs/pricing to current rates, and route Nova 2 Lite runtime calls through Bedrock inference profiles to satisfy throughput requirements.
+
+[Impact]
+Nova results now render correctly in history/dashboard views; Lite model calls succeed via inference profile; cost estimates reflect latest published pricing.
+
+[Technical Notes]
+- Parse analysis job JSON fields defensively to handle prior double-encoded data.
+- Use `us.amazon.nova-2-lite-v1:0` for runtime calls while retaining `amazon.nova-2-lite-v1:0` for reporting.
+- Update token pricing rates across Nova model configs.
+
+[Changes Made]
+- app/database.py: parse JSON fields with safe double-decode and normalize file metadata parsing.
+- app/routes/nova_analysis.py: store Nova analysis results as structured JSON (no double encoding).
+- app/services/nova_service.py: update Nova 2 Lite runtime model ID/inference profile and pricing; rename Lite display.
+- app/services/nova_aggregator.py: align Lite model ID with inference profile for aggregation calls.
+- changelog.txt: add entry for Nova data storage and pricing updates.
+- AGENTS.md: document Nova 2 Lite inference profile and pricing guidance.
+
 2025-12-18 20:17:57 - Updated by Claude Code
 
 [Category: Feature Implementation]

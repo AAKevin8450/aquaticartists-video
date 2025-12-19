@@ -357,7 +357,7 @@ Do NOT simply concatenate the summaries. Synthesize them into a cohesive whole t
         """Get full Bedrock model ID from short name."""
         model_ids = {
             'micro': 'us.amazon.nova-micro-v1:0',
-            'lite': 'us.amazon.nova-lite-v1:0',
+            'lite': 'us.amazon.nova-2-lite-v1:0',
             'pro': 'us.amazon.nova-pro-v1:0',
             'pro_2_preview': 'us.amazon.nova-pro-v2:0',
             'omni_2_preview': 'us.amazon.nova-omni-v2:0',
