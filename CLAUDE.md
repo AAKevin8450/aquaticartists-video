@@ -280,6 +280,34 @@ Visual analytics dashboard that transforms raw AWS Rekognition JSON results into
 4. **Export to Excel for analysis**: Further analysis in spreadsheet software
 5. **Timeline chart shows patterns**: Identify when events occur in video
 
+## Planning & Documentation
+
+### AWS Nova Integration Plan
+Comprehensive implementation plan for integrating Amazon Nova multimodal models into the application for intelligent video analysis. See **20251218NovaImplementation.md** (6,300+ lines) for complete technical specifications.
+
+**Scope**: Pool and landscape water feature video analysis across all content types (installation, showcase, maintenance, design, marketing, training, timelapse).
+
+**Key Components**:
+- **NovaVideoIndex Schema v1.1**: Domain-specific JSON schema with 20 water feature types, 10 content types, segment-level analysis
+- **4 Nova Models**: Micro ($0.035/1K input), Lite ($0.06), Pro ($0.80), Premier ($2.00 estimated)
+- **Long Video Handling**: Automatic chunking (25-min chunks, 10% overlap) with smart aggregation
+- **5 Implementation Phases**: Foundation → Chunking → Detection → UI → Polish
+- **Testing Strategy**: 10 unit tests, 5 integration tests, 13 edge cases, 3 stress tests
+- **Risk Mitigation**: 10 identified risks with detailed mitigation strategies
+
+**Cost Estimates** (per video):
+- 5 min video: $0.01-$0.05 (Micro), $0.02-$0.10 (Lite), $0.05-$0.06 (Pro)
+- 30 min video: $0.08-$0.12 (Lite), $0.25-$0.35 (Pro)
+- 2 hour video: $1.00-$1.50 (Pro), $2.00-$3.00 (Premier)
+
+**Processing Times** (estimated):
+- Lite: 0.1-0.3x realtime (5 min video = 1-2 minutes)
+- Pro: 0.13-0.27x realtime (30 min video = 4-7 minutes)
+
+**Database Schema**: `nova_jobs` table with 25 fields linking to existing `jobs` table via foreign key, storing chunking metadata, JSON results, performance metrics, and cost tracking.
+
+**Next Steps**: Resolve 18 open questions → Phase 1 implementation → Iterative rollout through Phase 5.
+
 ## Important Constraints
 - Video files: Max 10GB, formats: MP4, MOV, AVI, MKV
 - Image files: Max 15MB, formats: JPEG, PNG
