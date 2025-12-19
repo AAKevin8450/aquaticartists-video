@@ -40,18 +40,9 @@
                         <label for="fileInput" class="form-label fw-bold">Choose File:</label>
                         <input type="file" class="form-control" id="fileInput" accept="video/*,image/*">
                         <div class="form-text">
-                            <strong>Video:</strong> MP4, MOV, AVI, MKV (Max 10GB)<br>
+                            <strong>Video:</strong> MP4, MOV, AVI, MKV (Max 10GB) - Proxy (720p, 15fps) automatically created for Nova analysis<br>
                             <strong>Image:</strong> JPEG, PNG (Max 15MB)
                         </div>
-                    </div>
-                    <div class="mb-4" id="proxyOptions" style="display: none;">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="createProxy" checked disabled>
-                            <label class="form-check-label" for="createProxy">
-                                Create Nova proxy (720p, 15 fps, required)
-                            </label>
-                        </div>
-                        <div class="form-text">Generates a smaller video for faster Nova analysis.</div>
                     </div>
 
                     <!-- Upload Progress -->
@@ -103,21 +94,14 @@
     const uploadStatus = document.getElementById('uploadStatus');
     const videoTypeRadio = document.getElementById('videoType');
     const imageTypeRadio = document.getElementById('imageType');
-    const proxyOptions = document.getElementById('proxyOptions');
-
-    if (videoTypeRadio && videoTypeRadio.checked) {
-        proxyOptions.style.display = 'block';
-    }
 
     // Update file input accept attribute based on selected type
     document.querySelectorAll('input[name="fileType"]').forEach(radio => {
         radio.addEventListener('change', (e) => {
             if (e.target.value === 'video') {
                 fileInput.accept = 'video/mp4,video/quicktime,video/x-msvideo,video/x-matroska';
-                proxyOptions.style.display = 'block';
             } else {
                 fileInput.accept = 'image/jpeg,image/png';
-                proxyOptions.style.display = 'none';
             }
             fileInput.value = '';
         });
@@ -159,9 +143,6 @@
             uploadStatus.textContent = 'Uploading file...';
             const formData = new FormData();
             formData.append('file', file);
-            if (fileType === 'video') {
-                formData.append('create_proxy', 'true');
-            }
 
             await new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();

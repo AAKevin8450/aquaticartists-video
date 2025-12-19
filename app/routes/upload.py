@@ -9,6 +9,7 @@ from app.utils.validators import (
     get_file_type, ValidationError
 )
 from app.utils.formatters import format_file_size, format_timestamp, format_duration
+from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
 import uuid
 import os
 import re
@@ -264,66 +265,114 @@ def upload_file_direct():
         # Upload to S3
         s3_service = get_s3_service(current_app)
         if file_type == 'video':
-            create_proxy = request.form.get('create_proxy', 'true').lower() in ('1', 'true', 'yes', 'on')
-            if not create_proxy:
-                return jsonify({'error': 'Proxy creation is required for video uploads'}), 400
-
+            # Proxy creation is now always required
             if not shutil.which('ffmpeg'):
                 return jsonify({'error': 'ffmpeg is not available on the server'}), 500
 
+            # Save source video to local storage
             upload_root = Path(current_app.config['UPLOAD_FOLDER'])
             upload_dir = upload_root / str(upload_id)
             upload_dir.mkdir(parents=True, exist_ok=True)
-            local_path = upload_dir / safe_filename
-            file.save(local_path)
+            source_local_path = upload_dir / safe_filename
+            file.save(source_local_path)
 
-            size_bytes = os.path.getsize(local_path)
+            source_size_bytes = os.path.getsize(source_local_path)
             try:
-                validate_file_size(size_bytes, max_size_mb)
+                validate_file_size(source_size_bytes, max_size_mb)
             except ValidationError as e:
-                if local_path.exists():
-                    local_path.unlink()
+                if source_local_path.exists():
+                    source_local_path.unlink()
                 return jsonify({'error': str(e)}), 400
 
-            duration_seconds = _probe_duration_seconds(str(local_path))
+            # Extract media metadata from source video
+            try:
+                source_metadata = extract_media_metadata(str(source_local_path))
+            except MediaMetadataError as e:
+                current_app.logger.warning(f"Failed to extract metadata: {e}")
+                source_metadata = {}
 
+            # Create proxy video in proxy_video folder
+            proxy_video_dir = Path('proxy_video')
+            proxy_video_dir.mkdir(parents=True, exist_ok=True)
+            proxy_filename = f"{upload_id}_720p15.mp4"
+            proxy_local_path = proxy_video_dir / proxy_filename
+
+            try:
+                _create_proxy_video(str(source_local_path), str(proxy_local_path))
+            except RuntimeError as e:
+                if source_local_path.exists():
+                    source_local_path.unlink()
+                raise
+
+            proxy_size_bytes = os.path.getsize(proxy_local_path)
+
+            # Extract media metadata from proxy video
+            try:
+                proxy_metadata = extract_media_metadata(str(proxy_local_path))
+            except MediaMetadataError as e:
+                current_app.logger.warning(f"Failed to extract proxy metadata: {e}")
+                proxy_metadata = {}
+
+            # Upload proxy to S3
             proxy_s3_key = f"uploads/{upload_id}/proxy_720p15.mp4"
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                proxy_path = os.path.join(tmp_dir, 'proxy_720p15.mp4')
-                _create_proxy_video(str(local_path), proxy_path)
-                proxy_size = os.path.getsize(proxy_path)
-                with open(proxy_path, 'rb') as proxy_file:
-                    s3_service.upload_file(proxy_file, proxy_s3_key, 'video/mp4')
+            with open(proxy_local_path, 'rb') as proxy_file:
+                s3_service.upload_file(proxy_file, proxy_s3_key, 'video/mp4')
 
-            # Record in database
+            # Create source file record in database (no S3 upload for source)
             db = get_db()
-            file_id = db.create_file(
+            source_s3_key = f"uploads/{upload_id}/{safe_filename}"  # Not uploaded, just for reference
+            source_file_id = db.create_source_file(
                 filename=file.filename,
-                s3_key=proxy_s3_key,
+                s3_key=source_s3_key,
                 file_type=file_type,
-                size_bytes=size_bytes,
-                content_type='video/mp4',
+                size_bytes=source_size_bytes,
+                content_type=file.content_type or 'video/mp4',
+                local_path=str(source_local_path),
+                resolution_width=source_metadata.get('resolution_width'),
+                resolution_height=source_metadata.get('resolution_height'),
+                frame_rate=source_metadata.get('frame_rate'),
+                codec_video=source_metadata.get('codec_video'),
+                codec_audio=source_metadata.get('codec_audio'),
+                duration_seconds=source_metadata.get('duration_seconds'),
+                bitrate=source_metadata.get('bitrate'),
                 metadata={
-                    'original_size_bytes': size_bytes,
-                    'duration_seconds': duration_seconds,
-                    'local_path': str(local_path),
-                    'original_content_type': file.content_type or '',
-                    'proxy_s3_key': proxy_s3_key,
-                    'proxy_size_bytes': proxy_size,
-                    'proxy_content_type': 'video/mp4',
-                    'proxy_generated_at': datetime.utcnow().isoformat() + 'Z',
-                    'proxy_spec': '720p15'
+                    'upload_id': str(upload_id),
+                    'original_content_type': file.content_type or ''
+                }
+            )
+
+            # Create proxy file record in database
+            proxy_file_id = db.create_proxy_file(
+                source_file_id=source_file_id,
+                filename=proxy_filename,
+                s3_key=proxy_s3_key,
+                size_bytes=proxy_size_bytes,
+                content_type='video/mp4',
+                local_path=str(proxy_local_path),
+                resolution_width=proxy_metadata.get('resolution_width'),
+                resolution_height=proxy_metadata.get('resolution_height'),
+                frame_rate=proxy_metadata.get('frame_rate'),
+                codec_video=proxy_metadata.get('codec_video'),
+                codec_audio=proxy_metadata.get('codec_audio'),
+                duration_seconds=proxy_metadata.get('duration_seconds'),
+                bitrate=proxy_metadata.get('bitrate'),
+                metadata={
+                    'upload_id': str(upload_id),
+                    'proxy_spec': '720p15',
+                    'proxy_generated_at': datetime.utcnow().isoformat() + 'Z'
                 }
             )
 
             return jsonify({
-                'file_id': file_id,
+                'file_id': source_file_id,
+                'proxy_file_id': proxy_file_id,
                 'message': 'File uploaded successfully',
                 's3_key': proxy_s3_key,
-                'size_bytes': size_bytes,
-                'display_size': format_file_size(size_bytes),
-                'duration_seconds': duration_seconds,
-                'display_duration': _format_duration_seconds(duration_seconds)
+                'size_bytes': source_size_bytes,
+                'proxy_size_bytes': proxy_size_bytes,
+                'display_size': format_file_size(source_size_bytes),
+                'duration_seconds': source_metadata.get('duration_seconds'),
+                'display_duration': _format_duration_seconds(source_metadata.get('duration_seconds'))
             }), 201
 
         s3_key = f"uploads/{upload_id}/{safe_filename}"

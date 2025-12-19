@@ -1,7 +1,7 @@
 # Project-Specific Instructions for Claude Code
 
 ## Project Overview
-AWS Video & Image Analysis Application - Flask-based web application for analyzing videos and images using Amazon Rekognition and Amazon Bedrock Nova. Supports 8 Rekognition video analysis types, 8 image analysis types, 3 Nova intelligent analysis types (summary, chapters, elements), face collection management, local video transcription, and comprehensive file upload/history tracking.
+AWS Video & Image Analysis Application - Flask-based web application for analyzing videos and images using Amazon Rekognition and Amazon Bedrock Nova. Supports 8 Rekognition video analysis types, 8 image analysis types, 3 Nova intelligent analysis types (summary, chapters, elements), face collection management, local video transcription, comprehensive file management with search/filter, and file upload/history tracking.
 
 ## AWS Configuration
 
@@ -38,6 +38,7 @@ Critical environment variables are stored in .env file (not in git):
 6. **Nova Service** (app/services/nova_service.py) - AWS Bedrock Nova intelligent video analysis (summary, chapters, elements)
 7. **Analysis API** (app/routes/analysis.py) - Multi-select analysis endpoint (supports arrays of analysis types)
 8. **Nova API** (app/routes/nova_analysis.py) - Nova video analysis endpoints (5 endpoints: /analyze, /status, /results, /models, /estimate-cost)
+9. **File Management API** (app/routes/file_management.py) - Centralized file management with search/filter/actions (10 endpoints: list, details, create-proxy, start-analysis, start-transcription, start-nova, delete-cascade, s3-files)
 
 ### Frontend Components
 **Templates** (app/templates/):
@@ -47,6 +48,7 @@ Critical environment variables are stored in .env file (not in git):
 - image_analysis.html - Multi-select analysis types (checkboxes) with aggregated results display
 - collections.html - Face collection management interface
 - transcription.html - Local video transcription interface with directory scanning and batch processing
+- file_management.html - Centralized file management with search/filter, status badges, quick actions (proxy, transcription, analysis, delete)
 - history.html - Job history with auto-load and download buttons for completed jobs
 - dashboard.html - Visual analytics dashboard with charts and insights for video analysis results
 - base.html - Base template with navigation and common layout
@@ -55,6 +57,7 @@ Critical environment variables are stored in .env file (not in git):
 - app/static/css/style.css - Application-wide styling with Bootstrap 5 integration
 - app/static/js/utils.js - Shared JavaScript utilities for AJAX and API interactions
 - app/static/js/dashboard.js - Dashboard functionality with Chart.js visualizations and data processors
+- app/static/js/file_management.js - File management functionality with search/filter, pagination, and quick actions
 
 **Key Features**:
 - Multi-select analysis: Users can select 1-8 analysis types simultaneously (checkboxes replace radio buttons)
@@ -64,6 +67,7 @@ Critical environment variables are stored in .env file (not in git):
 - Auto-polling: History page automatically polls running jobs every 15 seconds until completion
 - Excel export: Professional formatted Excel files with Summary and Data sheets using openpyxl
 - Visual dashboard: Interactive charts, graphs, and insights for video analysis results (accessible via /dashboard/<job_id>)
+- File management: Centralized file view with full-text search (filenames, metadata, transcripts), advanced filtering (type/proxy/transcription/date), status badges (proxy/transcripts/analyses), and quick actions (create proxy, transcribe, analyze, delete cascade)
 
 ### Running the Application
 ```bash
