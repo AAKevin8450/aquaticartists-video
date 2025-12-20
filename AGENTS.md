@@ -1,6 +1,6 @@
 # AGENTS
 
-Last Updated: 2025-12-19 21:10:20
+Last Updated: 2025-12-19 21:43:06
 
 Nova batch processing
 - Enable async batch mode by setting `BEDROCK_BATCH_ROLE_ARN`, `NOVA_BATCH_INPUT_PREFIX`, `NOVA_BATCH_OUTPUT_PREFIX` in `.env`.
@@ -26,8 +26,10 @@ Local-first file handling
 - Video uploads create local proxies in `proxy_video` named `originalname_<source_file_id>_<proxy_spec>.ext`; `proxy_spec` is stored in proxy file metadata.
 - Direct S3 uploads are disabled; files may have `s3_key` set to NULL for local-only records.
 - File Management supports directory import via `/api/files/import-directory`, scanning recursively without moving source files.
+- File Management batch actions use a modal with configurable options; Nova models can be pulled from `/api/nova/models`.
 
 Runtime & operations
 - Flask dev server runs on port 5700; database is SQLite at `data/app.db`.
 - Local transcription requires FFmpeg available in PATH (GPU optional for speed).
 - Rekognition Person Tracking may fail with AccessDenied despite correct IAM permissions (AWS account-level restriction).
+- Batch proxy processing runs inside the Flask app context for background workers.
