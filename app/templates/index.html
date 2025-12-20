@@ -17,25 +17,320 @@
 </div>
 {% endif %}
 
-<!-- Statistics Cards -->
+<!-- Main Statistics Cards -->
 <div class="row mb-4">
-    <div class="col-md-6 mb-3">
-        <div class="card bg-primary text-white">
+    <!-- Total Files -->
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card bg-primary text-white h-100">
             <div class="card-body">
-                <h5 class="card-title">
-                    <i class="bi bi-file-earmark"></i> Total Files
-                </h5>
-                <p class="card-text display-4">{{ total_files|default(0) }}</p>
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="card-subtitle mb-2 opacity-75">Total Files</h6>
+                        <h2 class="card-title mb-0">{{ "{:,}".format(stats.total_files|default(0)) }}</h2>
+                        <small class="opacity-75">{{ stats.video_count|default(0) }} videos, {{ stats.image_count|default(0) }} images</small>
+                    </div>
+                    <div>
+                        <i class="bi bi-file-earmark-play" style="font-size: 3rem; opacity: 0.3;"></i>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-    <div class="col-md-6 mb-3">
-        <div class="card bg-success text-white">
+
+    <!-- Total Storage -->
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card bg-success text-white h-100">
             <div class="card-body">
-                <h5 class="card-title">
-                    <i class="bi bi-gear"></i> Total Jobs
-                </h5>
-                <p class="card-text display-4">{{ total_jobs|default(0) }}</p>
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="card-subtitle mb-2 opacity-75">Total Storage</h6>
+                        {% set storage_gb = (stats.total_storage_bytes|default(0) / 1024 / 1024 / 1024) %}
+                        <h2 class="card-title mb-0">
+                            {% if storage_gb >= 1000 %}
+                                {{ "%.1f"|format(storage_gb / 1024) }} TB
+                            {% else %}
+                                {{ "%.1f"|format(storage_gb) }} GB
+                            {% endif %}
+                        </h2>
+                        {% set proxy_gb = (stats.proxy_storage_bytes|default(0) / 1024 / 1024 / 1024) %}
+                        <small class="opacity-75">{{ "%.1f"|format(proxy_gb) }} GB proxies</small>
+                    </div>
+                    <div>
+                        <i class="bi bi-hdd-stack" style="font-size: 3rem; opacity: 0.3;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Total Video Duration -->
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card bg-info text-white h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="card-subtitle mb-2 opacity-75">Video Duration</h6>
+                        {% set hours = (stats.total_duration_seconds|default(0) / 3600)|int %}
+                        <h2 class="card-title mb-0">{{ "{:,}".format(hours) }} hrs</h2>
+                        {% set transcribed_hours = (stats.transcribed_duration_seconds|default(0) / 3600)|int %}
+                        <small class="opacity-75">{{ "{:,}".format(transcribed_hours) }} hrs transcribed</small>
+                    </div>
+                    <div>
+                        <i class="bi bi-clock-history" style="font-size: 3rem; opacity: 0.3;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Total Jobs -->
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card bg-warning text-dark h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="card-subtitle mb-2">Analysis Jobs</h6>
+                        <h2 class="card-title mb-0">{{ "{:,}".format(stats.total_jobs|default(0)) }}</h2>
+                        <small>{{ stats.success_rate|default(0) }}% success rate</small>
+                    </div>
+                    <div>
+                        <i class="bi bi-graph-up" style="font-size: 3rem; opacity: 0.3;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Content Breakdown Row -->
+<div class="row mb-4">
+    <!-- File Type Distribution -->
+    <div class="col-lg-4 mb-3">
+        <div class="card h-100">
+            <div class="card-header bg-light">
+                <h6 class="mb-0"><i class="bi bi-pie-chart"></i> Content Breakdown</h6>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-6 mb-3">
+                        <i class="bi bi-camera-video text-primary" style="font-size: 2rem;"></i>
+                        <h4 class="mt-2">{{ stats.video_percent|default(0) }}%</h4>
+                        <small class="text-muted">Videos</small>
+                    </div>
+                    <div class="col-6 mb-3">
+                        <i class="bi bi-image text-success" style="font-size: 2rem;"></i>
+                        <h4 class="mt-2">{{ stats.image_percent|default(0) }}%</h4>
+                        <small class="text-muted">Images</small>
+                    </div>
+                    <div class="col-6">
+                        <i class="bi bi-badge-hd text-info" style="font-size: 2rem;"></i>
+                        <h4 class="mt-2">{{ stats.proxy_percent|default(0) }}%</h4>
+                        <small class="text-muted">With Proxy</small>
+                    </div>
+                    <div class="col-6">
+                        <i class="bi bi-mic text-warning" style="font-size: 2rem;"></i>
+                        <h4 class="mt-2">{{ stats.transcript_percent|default(0) }}%</h4>
+                        <small class="text-muted">Transcribed</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Processing Stats -->
+    <div class="col-lg-4 mb-3">
+        <div class="card h-100">
+            <div class="card-header bg-light">
+                <h6 class="mb-0"><i class="bi bi-speedometer"></i> Processing Stats</h6>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="text-muted">Completed</span>
+                        <strong class="text-success">{{ "{:,}".format(stats.completed_jobs|default(0)) }}</strong>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        {% set completed_percent = (stats.completed_jobs|default(0) / stats.total_jobs * 100) if stats.total_jobs else 0 %}
+                        <div class="progress-bar bg-success" style="width: {{ completed_percent }}%"></div>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="text-muted">Running</span>
+                        <strong class="text-primary">{{ stats.running_jobs|default(0) }}</strong>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        {% set running_percent = (stats.running_jobs|default(0) / stats.total_jobs * 100) if stats.total_jobs else 0 %}
+                        <div class="progress-bar bg-primary progress-bar-striped progress-bar-animated" style="width: {{ running_percent }}%"></div>
+                    </div>
+                </div>
+                <div>
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="text-muted">Failed</span>
+                        <strong class="text-danger">{{ stats.failed_jobs|default(0) }}</strong>
+                    </div>
+                    <div class="progress" style="height: 8px;">
+                        {% set failed_percent = (stats.failed_jobs|default(0) / stats.total_jobs * 100) if stats.total_jobs else 0 %}
+                        <div class="progress-bar bg-danger" style="width: {{ failed_percent }}%"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="col-lg-4 mb-3">
+        <div class="card h-100">
+            <div class="card-header bg-light">
+                <h6 class="mb-0"><i class="bi bi-activity"></i> Recent Activity</h6>
+            </div>
+            <div class="card-body">
+                <div class="mb-3 pb-3 border-bottom">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <small class="text-muted d-block">Today</small>
+                            <strong>{{ stats.files_today|default(0) }}</strong> files added
+                        </div>
+                        <i class="bi bi-calendar-day text-primary" style="font-size: 1.5rem;"></i>
+                    </div>
+                </div>
+                <div class="mb-3 pb-3 border-bottom">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <small class="text-muted d-block">Today</small>
+                            <strong>{{ stats.jobs_completed_today|default(0) }}</strong> jobs completed
+                        </div>
+                        <i class="bi bi-check-circle text-success" style="font-size: 1.5rem;"></i>
+                    </div>
+                </div>
+                <div class="mb-2 pb-2 border-bottom">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <small class="text-muted d-block">This Week</small>
+                            <strong>{{ stats.files_this_week|default(0) }}</strong> files added
+                        </div>
+                        <i class="bi bi-calendar-week text-info" style="font-size: 1.5rem;"></i>
+                    </div>
+                </div>
+                <div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <small class="text-muted d-block">This Week</small>
+                            <strong>{{ stats.jobs_this_week|default(0) }}</strong> jobs started
+                        </div>
+                        <i class="bi bi-play-circle text-warning" style="font-size: 1.5rem;"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Analysis & Transcription Details Row -->
+<div class="row mb-4">
+    <!-- Analysis Breakdown -->
+    <div class="col-lg-4 mb-3">
+        <div class="card h-100">
+            <div class="card-header bg-light">
+                <h6 class="mb-0"><i class="bi bi-bar-chart"></i> Analysis Breakdown</h6>
+            </div>
+            <div class="card-body">
+                <div class="row text-center mb-3">
+                    <div class="col-6">
+                        <div class="p-3 bg-light rounded">
+                            <i class="bi bi-stars text-primary" style="font-size: 1.8rem;"></i>
+                            <h4 class="mt-2 mb-0">{{ "{:,}".format(stats.nova_count|default(0)) }}</h4>
+                            <small class="text-muted">Nova AI</small>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="p-3 bg-light rounded">
+                            <i class="bi bi-eye text-success" style="font-size: 1.8rem;"></i>
+                            <h4 class="mt-2 mb-0">{{ "{:,}".format(stats.rekognition_count|default(0)) }}</h4>
+                            <small class="text-muted">Rekognition</small>
+                        </div>
+                    </div>
+                </div>
+                {% if stats.top_analysis_types %}
+                <div class="border-top pt-2">
+                    <small class="text-muted d-block mb-2">Most Used Types:</small>
+                    {% for analysis in stats.top_analysis_types[:3] %}
+                    <div class="d-flex justify-content-between mb-1">
+                        <small class="text-truncate me-2">{{ analysis.analysis_type }}</small>
+                        <small class="text-muted">{{ analysis.count }}</small>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Transcription Stats -->
+    <div class="col-lg-4 mb-3">
+        <div class="card h-100">
+            <div class="card-header bg-light">
+                <h6 class="mb-0"><i class="bi bi-mic-fill"></i> Transcription Stats</h6>
+            </div>
+            <div class="card-body">
+                <div class="row text-center mb-3">
+                    <div class="col-6">
+                        <div class="p-3 bg-light rounded">
+                            <i class="bi bi-file-text text-info" style="font-size: 1.8rem;"></i>
+                            <h4 class="mt-2 mb-0">{{ "{:,}".format(stats.total_transcripts|default(0)) }}</h4>
+                            <small class="text-muted">Transcripts</small>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="p-3 bg-light rounded">
+                            <i class="bi bi-check-circle text-success" style="font-size: 1.8rem;"></i>
+                            <h4 class="mt-2 mb-0">{{ "{:,}".format(stats.completed_transcripts|default(0)) }}</h4>
+                            <small class="text-muted">Completed</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="border-top pt-2">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <small class="text-muted">Most Used Model:</small>
+                        <small><strong>{{ stats.most_used_model|default('N/A') }}</strong></small>
+                    </div>
+                    <div class="d-flex justify-content-between align-items-center">
+                        <small class="text-muted">Coverage:</small>
+                        <small><strong>{{ stats.transcript_percent|default(0) }}%</strong> of videos</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Collections & Quick Stats -->
+    <div class="col-lg-4 mb-3">
+        <div class="card h-100">
+            <div class="card-header bg-light">
+                <h6 class="mb-0"><i class="bi bi-info-circle"></i> Quick Stats</h6>
+            </div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-3 pb-3 border-bottom">
+                    <div>
+                        <i class="bi bi-people text-primary me-2" style="font-size: 1.5rem;"></i>
+                        <strong>{{ stats.collection_count|default(0) }}</strong>
+                    </div>
+                    <small class="text-muted">Face Collections</small>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mb-3 pb-3 border-bottom">
+                    <div>
+                        <i class="bi bi-badge-hd text-info me-2" style="font-size: 1.5rem;"></i>
+                        <strong>{{ stats.files_with_proxy|default(0) }}</strong>
+                    </div>
+                    <small class="text-muted">Files with Proxies</small>
+                </div>
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <i class="bi bi-check-circle text-success me-2" style="font-size: 1.5rem;"></i>
+                        <strong>{{ stats.success_rate|default(0) }}%</strong>
+                    </div>
+                    <small class="text-muted">Analysis Success Rate</small>
+                </div>
             </div>
         </div>
     </div>
@@ -46,18 +341,19 @@
 <div class="row mb-4">
     <div class="col-12">
         <div class="card">
-            <div class="card-header bg-warning">
-                <h5 class="mb-0">
+            <div class="card-header">
+                <h6 class="mb-0">
                     <i class="bi bi-hourglass-split"></i> Active Jobs
-                </h5>
+                    <span class="badge bg-warning ms-2">{{ active_jobs|length }}</span>
+                </h6>
             </div>
             <div class="card-body">
                 <div class="table-responsive">
-                    <table class="table table-sm">
-                        <thead>
+                    <table class="table table-sm table-hover mb-0">
+                        <thead class="table-light">
                             <tr>
                                 <th>Job ID</th>
-                                <th>File</th>
+                                <th>File ID</th>
                                 <th>Analysis Type</th>
                                 <th>Status</th>
                                 <th>Started</th>
@@ -66,121 +362,56 @@
                         <tbody>
                             {% for job in active_jobs %}
                             <tr>
-                                <td><code>{{ job.id }}</code></td>
+                                <td><code class="small">{{ job.id }}</code></td>
                                 <td>{{ job.file_id }}</td>
-                                <td>{{ job.analysis_type }}</td>
+                                <td><span class="badge bg-info">{{ job.analysis_type }}</span></td>
                                 <td><span class="badge bg-warning">{{ job.status }}</span></td>
-                                <td>{{ job.created_at }}</td>
+                                <td><small class="text-muted">{{ job.created_at }}</small></td>
                             </tr>
                             {% endfor %}
                         </tbody>
                     </table>
                 </div>
             </div>
+            <div class="card-footer text-center">
+                <a href="/history" class="btn btn-sm btn-primary">
+                    <i class="bi bi-list"></i> View All Jobs
+                </a>
+            </div>
         </div>
     </div>
 </div>
 {% endif %}
-
-<!-- Recent Files -->
-<div class="row mb-4">
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">
-                    <i class="bi bi-file-earmark-plus"></i> Recent Files
-                </h5>
-            </div>
-            <div class="card-body">
-                {% if recent_files %}
-                <div class="list-group">
-                    {% for file in recent_files %}
-                    <div class="list-group-item">
-                        <div class="d-flex w-100 justify-content-between">
-                            <h6 class="mb-1">{{ file.filename }}</h6>
-                            <small class="text-muted">{{ file.file_type }}</small>
-                        </div>
-                        <small class="text-muted">{{ file.uploaded_at }}</small>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <p class="text-muted">No files uploaded yet.</p>
-                {% endif %}
-            </div>
-            <div class="card-footer">
-                <a href="/upload" class="btn btn-sm btn-primary">
-                    <i class="bi bi-cloud-upload"></i> Upload Files
-                </a>
-            </div>
-        </div>
-    </div>
-
-    <!-- Recent Jobs -->
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">
-                    <i class="bi bi-clock-history"></i> Recent Jobs
-                </h5>
-            </div>
-            <div class="card-body">
-                {% if recent_jobs %}
-                <div class="list-group">
-                    {% for job in recent_jobs %}
-                    <div class="list-group-item">
-                        <div class="d-flex w-100 justify-content-between">
-                            <h6 class="mb-1">{{ job.analysis_type }}</h6>
-                            <span class="badge {% if job.status == 'COMPLETED' %}bg-success{% elif job.status == 'FAILED' %}bg-danger{% elif job.status == 'IN_PROGRESS' %}bg-warning{% else %}bg-secondary{% endif %}">
-                                {{ job.status }}
-                            </span>
-                        </div>
-                        <small class="text-muted">{{ job.created_at }}</small>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <p class="text-muted">No analysis jobs yet.</p>
-                {% endif %}
-            </div>
-            <div class="card-footer">
-                <a href="/history" class="btn btn-sm btn-info">
-                    <i class="bi bi-list"></i> View All
-                </a>
-            </div>
-        </div>
-    </div>
-</div>
 
 <!-- Quick Actions -->
 <div class="row">
     <div class="col-12">
         <div class="card">
             <div class="card-header">
-                <h5 class="mb-0">
+                <h6 class="mb-0">
                     <i class="bi bi-lightning"></i> Quick Actions
-                </h5>
+                </h6>
             </div>
             <div class="card-body">
-                <div class="row">
-                    <div class="col-md-3 mb-2">
-                        <a href="/upload" class="btn btn-primary w-100">
-                            <i class="bi bi-cloud-upload"></i><br>Upload Files
+                <div class="row g-2">
+                    <div class="col-md-3 col-sm-6">
+                        <a href="/files" class="btn btn-primary w-100">
+                            <i class="bi bi-folder2-open"></i> File Management
                         </a>
                     </div>
-                    <div class="col-md-3 mb-2">
-                        <a href="/video-analysis" class="btn btn-info w-100">
-                            <i class="bi bi-play-circle"></i><br>Video Analysis
+                    <div class="col-md-3 col-sm-6">
+                        <a href="/upload" class="btn btn-info w-100">
+                            <i class="bi bi-cloud-upload"></i> Upload Files
                         </a>
                     </div>
-                    <div class="col-md-3 mb-2">
-                        <a href="/image-analysis" class="btn btn-success w-100">
-                            <i class="bi bi-image"></i><br>Image Analysis
+                    <div class="col-md-3 col-sm-6">
+                        <a href="/history" class="btn btn-success w-100">
+                            <i class="bi bi-clock-history"></i> Job History
                         </a>
                     </div>
-                    <div class="col-md-3 mb-2">
+                    <div class="col-md-3 col-sm-6">
                         <a href="/collections" class="btn btn-warning w-100">
-                            <i class="bi bi-people"></i><br>Face Collections
+                            <i class="bi bi-people"></i> Face Collections
                         </a>
                     </div>
                 </div>
