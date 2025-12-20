@@ -1565,6 +1565,8 @@ class Database:
         file_type: Optional[str] = None,
         has_proxy: Optional[bool] = None,
         has_transcription: Optional[bool] = None,
+        has_nova_analysis: Optional[bool] = None,
+        has_rekognition_analysis: Optional[bool] = None,
         search: Optional[str] = None,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
@@ -1610,6 +1612,7 @@ class Database:
                     (SELECT COUNT(*) FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1) as has_proxy,
                     (SELECT p.id FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1 LIMIT 1) as proxy_file_id,
                     (SELECT p.s3_key FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1 LIMIT 1) as proxy_s3_key,
+                    (SELECT p.size_bytes FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1 LIMIT 1) as proxy_size_bytes,
                     (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id) as total_analyses,
                     (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'SUCCEEDED') as completed_analyses,
                     (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'IN_PROGRESS') as running_analyses,
@@ -1638,6 +1641,18 @@ class Database:
                     query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
                 else:
                     query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
+
+            if has_nova_analysis is not None:
+                if has_nova_analysis:
+                    query += ' AND EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+
+            if has_rekognition_analysis is not None:
+                if has_rekognition_analysis:
+                    query += ' AND EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
 
             if search:
                 query += ''' AND (
@@ -1702,6 +1717,8 @@ class Database:
         file_type: Optional[str] = None,
         has_proxy: Optional[bool] = None,
         has_transcription: Optional[bool] = None,
+        has_nova_analysis: Optional[bool] = None,
+        has_rekognition_analysis: Optional[bool] = None,
         search: Optional[str] = None,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
@@ -1733,6 +1750,18 @@ class Database:
                     query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
                 else:
                     query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
+
+            if has_nova_analysis is not None:
+                if has_nova_analysis:
+                    query += ' AND EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+
+            if has_rekognition_analysis is not None:
+                if has_rekognition_analysis:
+                    query += ' AND EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
 
             if search:
                 query += ''' AND (
@@ -1779,6 +1808,8 @@ class Database:
         file_type: Optional[str] = None,
         has_proxy: Optional[bool] = None,
         has_transcription: Optional[bool] = None,
+        has_nova_analysis: Optional[bool] = None,
+        has_rekognition_analysis: Optional[bool] = None,
         search: Optional[str] = None,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
@@ -1805,7 +1836,8 @@ class Database:
                 SELECT
                     COUNT(*) as total_count,
                     COALESCE(SUM(f.size_bytes), 0) as total_size_bytes,
-                    COALESCE(SUM(f.duration_seconds), 0) as total_duration_seconds
+                    COALESCE(SUM(f.duration_seconds), 0) as total_duration_seconds,
+                    COALESCE(SUM((SELECT p.size_bytes FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1 LIMIT 1)), 0) as total_proxy_size_bytes
                 FROM files f
                 WHERE (f.is_proxy = 0 OR f.is_proxy IS NULL)
             '''
@@ -1827,6 +1859,18 @@ class Database:
                     query += ' AND EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
                 else:
                     query += ' AND NOT EXISTS (SELECT 1 FROM transcripts t WHERE t.file_path = f.local_path)'
+
+            if has_nova_analysis is not None:
+                if has_nova_analysis:
+                    query += ' AND EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+
+            if has_rekognition_analysis is not None:
+                if has_rekognition_analysis:
+                    query += ' AND EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
 
             if search:
                 query += ''' AND (
@@ -1871,7 +1915,8 @@ class Database:
             return {
                 'total_count': row['total_count'],
                 'total_size_bytes': row['total_size_bytes'],
-                'total_duration_seconds': row['total_duration_seconds']
+                'total_duration_seconds': row['total_duration_seconds'],
+                'total_proxy_size_bytes': row['total_proxy_size_bytes']
             }
 
     # Helper methods for analysis_jobs integration

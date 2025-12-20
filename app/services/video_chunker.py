@@ -29,11 +29,6 @@ class VideoChunker:
     # Chunk configurations based on Nova model context windows
     # Using conservative chunk sizes to leave headroom below token limits
     CHUNK_CONFIGS = {
-        'micro': {
-            'max_duration': 720,     # 12 minutes (128K token limit)
-            'chunk_duration': 600,   # 10 minutes per chunk
-            'overlap_pct': 0.10      # 10% overlap between chunks
-        },
         'lite': {
             'max_duration': 1800,    # 30 minutes (300K token limit)
             'chunk_duration': 1500,  # 25 minutes per chunk
@@ -165,7 +160,7 @@ class VideoChunker:
         Calculate optimal chunk size and overlap for given model and video duration.
 
         Args:
-            model: Nova model name ('micro', 'lite', 'pro', 'premier')
+            model: Nova model name ('lite', 'pro', 'premier')
             video_duration: Video duration in seconds
 
         Returns:

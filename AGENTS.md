@@ -1,6 +1,6 @@
 # AGENTS
 
-Last Updated: 2025-12-19 21:43:06
+Last Updated: 2025-12-19 23:22:47
 
 Nova batch processing
 - Enable async batch mode by setting `BEDROCK_BATCH_ROLE_ARN`, `NOVA_BATCH_INPUT_PREFIX`, `NOVA_BATCH_OUTPUT_PREFIX` in `.env`.
@@ -16,6 +16,7 @@ Nova transcription & embeddings
 Nova model keys
 - Preview models are exposed as `pro_2_preview` (Nova 2 Pro) and `omni_2_preview` (Nova 2 Omni).
 - Nova 2 Lite runtime calls require the inference profile `us.amazon.nova-2-lite-v1:0` while reporting uses `amazon.nova-2-lite-v1:0`.
+- Nova Micro is disabled and not a valid model choice.
 - Nova pricing estimates are aligned to the latest published per-1K token rates in `NovaVideoService.MODEL_CONFIG`.
 
 Database
@@ -27,6 +28,7 @@ Local-first file handling
 - Direct S3 uploads are disabled; files may have `s3_key` set to NULL for local-only records.
 - File Management supports directory import via `/api/files/import-directory`, scanning recursively without moving source files.
 - File Management batch actions use a modal with configurable options; Nova models can be pulled from `/api/nova/models`.
+- File Management status badges link to the latest Nova analysis and transcript views.
 
 Runtime & operations
 - Flask dev server runs on port 5700; database is SQLite at `data/app.db`.

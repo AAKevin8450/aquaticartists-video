@@ -55,16 +55,6 @@ class NovaVideoService:
 
     # Model configurations with pricing and token limits
     MODEL_CONFIG = {
-        'micro': {
-            'id': 'us.amazon.nova-micro-v1:0',
-            'name': 'Nova Micro',
-            'context_tokens': 128000,
-            'max_video_minutes': 12,
-            'price_input_per_1k': 0.000035,
-            'price_output_per_1k': 0.00014,
-            'best_for': 'Quick summaries, batch processing',
-            'supports_batch': True
-        },
         'lite': {
             'id': 'amazon.nova-2-lite-v1:0',
             'inference_profile_id': 'us.amazon.nova-2-lite-v1:0',
@@ -169,7 +159,7 @@ class NovaVideoService:
         Estimate cost for video analysis.
 
         Args:
-            model: Nova model name ('micro', 'lite', 'pro', 'premier')
+            model: Nova model name ('lite', 'pro', 'premier')
             video_duration_seconds: Video duration in seconds
             estimated_output_tokens: Expected output token count (default: 2048)
 
@@ -247,6 +237,7 @@ class NovaVideoService:
         logger.info(f"S3 URI: {s3_uri}, Format: {video_format}")
 
         runtime_model_id = config.get('inference_profile_id', config['id'])
+        logger.info(f"Nova model ids - runtime: {runtime_model_id}, reporting: {config['id']}")
 
         # Prepare request body using Converse API
         request_body = {
@@ -283,7 +274,13 @@ class NovaVideoService:
         try:
             response = self.client.converse(**request_body)
         except Exception as e:
-            logger.error(f"Nova invocation failed: {str(e)}")
+            logger.error(
+                "Nova invocation failed (model=%s runtime_model_id=%s s3_key=%s): %s",
+                model,
+                runtime_model_id,
+                s3_key,
+                str(e)
+            )
             raise
 
         processing_time = time.time() - start_time
@@ -483,6 +480,7 @@ class NovaVideoService:
             raise NovaError("BEDROCK_BATCH_ROLE_ARN is required for batch processing.")
 
         config = self.get_model_config(model)
+        runtime_model_id = config.get('inference_profile_id', config['id'])
         records = self._build_batch_records(s3_key, analysis_types, options)
 
         input_prefix = self._normalize_s3_prefix(input_prefix)
@@ -501,7 +499,7 @@ class NovaVideoService:
 
         job_arn = self._start_batch_job(
             job_name=job_name,
-            model_id=config['id'],
+            model_id=runtime_model_id,
             role_arn=role_arn,
             input_s3_uri=self._build_s3_uri(input_key),
             output_s3_uri=self._build_s3_uri(output_prefix_key)
@@ -954,7 +952,7 @@ Do NOT include any text outside the JSON structure."""
 
         Args:
             s3_key: S3 key of the video
-            model: Nova model ('micro', 'lite', 'pro', 'premier')
+            model: Nova model ('lite', 'pro', 'premier')
             depth: Summary depth ('brief', 'standard', 'detailed')
             language: Target language ('auto' or ISO code like 'en', 'es')
 
