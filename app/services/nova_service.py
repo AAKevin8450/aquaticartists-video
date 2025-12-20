@@ -591,24 +591,10 @@ class NovaVideoService:
             except NovaError:
                 parsed = {}
             chapters = parsed.get('chapters', [])
+
+            # Enrich chapters using core function (ensures consistency with realtime)
             for chapter in chapters:
-                start_time = chapter.get('start_time')
-                end_time = chapter.get('end_time')
-                start_seconds = self._parse_timecode_to_seconds(start_time)
-                end_seconds = self._parse_timecode_to_seconds(end_time)
-                if end_seconds < start_seconds:
-                    end_seconds = start_seconds
-                chapter['start_seconds'] = start_seconds
-                chapter['end_seconds'] = end_seconds
-                duration_seconds = end_seconds - start_seconds
-                chapter['duration_seconds'] = duration_seconds
-                if duration_seconds >= 3600:
-                    hours = duration_seconds // 3600
-                    minutes = (duration_seconds % 3600) // 60
-                    seconds = duration_seconds % 60
-                    chapter['duration'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                else:
-                    chapter['duration'] = f"{duration_seconds // 60:02d}:{duration_seconds % 60:02d}"
+                self._enrich_chapter_data(chapter)
 
             usage = self._extract_usage_from_batch_output(output)
             chapters_result = {
@@ -639,42 +625,22 @@ class NovaVideoService:
             people = parsed.get('people', {'max_count': 0, 'multiple_speakers': False})
             speakers = parsed.get('speakers', [])
 
+            # Enrich data using core functions (ensures consistency with realtime)
             for equip in equipment:
-                equip['time_ranges'] = self._ensure_list(equip.get('time_ranges'))
-                equip['time_ranges_parsed'] = self._parse_time_ranges(equip['time_ranges'])
-                equip['discussed'] = bool(equip.get('discussed', False))
-                if 'confidence' not in equip:
-                    equip['confidence'] = 'medium'
+                self._enrich_equipment_data(equip)
 
             for topic in topics_discussed:
-                topic['time_ranges'] = self._ensure_list(topic.get('time_ranges'))
-                topic['time_ranges_parsed'] = self._parse_time_ranges(topic['time_ranges'])
-                if 'importance' not in topic:
-                    topic['importance'] = 'medium'
-                topic['keywords'] = self._ensure_list(topic.get('keywords'))
+                self._enrich_topic_data(topic)
 
             for speaker in speakers:
-                speaker['time_ranges'] = self._ensure_list(speaker.get('time_ranges'))
-                speaker['time_ranges_parsed'] = self._parse_time_ranges(speaker['time_ranges'])
-                if 'speaking_percentage' in speaker:
-                    try:
-                        speaker['speaking_percentage'] = float(speaker['speaking_percentage'])
-                    except (TypeError, ValueError):
-                        speaker['speaking_percentage'] = None
+                self._enrich_speaker_data(speaker)
 
+            # Update people metadata
             if speakers and not people.get('multiple_speakers'):
                 people['multiple_speakers'] = len(speakers) > 1
 
-            topics_summary = []
-            for topic in topics_discussed:
-                name = str(topic.get('topic', '')).strip()
-                if not name:
-                    continue
-                topics_summary.append({
-                    'topic': name,
-                    'importance': topic.get('importance', 'medium'),
-                    'time_range_count': len(topic.get('time_ranges', []))
-                })
+            # Build topics summary using core function
+            topics_summary = self._build_topics_summary(topics_discussed)
 
             usage = self._extract_usage_from_batch_output(output)
             elements_result = {
@@ -716,6 +682,9 @@ class NovaVideoService:
     def _parse_json_response(self, text: str) -> Dict[str, Any]:
         """
         Parse JSON from Nova response, handling markdown code fences.
+
+        This is a core parsing function used by both realtime and batch processing
+        to ensure consistent JSON extraction across all analysis modes.
 
         Args:
             text: Response text that may contain JSON
@@ -811,6 +780,112 @@ class NovaVideoService:
             if parsed_range:
                 parsed.append(parsed_range)
         return parsed
+
+    def _enrich_chapter_data(self, chapter: Dict[str, Any]) -> None:
+        """
+        Enrich chapter dictionary with computed fields (in-place modification).
+
+        Core enrichment logic used by both realtime and batch processing
+        to ensure consistent chapter data across all processing modes.
+
+        Args:
+            chapter: Chapter dictionary to enrich
+        """
+        start_time = chapter.get('start_time')
+        end_time = chapter.get('end_time')
+
+        start_seconds = self._parse_timecode_to_seconds(start_time)
+        end_seconds = self._parse_timecode_to_seconds(end_time)
+        if end_seconds < start_seconds:
+            end_seconds = start_seconds
+
+        chapter['start_seconds'] = start_seconds
+        chapter['end_seconds'] = end_seconds
+        duration_seconds = end_seconds - start_seconds
+        chapter['duration_seconds'] = duration_seconds
+
+        # Format duration as HH:MM:SS or MM:SS
+        if duration_seconds >= 3600:
+            hours = duration_seconds // 3600
+            minutes = (duration_seconds % 3600) // 60
+            seconds = duration_seconds % 60
+            chapter['duration'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        else:
+            chapter['duration'] = f"{duration_seconds // 60:02d}:{duration_seconds % 60:02d}"
+
+    def _enrich_equipment_data(self, equip: Dict[str, Any]) -> None:
+        """
+        Enrich equipment dictionary with computed fields (in-place modification).
+
+        Core enrichment logic used by both realtime and batch processing
+        to ensure consistent equipment data across all processing modes.
+
+        Args:
+            equip: Equipment dictionary to enrich
+        """
+        equip['time_ranges'] = self._ensure_list(equip.get('time_ranges'))
+        equip['time_ranges_parsed'] = self._parse_time_ranges(equip['time_ranges'])
+        equip['discussed'] = bool(equip.get('discussed', False))
+        if 'confidence' not in equip:
+            equip['confidence'] = 'medium'
+
+    def _enrich_topic_data(self, topic: Dict[str, Any]) -> None:
+        """
+        Enrich topic dictionary with computed fields (in-place modification).
+
+        Core enrichment logic used by both realtime and batch processing
+        to ensure consistent topic data across all processing modes.
+
+        Args:
+            topic: Topic dictionary to enrich
+        """
+        topic['time_ranges'] = self._ensure_list(topic.get('time_ranges'))
+        topic['time_ranges_parsed'] = self._parse_time_ranges(topic['time_ranges'])
+        if 'importance' not in topic:
+            topic['importance'] = 'medium'
+        topic['keywords'] = self._ensure_list(topic.get('keywords'))
+
+    def _enrich_speaker_data(self, speaker: Dict[str, Any]) -> None:
+        """
+        Enrich speaker dictionary with computed fields (in-place modification).
+
+        Core enrichment logic used by both realtime and batch processing
+        to ensure consistent speaker data across all processing modes.
+
+        Args:
+            speaker: Speaker dictionary to enrich
+        """
+        speaker['time_ranges'] = self._ensure_list(speaker.get('time_ranges'))
+        speaker['time_ranges_parsed'] = self._parse_time_ranges(speaker['time_ranges'])
+        if 'speaking_percentage' in speaker:
+            try:
+                speaker['speaking_percentage'] = float(speaker['speaking_percentage'])
+            except (TypeError, ValueError):
+                speaker['speaking_percentage'] = None
+
+    def _build_topics_summary(self, topics_discussed: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Build topics summary from topics_discussed list.
+
+        Core summarization logic used by both realtime and batch processing.
+
+        Args:
+            topics_discussed: List of topic dictionaries
+
+        Returns:
+            List of topic summary dictionaries
+        """
+        topics_summary = []
+        for topic in topics_discussed:
+            name = str(topic.get('topic', '')).strip()
+            if not name:
+                continue
+            topics_summary.append({
+                'topic': name,
+                'importance': topic.get('importance', 'medium'),
+                'time_range_count': len(topic.get('time_ranges', []))
+            })
+        return topics_summary
 
     def _get_summary_prompt(self, depth: str, language: str) -> str:
         """Build summary prompt based on depth and language."""
@@ -1002,27 +1077,9 @@ Do NOT include any text outside the JSON structure."""
         parsed = self._parse_json_response(response['text'])
         chapters = parsed.get('chapters', [])
 
-        # Enhance chapters with computed fields
+        # Enrich chapters with computed fields using core function
         for chapter in chapters:
-            start_time = chapter.get('start_time')
-            end_time = chapter.get('end_time')
-
-            start_seconds = self._parse_timecode_to_seconds(start_time)
-            end_seconds = self._parse_timecode_to_seconds(end_time)
-            if end_seconds < start_seconds:
-                end_seconds = start_seconds
-
-            chapter['start_seconds'] = start_seconds
-            chapter['end_seconds'] = end_seconds
-            duration_seconds = end_seconds - start_seconds
-            chapter['duration_seconds'] = duration_seconds
-            if duration_seconds >= 3600:
-                hours = duration_seconds // 3600
-                minutes = (duration_seconds % 3600) // 60
-                seconds = duration_seconds % 60
-                chapter['duration'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-            else:
-                chapter['duration'] = f"{duration_seconds // 60:02d}:{duration_seconds % 60:02d}"
+            self._enrich_chapter_data(chapter)
 
         # Build result
         chapters_result = {
@@ -1063,42 +1120,22 @@ Do NOT include any text outside the JSON structure."""
         people = parsed.get('people', {'max_count': 0, 'multiple_speakers': False})
         speakers = parsed.get('speakers', [])
 
+        # Enrich data using core functions
         for equip in equipment:
-            equip['time_ranges'] = self._ensure_list(equip.get('time_ranges'))
-            equip['time_ranges_parsed'] = self._parse_time_ranges(equip['time_ranges'])
-            equip['discussed'] = bool(equip.get('discussed', False))
-            if 'confidence' not in equip:
-                equip['confidence'] = 'medium'
+            self._enrich_equipment_data(equip)
 
         for topic in topics_discussed:
-            topic['time_ranges'] = self._ensure_list(topic.get('time_ranges'))
-            topic['time_ranges_parsed'] = self._parse_time_ranges(topic['time_ranges'])
-            if 'importance' not in topic:
-                topic['importance'] = 'medium'
-            topic['keywords'] = self._ensure_list(topic.get('keywords'))
+            self._enrich_topic_data(topic)
 
         for speaker in speakers:
-            speaker['time_ranges'] = self._ensure_list(speaker.get('time_ranges'))
-            speaker['time_ranges_parsed'] = self._parse_time_ranges(speaker['time_ranges'])
-            if 'speaking_percentage' in speaker:
-                try:
-                    speaker['speaking_percentage'] = float(speaker['speaking_percentage'])
-                except (TypeError, ValueError):
-                    speaker['speaking_percentage'] = None
+            self._enrich_speaker_data(speaker)
 
+        # Update people metadata
         if speakers and not people.get('multiple_speakers'):
             people['multiple_speakers'] = len(speakers) > 1
 
-        topics_summary = []
-        for topic in topics_discussed:
-            name = str(topic.get('topic', '')).strip()
-            if not name:
-                continue
-            topics_summary.append({
-                'topic': name,
-                'importance': topic.get('importance', 'medium'),
-                'time_range_count': len(topic.get('time_ranges', []))
-            })
+        # Build topics summary using core function
+        topics_summary = self._build_topics_summary(topics_discussed)
 
         # Build result
         elements_result = {
