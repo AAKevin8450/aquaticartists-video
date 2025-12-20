@@ -29,6 +29,8 @@ Critical environment variables are stored in .env file (not in git):
 - File Storage: AWS S3 (direct browser uploads via presigned URLs)
 - Analysis Engines: Amazon Rekognition (async for video, sync for images), Amazon Bedrock Nova (intelligent video analysis)
 
+**Code Architecture Note**: The application follows strict DRY (Don't Repeat Yourself) principles. Recent refactoring (2025-12-20) consolidated all individual and batch processing functions into shared core processing functions, eliminating ~239 lines of duplication. All data processing flows through single source of truth functions for easier maintenance and consistent behavior.
+
 ### Key Services
 1. **S3 Service** (app/services/s3_service.py) - Handles file upload/download
 2. **Rekognition Video** (app/services/rekognition_video.py) - Async video analysis

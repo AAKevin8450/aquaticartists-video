@@ -345,39 +345,21 @@ def transcribe_single():
             )
 
         try:
-            # Extract video metadata
-            from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
-            metadata = {}
-            try:
-                metadata = extract_media_metadata(file_path)
-            except MediaMetadataError as e:
-                current_app.logger.warning(f"Failed to extract metadata: {e}")
-
             # Transcribe
             result = service.transcribe_file(file_path, language=language)
 
-            # Update database with results and metadata
-            db.update_transcript_status(
-                transcript_id=transcript_id,
-                status=TranscriptStatus.COMPLETED,
-                transcript_text=result['transcript_text'],
-                character_count=result.get('character_count'),
-                word_count=result.get('word_count'),
-                duration_seconds=result.get('duration_seconds'),
-                segments=result.get('segments'),
-                word_timestamps=result.get('word_timestamps'),
-                language=result.get('language'),
-                confidence_score=result['confidence_score'],
-                processing_time=result['processing_time_seconds'],
-                resolution_width=metadata.get('resolution_width'),
-                resolution_height=metadata.get('resolution_height'),
-                frame_rate=metadata.get('frame_rate'),
-                codec_video=metadata.get('codec_video'),
-                codec_audio=metadata.get('codec_audio'),
-                bitrate=metadata.get('bitrate')
+            # Save to database using core function
+            transcript_id = _save_transcript_to_db(
+                file_path=file_path,
+                result=result,
+                force=force,
+                provider=provider,
+                model_size=model_size,
+                service=service
             )
 
             # Get updated transcript
+            db = get_db()
             transcript = db.get_transcript(transcript_id)
 
             return jsonify({
@@ -452,76 +434,20 @@ def start_batch():
         app = current_app._get_current_object()
 
         def db_callback(file_path: str, result: Dict[str, Any]):
-            """Callback to save transcription results to database."""
+            """
+            Callback to save transcription results to database.
+            Uses core _save_transcript_to_db function to ensure consistency with individual processing.
+            """
             try:
-                print(f"[DB_CALLBACK] Starting save for: {os.path.basename(file_path)}")
-
-                # Get db instance inside app context (thread-safe)
-                db = get_db()
-                print(f"[DB_CALLBACK] Got database instance")
-
-                # Get file metadata (instant - no file reading)
-                file_size, file_mtime = service.get_file_metadata(file_path)
-                file_name = os.path.basename(file_path)
-                print(f"[DB_CALLBACK] Got file metadata: size={file_size}, mtime={file_mtime}")
-
-                # Check if already exists with current model
-                model_name = _get_model_name(provider, model_size)
-                existing = db.get_transcript_by_file_info(file_path, file_size, file_mtime, model_name)
-                print(f"[DB_CALLBACK] Checked existing: {existing is not None}")
-
-                if existing and not force:
-                    transcript_id = existing['id']
-                    print(f"[DB_CALLBACK] Using existing transcript ID: {transcript_id}")
-                else:
-                    if existing:
-                        transcript_id = existing['id']
-                        print(f"[DB_CALLBACK] Updating existing transcript ID: {transcript_id}")
-                    else:
-                        transcript_id = db.create_transcript(
-                            file_path=file_path,
-                            file_name=file_name,
-                            file_size=file_size,
-                            modified_time=file_mtime,
-                            model_name=model_name
-                        )
-                        print(f"[DB_CALLBACK] Created new transcript ID: {transcript_id}")
-
-                    # Extract video metadata
-                    from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
-                    metadata = {}
-                    try:
-                        metadata = extract_media_metadata(file_path)
-                        print(f"[DB_CALLBACK] Metadata: {metadata.get('resolution_width')}x{metadata.get('resolution_height')}, {metadata.get('duration_seconds')}s")
-                    except MediaMetadataError as e:
-                        print(f"[DB_CALLBACK] Warning: Failed to extract metadata: {e}")
-
-                    # Update with results and metadata
-                    db.update_transcript_status(
-                        transcript_id=transcript_id,
-                        status=TranscriptStatus.COMPLETED,
-                        transcript_text=result['transcript_text'],
-                        character_count=result.get('character_count'),
-                        word_count=result.get('word_count'),
-                        duration_seconds=result.get('duration_seconds'),
-                        segments=result.get('segments'),
-                        word_timestamps=result.get('word_timestamps'),
-                        language=result.get('language'),
-                        confidence_score=result.get('confidence_score'),
-                        processing_time=result['processing_time_seconds'],
-                        resolution_width=metadata.get('resolution_width'),
-                        resolution_height=metadata.get('resolution_height'),
-                        frame_rate=metadata.get('frame_rate'),
-                        codec_video=metadata.get('codec_video'),
-                        codec_audio=metadata.get('codec_audio'),
-                        bitrate=metadata.get('bitrate')
-                    )
-                    print(f"[DB_CALLBACK] Successfully saved transcript ID: {transcript_id}")
-
+                _save_transcript_to_db(
+                    file_path=file_path,
+                    result=result,
+                    force=force,
+                    provider=provider,
+                    model_size=model_size,
+                    service=service
+                )
             except Exception as e:
-                print(f"[DB_CALLBACK] ERROR saving {os.path.basename(file_path)}: {e}")
-                import traceback
-                traceback.print_exc()
                 app.logger.error(f"Failed to save transcript for {file_path}: {e}")
 
         def run_batch():
@@ -865,3 +791,89 @@ def _generate_vtt(segments: list) -> str:
         lines.append("")  # Empty line between segments
 
     return '\n'.join(lines)
+
+
+def _save_transcript_to_db(file_path: str, result: Dict[str, Any], force: bool,
+                          provider: str, model_size: Optional[str], service: Any) -> int:
+    """
+    Core function to save transcription results to database.
+
+    This function consolidates all database save logic used by both individual
+    and batch transcription endpoints, ensuring consistency and eliminating duplication.
+
+    Args:
+        file_path: Path to the transcribed file
+        result: Transcription result dictionary
+        force: Whether to force reprocessing
+        provider: Provider name ('whisper' or 'nova_sonic')
+        model_size: Model size (for whisper) or None
+        service: Transcription service instance
+
+    Returns:
+        transcript_id: ID of created/updated transcript record
+    """
+    try:
+        current_app.logger.debug(f"Saving transcript for: {os.path.basename(file_path)}")
+
+        db = get_db()
+
+        # Get file metadata (instant - no file reading)
+        file_size, file_mtime = service.get_file_metadata(file_path)
+        file_name = os.path.basename(file_path)
+
+        # Check if already exists with current model
+        model_name = _get_model_name(provider, model_size)
+        existing = db.get_transcript_by_file_info(file_path, file_size, file_mtime, model_name)
+
+        if existing and not force:
+            transcript_id = existing['id']
+            current_app.logger.debug(f"Using existing transcript ID: {transcript_id}")
+        else:
+            if existing:
+                transcript_id = existing['id']
+                current_app.logger.debug(f"Updating existing transcript ID: {transcript_id}")
+            else:
+                transcript_id = db.create_transcript(
+                    file_path=file_path,
+                    file_name=file_name,
+                    file_size=file_size,
+                    modified_time=file_mtime,
+                    model_name=model_name
+                )
+                current_app.logger.debug(f"Created new transcript ID: {transcript_id}")
+
+            # Extract video metadata
+            from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
+            metadata = {}
+            try:
+                metadata = extract_media_metadata(file_path)
+            except MediaMetadataError as e:
+                current_app.logger.warning(f"Failed to extract metadata: {e}")
+
+            # Update with results and metadata
+            db.update_transcript_status(
+                transcript_id=transcript_id,
+                status=TranscriptStatus.COMPLETED,
+                transcript_text=result['transcript_text'],
+                character_count=result.get('character_count'),
+                word_count=result.get('word_count'),
+                duration_seconds=result.get('duration_seconds'),
+                segments=result.get('segments'),
+                word_timestamps=result.get('word_timestamps'),
+                language=result.get('language'),
+                confidence_score=result.get('confidence_score'),
+                processing_time=result['processing_time_seconds'],
+                resolution_width=metadata.get('resolution_width'),
+                resolution_height=metadata.get('resolution_height'),
+                frame_rate=metadata.get('frame_rate'),
+                codec_video=metadata.get('codec_video'),
+                codec_audio=metadata.get('codec_audio'),
+                bitrate=metadata.get('bitrate')
+            )
+            current_app.logger.debug(f"Successfully saved transcript ID: {transcript_id}")
+
+        return transcript_id
+
+    except Exception as e:
+        current_app.logger.error(f"Failed to save transcript for {os.path.basename(file_path)}: {e}")
+        raise
