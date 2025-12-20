@@ -1,0 +1,453 @@
+{% extends "base.html" %}
+
+{% block title %}Reports | AWS Video & Image Analysis{% endblock %}
+
+{% block extra_head %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+    .reports-page {
+        --reports-ink: #10161d;
+        --reports-muted: #5d6b78;
+        --reports-accent: #f97316;
+        --reports-accent-soft: rgba(249, 115, 22, 0.12);
+        --reports-surface: #ffffff;
+        --reports-surface-alt: #f4f6f8;
+        font-family: "IBM Plex Sans", sans-serif;
+        color: var(--reports-ink);
+    }
+
+    .reports-page h1,
+    .reports-page h2,
+    .reports-page h3,
+    .reports-page h4,
+    .reports-page .reports-title {
+        font-family: "Space Grotesk", sans-serif;
+    }
+
+    .reports-hero {
+        background: radial-gradient(circle at top right, #fff1e6 0%, #ffffff 45%, #f5f8fb 100%);
+        border-radius: 20px;
+        padding: 2rem;
+        position: relative;
+        overflow: hidden;
+        border: 1px solid #e3e8ee;
+    }
+
+    .reports-hero::after {
+        content: "";
+        position: absolute;
+        top: -40px;
+        left: -30px;
+        width: 220px;
+        height: 220px;
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.18), rgba(59, 130, 246, 0.12));
+        border-radius: 50%;
+        filter: blur(0);
+    }
+
+    .reports-hero .reports-title {
+        font-size: 2rem;
+        font-weight: 700;
+        margin-bottom: 0.25rem;
+    }
+
+    .reports-hero p {
+        color: var(--reports-muted);
+        margin-bottom: 0;
+    }
+
+    .reports-panel {
+        background: var(--reports-surface);
+        border-radius: 18px;
+        padding: 1.5rem;
+        border: 1px solid #e3e8ee;
+    }
+
+    .reports-panel label {
+        font-weight: 600;
+    }
+
+    .reports-quick .btn {
+        border-radius: 999px;
+        border-color: #cfd8e3;
+        color: var(--reports-ink);
+        background: #ffffff;
+    }
+
+    .reports-quick .btn.active {
+        background: var(--reports-accent);
+        border-color: var(--reports-accent);
+        color: #ffffff;
+    }
+
+    .metric-card {
+        background: var(--reports-surface);
+        border-radius: 16px;
+        padding: 1.25rem;
+        border: 1px solid #e6ebf1;
+        height: 100%;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .metric-card::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(135deg, rgba(249, 115, 22, 0.06), transparent 55%);
+        opacity: 0;
+        transition: opacity 0.2s ease;
+    }
+
+    .metric-card:hover::before {
+        opacity: 1;
+    }
+
+    .metric-title {
+        font-size: 0.9rem;
+        color: var(--reports-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 0.4rem;
+    }
+
+    .metric-value {
+        font-size: 1.6rem;
+        font-weight: 700;
+    }
+
+    .metric-sub {
+        font-size: 0.85rem;
+        color: var(--reports-muted);
+    }
+
+    .chart-card {
+        background: var(--reports-surface);
+        border-radius: 18px;
+        padding: 1.5rem;
+        border: 1px solid #e6ebf1;
+        height: 100%;
+    }
+
+    .mini-bars {
+        display: grid;
+        grid-auto-flow: column;
+        gap: 0.5rem;
+        align-items: end;
+        height: 160px;
+        margin-top: 1rem;
+    }
+
+    .mini-bars span {
+        display: block;
+        background: linear-gradient(180deg, #0ea5e9 0%, #1d4ed8 100%);
+        border-radius: 6px 6px 4px 4px;
+        position: relative;
+    }
+
+    .mini-bars span::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: rgba(255, 255, 255, 0.3);
+        border-radius: 6px;
+    }
+
+    .report-table td,
+    .report-table th {
+        vertical-align: middle;
+    }
+
+    .report-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.3rem 0.7rem;
+        border-radius: 999px;
+        background: var(--reports-accent-soft);
+        color: #9a3412;
+        font-weight: 600;
+        font-size: 0.8rem;
+    }
+
+    .reports-muted {
+        color: var(--reports-muted);
+    }
+
+    @media (max-width: 768px) {
+        .reports-hero {
+            padding: 1.5rem;
+        }
+
+        .reports-hero .reports-title {
+            font-size: 1.6rem;
+        }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="reports-page">
+    <section class="reports-hero mb-4">
+        <div class="row g-4 align-items-center position-relative">
+            <div class="col-lg-7">
+                <div class="report-pill mb-3">
+                    <i class="bi bi-graph-up"></i>
+                    Usage and processing analytics
+                </div>
+                <h1 class="reports-title">Reports</h1>
+                <p>Track Nova tokens, processing health, and file throughput with date-aware insights.</p>
+            </div>
+            <div class="col-lg-5">
+                <div class="reports-panel">
+                    <form id="reportFilters" class="row g-3 align-items-end">
+                        <div class="col-6">
+                            <label for="reportStart" class="form-label">Start date</label>
+                            <input type="date" class="form-control" id="reportStart">
+                        </div>
+                        <div class="col-6">
+                            <label for="reportEnd" class="form-label">End date</label>
+                            <input type="date" class="form-control" id="reportEnd">
+                        </div>
+                        <div class="col-12 reports-quick">
+                            <div class="btn-group w-100" role="group" aria-label="Quick ranges">
+                                <button type="button" class="btn" data-range="day">Last day</button>
+                                <button type="button" class="btn" data-range="week">Last week</button>
+                                <button type="button" class="btn" data-range="month">Last month</button>
+                            </div>
+                        </div>
+                        <div class="col-12 d-flex justify-content-between align-items-center">
+                            <small class="reports-muted" id="reportRangeLabel">Select a date range</small>
+                            <button type="submit" class="btn btn-dark">Run report</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="mb-4">
+        <div class="row g-3">
+            <div class="col-sm-6 col-lg-3">
+                <div class="metric-card">
+                    <div class="metric-title">Tokens used</div>
+                    <div class="metric-value" id="metricTokens">0</div>
+                    <div class="metric-sub" id="metricTokensSub">Input + output</div>
+                </div>
+            </div>
+            <div class="col-sm-6 col-lg-3">
+                <div class="metric-card">
+                    <div class="metric-title">Cost estimate</div>
+                    <div class="metric-value" id="metricCost">$0.00</div>
+                    <div class="metric-sub">Nova usage</div>
+                </div>
+            </div>
+            <div class="col-sm-6 col-lg-3">
+                <div class="metric-card">
+                    <div class="metric-title">Files processed</div>
+                    <div class="metric-value" id="metricFiles">0</div>
+                    <div class="metric-sub">Distinct files analyzed</div>
+                </div>
+            </div>
+            <div class="col-sm-6 col-lg-3">
+                <div class="metric-card">
+                    <div class="metric-title">Success rate</div>
+                    <div class="metric-value" id="metricSuccess">0%</div>
+                    <div class="metric-sub">Across all jobs</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="mb-4">
+        <div class="row g-3">
+            <div class="col-lg-6">
+                <div class="chart-card">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h3 class="h5 mb-1">Token trend</h3>
+                            <div class="reports-muted" id="trendSubtitle">Daily totals</div>
+                        </div>
+                        <div class="report-pill" id="trendTotal">0 total</div>
+                    </div>
+                    <div class="mini-bars" id="tokenBars"></div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="chart-card h-100">
+                    <h3 class="h5 mb-3">Processing overview</h3>
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <div class="metric-title">Total jobs</div>
+                            <div class="metric-value" id="metricJobs">0</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="metric-title">Failures</div>
+                            <div class="metric-value text-danger" id="metricFailures">0</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="metric-title">Nova jobs</div>
+                            <div class="metric-value" id="metricNovaJobs">0</div>
+                        </div>
+                        <div class="col-6">
+                            <div class="metric-title">Avg processing</div>
+                            <div class="metric-value" id="metricAvgTime">0s</div>
+                        </div>
+                    </div>
+                    <hr>
+                    <div class="row g-2">
+                        <div class="col-4 reports-muted">Running</div>
+                        <div class="col-8 text-end" id="metricRunning">0</div>
+                        <div class="col-4 reports-muted">Submitted</div>
+                        <div class="col-8 text-end" id="metricSubmitted">0</div>
+                        <div class="col-4 reports-muted">Completed</div>
+                        <div class="col-8 text-end" id="metricCompleted">0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="mb-4">
+        <div class="row g-3">
+            <div class="col-lg-4">
+                <div class="chart-card h-100">
+                    <h3 class="h5 mb-3">File activity</h3>
+                    <div class="row g-2">
+                        <div class="col-7 reports-muted">Files uploaded</div>
+                        <div class="col-5 text-end" id="metricUploads">0</div>
+                        <div class="col-7 reports-muted">Uploaded videos</div>
+                        <div class="col-5 text-end" id="metricUploadsVideo">0</div>
+                        <div class="col-7 reports-muted">Uploaded images</div>
+                        <div class="col-5 text-end" id="metricUploadsImage">0</div>
+                        <div class="col-7 reports-muted">Upload size</div>
+                        <div class="col-5 text-end" id="metricUploadSize">0 B</div>
+                        <div class="col-7 reports-muted">Upload duration</div>
+                        <div class="col-5 text-end" id="metricUploadDuration">0s</div>
+                        <div class="col-7 reports-muted">Transcripts</div>
+                        <div class="col-5 text-end" id="metricTranscripts">0</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-8">
+                <div class="chart-card h-100">
+                    <h3 class="h5 mb-3">Daily activity</h3>
+                    <div class="table-responsive">
+                        <table class="table table-sm report-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Day</th>
+                                    <th class="text-end">Tokens</th>
+                                    <th class="text-end">Cost</th>
+                                    <th class="text-end">Jobs</th>
+                                    <th class="text-end">Success</th>
+                                    <th class="text-end">Failed</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dailyRows"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="mb-4">
+        <div class="row g-3">
+            <div class="col-lg-4">
+                <div class="chart-card h-100">
+                    <h3 class="h5 mb-3">File types</h3>
+                    <div class="table-responsive">
+                        <table class="table table-sm report-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Type</th>
+                                    <th class="text-end">Count</th>
+                                </tr>
+                            </thead>
+                            <tbody id="fileTypeRows"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-4">
+                <div class="chart-card h-100">
+                    <h3 class="h5 mb-3">Top extensions</h3>
+                    <div class="table-responsive">
+                        <table class="table table-sm report-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Extension</th>
+                                    <th class="text-end">Count</th>
+                                </tr>
+                            </thead>
+                            <tbody id="extensionRows"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-4">
+                <div class="chart-card h-100">
+                    <h3 class="h5 mb-3">Top content types</h3>
+                    <div class="table-responsive">
+                        <table class="table table-sm report-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Content type</th>
+                                    <th class="text-end">Count</th>
+                                </tr>
+                            </thead>
+                            <tbody id="contentTypeRows"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="mb-4">
+        <div class="row g-3">
+            <div class="col-lg-6">
+                <div class="chart-card h-100">
+                    <h3 class="h5 mb-3">Analysis types</h3>
+                    <div class="table-responsive">
+                        <table class="table table-sm report-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Analysis</th>
+                                    <th class="text-end">Count</th>
+                                </tr>
+                            </thead>
+                            <tbody id="analysisRows"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-6">
+                <div class="chart-card h-100">
+                    <h3 class="h5 mb-3">Nova models</h3>
+                    <div class="table-responsive">
+                        <table class="table table-sm report-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Model</th>
+                                    <th class="text-end">Jobs</th>
+                                    <th class="text-end">Tokens</th>
+                                    <th class="text-end">Cost</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modelRows"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ url_for('static', filename='js/reports.js') }}"></script>
+{% endblock %}

@@ -1621,7 +1621,10 @@ class Database:
                     COUNT(DISTINCT CASE WHEN aj.status = 'IN_PROGRESS' THEN aj.id END) as running_analyses,
                     COUNT(DISTINCT CASE WHEN aj.status = 'FAILED' THEN aj.id END) as failed_analyses,
                     COUNT(DISTINCT t.id) as total_transcripts,
-                    COUNT(DISTINCT CASE WHEN t.status = 'COMPLETED' THEN t.id END) as completed_transcripts
+                    COUNT(DISTINCT CASE WHEN t.status = 'COMPLETED' THEN t.id END) as completed_transcripts,
+                    MAX(CASE WHEN t.status = 'COMPLETED'
+                        THEN COALESCE(t.character_count, LENGTH(COALESCE(t.transcript_text, '')))
+                        END) as max_completed_transcript_chars
                 FROM files f
                 LEFT JOIN files p ON p.source_file_id = f.id AND p.is_proxy = 1
                 LEFT JOIN analysis_jobs aj ON aj.file_id = f.id

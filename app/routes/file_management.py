@@ -266,7 +266,8 @@ def list_files():
 
                 # Transcript counts
                 'total_transcripts': file.get('total_transcripts', 0),
-                'completed_transcripts': file.get('completed_transcripts', 0)
+                'completed_transcripts': file.get('completed_transcripts', 0),
+                'max_completed_transcript_chars': file.get('max_completed_transcript_chars')
             }
             formatted_files.append(formatted_file)
 

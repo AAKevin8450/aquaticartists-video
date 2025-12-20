@@ -1,6 +1,6 @@
 # AGENTS
 
-Last Updated: 2025-12-20 13:22:52
+Last Updated: 2025-12-20 14:46:19
 
 Nova batch processing
 - Enable async batch mode by setting `BEDROCK_BATCH_ROLE_ARN`, `NOVA_BATCH_INPUT_PREFIX`, `NOVA_BATCH_OUTPUT_PREFIX` in `.env`.
@@ -32,6 +32,12 @@ Local-first file handling
 - File Management single-file actions prompt for options (transcription, Nova, Rekognition) with defaults prefilled.
 - File Management batch actions use a modal with configurable options, including transcription provider/device/compute and Nova processing mode; Nova models can be pulled from `/api/nova/models`.
 - File Management status badges link to the latest Nova analysis and transcript views.
+
+Reports
+- Usage analytics live at `/reports` with summaries from `/reports/api/summary` filtered by date range.
+
+Transcriptions UI
+- Transcription routes now live under `/transcriptions`; File Management opens transcript details in a modal with download actions.
 
 Runtime & operations
 - Flask dev server runs on port 5700; database is SQLite at `data/app.db`.
