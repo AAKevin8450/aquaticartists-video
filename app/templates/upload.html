@@ -40,7 +40,7 @@
                         <label for="fileInput" class="form-label fw-bold">Choose File:</label>
                         <input type="file" class="form-control" id="fileInput" accept="video/*,image/*">
                         <div class="form-text">
-                            <strong>Video:</strong> MP4, MOV, AVI, MKV (Max 10GB) - Proxy (720p, 15fps) automatically created for Nova analysis<br>
+                            <strong>Video:</strong> MP4, MOV, AVI, MKV (Max 10GB) - Proxy (720p, 15fps) created locally<br>
                             <strong>Image:</strong> JPEG, PNG (Max 15MB)
                         </div>
                     </div>
@@ -155,7 +155,7 @@
                         progressBar.textContent = percentComplete + '%';
                         uploadStatus.textContent = `Uploading file... ${percentComplete}%`;
                         if (percentComplete >= 100 && fileType === 'video') {
-                            uploadStatus.textContent = 'Creating proxy and uploading to S3...';
+                            uploadStatus.textContent = 'Creating proxy...';
                         }
                     }
                 });

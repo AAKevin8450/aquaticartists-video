@@ -35,7 +35,7 @@ class Config:
     # Upload settings
     MAX_VIDEO_SIZE_MB = int(os.getenv('MAX_VIDEO_SIZE_MB', '10240'))
     MAX_IMAGE_SIZE_MB = int(os.getenv('MAX_IMAGE_SIZE_MB', '15'))
-    UPLOAD_FOLDER = BASE_DIR / os.getenv('UPLOAD_FOLDER', 'app/static/uploads')
+    UPLOAD_FOLDER = BASE_DIR / os.getenv('UPLOAD_FOLDER', 'uploads')
 
     # Allowed file extensions
     ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm'}

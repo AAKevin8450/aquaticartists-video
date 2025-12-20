@@ -155,6 +155,7 @@ Thumbs.db
 *.wmv
 *.webm
 videos/
+uploads/
 output/
 temp/
 

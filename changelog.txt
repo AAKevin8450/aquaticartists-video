@@ -1,3 +1,45 @@
+2025-12-19 19:18:00 - Updated by Codex
+
+[Category: Feature, Refactoring, API, Database, Documentation]
+Shift the app to a local-first file workflow with local uploads, configurable proxy naming, and directory import into the files table without copying source media.
+
+[Purpose]
+Support broader non-AWS workflows by keeping uploads and proxies local, improving file metadata ingestion, and exposing a File Management import path similar to transcription scanning.
+
+[Impact]
+- Uploads now land in `./uploads` with a flat naming scheme and DB-referenced local paths
+- Proxies are created locally only, named from the source filename plus the proxy spec
+- File Management gains a directory import UI + API for recursive metadata ingestion without moving files
+- S3 presigned upload completion is disabled for local-first mode
+- Proxy metadata cleanup and download display now tolerate local-only proxies
+
+[Technical Details - Local Uploads & Proxy Naming]
+- app/config.py: move upload root to `./uploads`
+- app/routes/upload.py: save locally, create DB record, rename to `originalname_<id>.ext`, create local proxy named `originalname_<proxy_spec>.ext`
+- app/database.py: add helper to update local_path after ID assignment
+- app/templates/upload.html: update UX copy to reflect local proxy creation
+
+[Technical Details - File Management Import]
+- app/routes/file_management.py: add `/api/files/browse` and `/api/files/import-directory` for recursive import and metadata extraction
+- app/templates/file_management.html: add Import Directory section + folder browser modal
+- app/static/js/file_management.js: add directory import workflow and folder browser
+
+[Technical Details - Schema Support]
+- migrations/005_make_s3_key_nullable.sql: migration to allow local-only files with nullable `s3_key`
+- migrate_transcripts.py: utility script to import transcript-only files into the files table
+
+[Files Changed]
+- .gitignore: ignore `uploads/` local file storage
+- app/config.py: set default upload folder to local `./uploads`
+- app/database.py: add helper to update local_path after file ID creation
+- app/routes/file_management.py: add directory browse/import APIs and local-only proxy handling
+- app/routes/upload.py: local-first upload flow, flat storage naming, proxy naming tied to proxy spec
+- app/static/js/file_management.js: import directory UI behavior + folder browsing
+- app/templates/file_management.html: Import Directory UI section and modal
+- app/templates/upload.html: local-first wording and progress status
+- migrate_transcripts.py: transcript-to-files migration helper
+- migrations/005_make_s3_key_nullable.sql: allow NULL s3_key for local files
+
 2025-12-19 18:15:00 - Updated by Claude Code
 
 [Category: Bug Fix - Batch Operations]
