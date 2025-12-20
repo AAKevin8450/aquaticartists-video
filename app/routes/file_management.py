@@ -741,9 +741,12 @@ def start_transcription_for_file(file_id):
 
     Request body:
         {
-            "model_name": "medium",
+            "provider": "whisper",
+            "model_size": "medium",
             "language": "en",
-            "force": false
+            "force": false,
+            "device": "auto",
+            "compute_type": "default"
         }
 
     Returns:
@@ -754,9 +757,17 @@ def start_transcription_for_file(file_id):
     """
     try:
         data = request.get_json() or {}
-        model_name = data.get('model_name', 'medium')
+        provider = (data.get('provider') or 'whisper').lower()
+        if provider in ('nova', 'sonic', 'nova_sonic'):
+            provider = 'nova_sonic'
+        if provider not in ('whisper', 'nova_sonic'):
+            return jsonify({'error': 'Invalid provider. Use whisper or nova_sonic.'}), 400
+
+        model_name = data.get('model_size') or data.get('model_name') or current_app.config.get('WHISPER_MODEL_SIZE', 'medium')
         language = data.get('language')
         force = data.get('force', False)
+        device = data.get('device') or current_app.config.get('WHISPER_DEVICE', 'auto')
+        compute_type = data.get('compute_type') or current_app.config.get('WHISPER_COMPUTE_TYPE', 'default')
 
         db = get_db()
         file = db.get_file(file_id)
@@ -772,11 +783,24 @@ def start_transcription_for_file(file_id):
         from app.models import TranscriptStatus
         from app.services.transcription_service import create_transcription_service
         from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
-        from pathlib import Path
 
-        device = current_app.config.get('WHISPER_DEVICE', 'auto')
-        compute_type = current_app.config.get('WHISPER_COMPUTE_TYPE', 'default')
-        service = create_transcription_service(model_name, device, compute_type)
+        if provider == 'nova_sonic':
+            from app.services.nova_transcription_service import create_nova_transcription_service
+            model_name = 'nova-2-sonic'
+            model_id = current_app.config.get('NOVA_SONIC_MODEL_ID')
+            runtime_model_id = current_app.config.get('NOVA_SONIC_RUNTIME_ID', model_id)
+            max_tokens = current_app.config.get('NOVA_SONIC_MAX_TOKENS', 8192)
+            service = create_nova_transcription_service(
+                bucket_name=current_app.config.get('S3_BUCKET_NAME'),
+                region=current_app.config.get('AWS_REGION'),
+                model_id=model_id,
+                runtime_model_id=runtime_model_id,
+                aws_access_key=current_app.config.get('AWS_ACCESS_KEY_ID'),
+                aws_secret_key=current_app.config.get('AWS_SECRET_ACCESS_KEY'),
+                max_tokens=max_tokens
+            )
+        else:
+            service = create_transcription_service(model_name, device, compute_type)
 
         file_size, file_mtime = service.get_file_metadata(local_path)
         existing = db.get_transcript_by_file_info(
@@ -875,22 +899,37 @@ def start_nova_for_file(file_id):
 
         db = get_db()
 
-        # Get proxy file (Nova requires S3 files)
+        # Ensure proxy exists (create + upload to S3 if missing)
         proxy = db.get_proxy_for_source(file_id)
         if not proxy:
-            return jsonify({'error': 'Proxy file not found. Please create proxy first.'}), 404
+            from app.routes.upload import create_proxy_internal
+            proxy_result = create_proxy_internal(file_id, upload_to_s3=True)
+            proxy = db.get_file(proxy_result['proxy_id'])
+            if not proxy:
+                return jsonify({'error': 'Failed to create proxy for Nova analysis.'}), 500
 
         # Import and call the Nova service
-        from app.routes.nova_analysis import start_nova_analysis
+        from app.routes.nova_analysis import start_nova_analysis_internal
 
-        result = start_nova_analysis(
+        processing_mode = data.get('processing_mode', options.get('processing_mode', 'realtime'))
+        payload, status_code = start_nova_analysis_internal(
             file_id=proxy['id'],
             model=model,
             analysis_types=analysis_types,
-            user_options=options
+            options=options,
+            processing_mode=processing_mode
         )
 
-        return jsonify(result), 200
+        analysis_job_id = payload.get('analysis_job_id')
+        if analysis_job_id:
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    'UPDATE analysis_jobs SET file_id = ? WHERE id = ?',
+                    (file_id, analysis_job_id)
+                )
+
+        return jsonify(payload), status_code
 
     except Exception as e:
         current_app.logger.error(f"Start Nova error: {e}", exc_info=True)
@@ -1247,9 +1286,12 @@ def batch_transcribe():
     Request body:
         {
             "file_ids": [1, 2, 3, ...],
-            "model_name": "medium",
+            "provider": "whisper",
+            "model_size": "medium",
             "language": "en",
-            "force": false
+            "force": false,
+            "device": "auto",
+            "compute_type": "default"
         }
 
     Returns:
@@ -1269,9 +1311,17 @@ def batch_transcribe():
             return jsonify({'error': 'No file IDs provided'}), 400
 
         # Transcription options
-        model_name = data.get('model_name', 'medium')
+        provider = (data.get('provider') or 'whisper').lower()
+        if provider in ('nova', 'sonic', 'nova_sonic'):
+            provider = 'nova_sonic'
+        if provider not in ('whisper', 'nova_sonic'):
+            return jsonify({'error': 'Invalid provider. Use whisper or nova_sonic.'}), 400
+
+        model_name = data.get('model_size') or data.get('model_name') or current_app.config.get('WHISPER_MODEL_SIZE', 'medium')
         language = data.get('language')
         force = data.get('force', False)
+        device = data.get('device') or current_app.config.get('WHISPER_DEVICE', 'auto')
+        compute_type = data.get('compute_type') or current_app.config.get('WHISPER_COMPUTE_TYPE', 'default')
 
         # Validate files exist and are eligible for transcription
         db = get_db()
@@ -1301,7 +1351,14 @@ def batch_transcribe():
         # Create batch job
         job_id = f"batch-transcribe-{uuid.uuid4().hex[:8]}"
         job = BatchJob(job_id, 'transcribe', len(eligible_file_ids), eligible_file_ids)
-        job.options = {'model_name': model_name, 'language': language, 'force': force}
+        job.options = {
+            'provider': provider,
+            'model_name': model_name,
+            'language': language,
+            'force': force,
+            'device': device,
+            'compute_type': compute_type
+        }
 
         with _batch_jobs_lock:
             _batch_jobs[job_id] = job
@@ -1335,7 +1392,8 @@ def batch_nova():
             "file_ids": [1, 2, 3, ...],
             "model": "lite",
             "analysis_types": ["summary", "chapters"],
-            "options": {}
+            "options": {},
+            "processing_mode": "realtime"
         }
 
     Returns:
@@ -1358,11 +1416,16 @@ def batch_nova():
         model = data.get('model', 'lite')
         analysis_types = data.get('analysis_types', ['summary'])
         options = data.get('options', {})
+        processing_mode = data.get('processing_mode', options.get('processing_mode', 'realtime'))
+        options['processing_mode'] = processing_mode
 
         from app.services.nova_service import NovaVideoService
         valid_models = list(NovaVideoService.MODEL_CONFIG.keys())
         if model not in valid_models:
             return jsonify({'error': f'Invalid model: {model}. Choose from: {valid_models}'}), 400
+
+        if processing_mode not in ('realtime', 'batch'):
+            return jsonify({'error': 'processing_mode must be "realtime" or "batch"'}), 400
 
         # Validate files exist and have proxies (Nova requires S3 files)
         db = get_db()
@@ -1379,21 +1442,25 @@ def batch_nova():
                 current_app.logger.warning(f"File {file_id} is not a video, skipping")
                 continue
 
-            # Check if proxy exists
-            proxy = db.get_proxy_for_source(file_id)
-            if not proxy:
-                current_app.logger.warning(f"File {file_id} has no proxy, skipping")
+            local_path = file.get('local_path')
+            if not local_path or not Path(local_path).exists():
+                current_app.logger.warning(f"File {file_id} has no local path, skipping")
                 continue
 
             eligible_file_ids.append(file_id)
 
         if not eligible_file_ids:
-            return jsonify({'error': 'No eligible files for Nova analysis (need videos with proxies)'}), 404
+            return jsonify({'error': 'No eligible files for Nova analysis (need videos with local paths)'}), 404
 
         # Create batch job
         job_id = f"batch-nova-{uuid.uuid4().hex[:8]}"
         job = BatchJob(job_id, 'nova', len(eligible_file_ids), eligible_file_ids)
-        job.options = {'model': model, 'analysis_types': analysis_types, 'user_options': options}
+        job.options = {
+            'model': model,
+            'analysis_types': analysis_types,
+            'user_options': options,
+            'processing_mode': processing_mode
+        }
 
         with _batch_jobs_lock:
             _batch_jobs[job_id] = job
@@ -1643,11 +1710,33 @@ def _run_batch_transcribe(app, job: BatchJob):
         from app.services.transcription_service import create_transcription_service
         from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
 
-        options = job.options
-        model_name = options['model_name']
-        device = current_app.config.get('WHISPER_DEVICE', 'auto')
-        compute_type = current_app.config.get('WHISPER_COMPUTE_TYPE', 'default')
-        service = create_transcription_service(model_name, device, compute_type)
+        options = job.options or {}
+        provider = (options.get('provider') or 'whisper').lower()
+        if provider in ('nova', 'sonic', 'nova_sonic'):
+            provider = 'nova_sonic'
+        model_name = options.get('model_name') or current_app.config.get('WHISPER_MODEL_SIZE', 'medium')
+        device = options.get('device') or current_app.config.get('WHISPER_DEVICE', 'auto')
+        compute_type = options.get('compute_type') or current_app.config.get('WHISPER_COMPUTE_TYPE', 'default')
+        language = options.get('language')
+        force = bool(options.get('force', False))
+
+        if provider == 'nova_sonic':
+            from app.services.nova_transcription_service import create_nova_transcription_service
+            model_name = 'nova-2-sonic'
+            model_id = current_app.config.get('NOVA_SONIC_MODEL_ID')
+            runtime_model_id = current_app.config.get('NOVA_SONIC_RUNTIME_ID', model_id)
+            max_tokens = current_app.config.get('NOVA_SONIC_MAX_TOKENS', 8192)
+            service = create_nova_transcription_service(
+                bucket_name=current_app.config.get('S3_BUCKET_NAME'),
+                region=current_app.config.get('AWS_REGION'),
+                model_id=model_id,
+                runtime_model_id=runtime_model_id,
+                aws_access_key=current_app.config.get('AWS_ACCESS_KEY_ID'),
+                aws_secret_key=current_app.config.get('AWS_SECRET_ACCESS_KEY'),
+                max_tokens=max_tokens
+            )
+        else:
+            service = create_transcription_service(model_name, device, compute_type)
 
         for file_id in job.file_ids:
             if job.status == 'CANCELLED':
@@ -1670,7 +1759,7 @@ def _run_batch_transcribe(app, job: BatchJob):
                 existing = db.get_transcript_by_file_info(
                     local_path, file_size, file_mtime, model_name
                 )
-                if existing and existing['status'] == TranscriptStatus.COMPLETED and not options.get('force', False):
+                if existing and existing['status'] == TranscriptStatus.COMPLETED and not force:
                     job.completed_files += 1
                     job.results.append({
                         'file_id': file_id,
@@ -1700,7 +1789,7 @@ def _run_batch_transcribe(app, job: BatchJob):
                     current_app.logger.warning(f"Failed to extract metadata: {e}")
 
                 try:
-                    result = service.transcribe_file(local_path, language=options.get('language'))
+                    result = service.transcribe_file(local_path, language=language)
                 except Exception as e:
                     db.update_transcript_status(
                         transcript_id=transcript_id,
@@ -1757,14 +1846,14 @@ def _run_batch_transcribe(app, job: BatchJob):
 def _run_batch_nova(app, job: BatchJob):
     """Background worker for batch Nova analysis."""
     with app.app_context():
-        from app.services.nova_service import NovaVideoService
-        from datetime import datetime
-        import json
+        from app.routes.nova_analysis import start_nova_analysis_internal
+        from app.routes.upload import create_proxy_internal
 
-        options = job.options
-        model_key = options['model']  # e.g., 'lite', 'pro'
-        analysis_types = options['analysis_types']
+        options = job.options or {}
+        model_key = options.get('model', 'lite')
+        analysis_types = options.get('analysis_types', ['summary'])
         user_options = options.get('user_options', {})
+        processing_mode = options.get('processing_mode', user_options.get('processing_mode', 'realtime'))
 
         for file_id in job.file_ids:
             if job.status == 'CANCELLED':
@@ -1779,112 +1868,41 @@ def _run_batch_nova(app, job: BatchJob):
 
                 proxy = db.get_proxy_for_source(file_id)
                 if not proxy:
+                    proxy_result = create_proxy_internal(file_id, upload_to_s3=False)
+                    proxy = db.get_file(proxy_result['proxy_id'])
+                if not proxy:
                     raise Exception(f'Proxy not found for file {file_id}')
 
                 job.current_file = file['filename']
 
-                # Upload proxy to S3 if not already uploaded
-                if not proxy.get('s3_key'):
-                    from app.services.s3_service import S3Service
-                    import os
-                    current_app.logger.info(f"Uploading proxy for file {file_id} to S3...")
+                payload, status_code = start_nova_analysis_internal(
+                    file_id=proxy['id'],
+                    model=model_key,
+                    analysis_types=analysis_types,
+                    options=user_options,
+                    processing_mode=processing_mode
+                )
 
-                    s3_service = S3Service(
-                        bucket_name=current_app.config['S3_BUCKET_NAME'],
-                        region=current_app.config['AWS_REGION']
-                    )
-                    local_path = proxy.get('local_path')
-                    if not local_path:
-                        raise Exception(f'Proxy file has no local path')
+                if status_code >= 400:
+                    raise Exception(payload.get('error') or 'Failed to start Nova analysis')
 
-                    if not os.path.exists(local_path):
-                        raise Exception(f'Proxy file not found at path: {local_path}')
-
-                    # Generate S3 key for proxy
-                    filename = os.path.basename(local_path)
-                    s3_key = f'proxies/{filename}'
-
-                    # Upload to S3 with file object
-                    with open(local_path, 'rb') as file_obj:
-                        content_type = proxy.get('content_type', 'video/mp4')
-                        s3_service.upload_file(file_obj, s3_key, content_type)
-
-                    # Update proxy record with S3 key using direct SQL
+                analysis_job_id = payload.get('analysis_job_id')
+                if analysis_job_id:
                     with db.get_connection() as conn:
                         cursor = conn.cursor()
-                        cursor.execute('UPDATE files SET s3_key = ? WHERE id = ?', (s3_key, proxy['id']))
-                    proxy['s3_key'] = s3_key
-                    current_app.logger.info(f"Proxy uploaded to S3: {s3_key}")
-
-                # Prepare options
-                nova_options = user_options.copy()
-                nova_options['processing_mode'] = 'realtime'
-                nova_options['estimated_duration_seconds'] = file.get('duration_seconds', 300)
-
-                # Create analysis job record
-                analysis_job_id = db.create_analysis_job(
-                    file_id=file_id,
-                    job_id=f"nova-{datetime.utcnow().timestamp()}",
-                    analysis_type='nova',
-                    status='SUBMITTED',
-                    parameters=json.dumps({
-                        'model': model_key,
-                        'analysis_types': analysis_types,
-                        'options': nova_options,
-                        'proxy_file_id': proxy['id'],
-                        'proxy_s3_key': proxy.get('s3_key'),
-                        'processing_mode': 'realtime'
-                    })
-                )
-
-                # Create Nova job record
-                nova_job_id = db.create_nova_job(
-                    analysis_job_id=analysis_job_id,
-                    model=model_key,
-                    analysis_types=analysis_types,
-                    user_options=nova_options
-                )
-
-                # Run Nova analysis with service
-                nova_service = NovaVideoService(
-                    bucket_name=current_app.config['S3_BUCKET_NAME'],
-                    region=current_app.config['AWS_REGION'],
-                    aws_access_key=current_app.config.get('AWS_ACCESS_KEY_ID'),
-                    aws_secret_key=current_app.config.get('AWS_SECRET_ACCESS_KEY')
-                )
-
-                current_app.logger.info(f"Starting Nova analysis for file {file_id}, job {nova_job_id}")
-
-                # Run the analysis (this is synchronous and may take time)
-                results = nova_service.analyze_video(
-                    s3_key=proxy['s3_key'],
-                    model=model_key,
-                    analysis_types=analysis_types,
-                    options=nova_options
-                )
-
-                # Store results in database
-                update_data = {
-                    'status': 'COMPLETED',
-                    'completed_at': datetime.utcnow().isoformat()
-                }
-
-                # Add results for each analysis type
-                for analysis_type in analysis_types:
-                    if analysis_type in results:
-                        result_key = f'{analysis_type}_result'
-                        update_data[result_key] = results[analysis_type]
-
-                db.update_nova_job(nova_job_id, update_data)
-                db.update_analysis_job(analysis_job_id, status='SUCCEEDED')
+                        cursor.execute(
+                            'UPDATE analysis_jobs SET file_id = ? WHERE id = ?',
+                            (file_id, analysis_job_id)
+                        )
 
                 job.completed_files += 1
                 job.results.append({
                     'file_id': file_id,
                     'filename': file['filename'],
                     'success': True,
-                    'nova_job_id': nova_job_id,
-                    'analysis_job_id': analysis_job_id
+                    'nova_job_id': payload.get('nova_job_id'),
+                    'analysis_job_id': analysis_job_id,
+                    'status': payload.get('status')
                 })
 
             except Exception as e:

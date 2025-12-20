@@ -1,3 +1,24 @@
+2025-12-20 13:22:52 - Updated by Codex
+
+[Category: Feature/Bug Fix/API]
+Expose per-file and batch processing options in File Management, add Nova/Transcription configuration passthroughs, and fix analysis status counting.
+
+[Purpose]
+Ensure users can configure transcription, Nova, and Rekognition settings before processing from File Management or file details while preserving defaults and supporting batch/Nova Sonic modes.
+
+[Impact]
+- Single-file actions now open a modal with full processing options instead of prompt/confirm defaults.
+- Batch options include provider/device/compute settings for transcription and processing mode for Nova.
+- Batch Nova auto-creates proxies when missing and reuses core Nova start logic while keeping analysis jobs linked to source files.
+- Completed analysis counts now include COMPLETED status for accurate badges.
+
+[Files Modified]
+- app/templates/file_management.html: Added single-file options modal and expanded batch options fields.
+- app/static/js/file_management.js: Wired single-file modal flow, updated batch payloads, and shared Nova model loading.
+- app/routes/file_management.py: Accept new transcription/Nova options and reuse core Nova start in batch with proxy auto-create.
+- app/routes/nova_analysis.py: Added internal Nova start helper and S3 upload fallback for local files.
+- app/database.py: Treat COMPLETED analysis jobs as completed in file summary counts.
+
 2025-12-20 14:45:00 - Updated by Claude Code
 
 [Category: Feature/Performance Optimization/UI Refactoring]
