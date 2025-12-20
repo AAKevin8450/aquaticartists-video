@@ -1,3 +1,51 @@
+2025-12-19 21:10:20 - Updated by Codex
+
+[Category: Feature, Bug Fix, API, Database, Dependencies, UI]
+Add Nova Sonic transcription and Nova embeddings support, fix batch transcription context handling, and improve file metadata visibility.
+
+[Purpose]
+Enable Bedrock-powered transcription and embeddings workflows while keeping local batch transcription reliable and file metadata more useful in the UI.
+
+[Impact]
+- Transcription now supports Nova 2 Sonic via Bedrock alongside local Whisper
+- Nova analysis and transcripts can generate and store embeddings in sqlite-vec
+- Batch transcription worker runs inside the Flask app context to avoid runtime errors
+- File list now surfaces creation timestamps from imported metadata
+- Proxy naming includes source file IDs to avoid collisions
+
+[Technical Details - Nova Sonic Transcription]
+- app/services/nova_transcription_service.py: Bedrock Nova Sonic transcription service with S3 audio staging
+- app/routes/transcription.py: provider selection, model handling, and batch routing for Nova Sonic
+- app/templates/transcription.html: provider selector UI and request payload updates
+
+[Technical Details - Nova Embeddings]
+- app/services/nova_embeddings_service.py: Bedrock embeddings client with input format handling
+- app/routes/nova_analysis.py: `/api/nova/embeddings/generate` endpoint with analysis/transcript embedding generation
+- app/database.py: sqlite-vec storage tables, metadata, and embedding helpers
+- migrations/006_add_nova_embeddings.sql: create embeddings tables and vec0 storage
+- requirements.txt: add sqlite-vec dependency
+
+[Technical Details - File Management & Batch]
+- app/routes/file_management.py: created-at display, safer directory import traversal, and batch transcription persistence fixes
+- app/static/js/file_management.js: created-at column in file list
+- app/routes/upload.py: proxy filenames include source file ID
+
+[Files Changed]
+- AGENTS.md: document Nova Sonic + embeddings configuration and proxy naming update
+- app/config.py: add Nova Sonic and embeddings environment settings
+- app/database.py: add sqlite-vec support, embedding tables, and helpers for analysis/transcript lookups
+- app/routes/file_management.py: fix batch transcription context/persistence, add created-at field, harden directory import traversal
+- app/routes/nova_analysis.py: add embeddings generation endpoint and analysis text extraction
+- app/routes/transcription.py: add Nova Sonic provider support and provider-aware batch handling
+- app/routes/upload.py: include source file ID in proxy filename
+- app/services/nova_embeddings_service.py: Bedrock embeddings client
+- app/services/nova_transcription_service.py: Bedrock Nova Sonic transcription client
+- app/static/js/file_management.js: show created-at column
+- app/templates/transcription.html: provider UI and payload updates
+- migrations/006_add_nova_embeddings.sql: add embeddings tables
+- requirements.txt: include sqlite-vec dependency
+- proxy_video/.gitkeep: removed (directory now created on demand)
+
 2025-12-19 19:18:00 - Updated by Codex
 
 [Category: Feature, Refactoring, API, Database, Documentation]

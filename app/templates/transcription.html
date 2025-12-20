@@ -8,7 +8,7 @@
         <h1 class="mb-4">
             <i class="bi bi-mic"></i> Local Video Transcription
         </h1>
-        <p class="text-muted">Extract speech from local video files using faster-whisper (runs completely offline)</p>
+        <p class="text-muted">Extract speech from video files using local Whisper or AWS Nova 2 Sonic (Bedrock)</p>
     </div>
 </div>
 
@@ -34,6 +34,14 @@
                         <small class="text-muted">Enter the full path or click Browse to select a folder</small>
                     </div>
                     <div class="col-md-4">
+                        <label for="transcriptionProvider" class="form-label">Transcription Provider</label>
+                        <select class="form-select" id="transcriptionProvider">
+                            <option value="whisper" selected>Whisper (local)</option>
+                            <option value="nova_sonic">Nova 2 Sonic (Bedrock)</option>
+                        </select>
+                        <small class="text-muted">Nova Sonic uses Bedrock and requires S3 access</small>
+                    </div>
+                    <div class="col-md-4" id="whisperModelSizeGroup">
                         <label for="modelSize" class="form-label">Model Size</label>
                         <select class="form-select" id="modelSize">
                             <option value="tiny">Tiny (fastest, lowest quality)</option>
@@ -360,6 +368,24 @@
     let batchStartTime = null;
     let batchFileSizes = [];
     let batchProcessingTimes = [];
+    let activeProvider = 'whisper';
+
+    function updateProviderUI() {
+        const providerSelect = document.getElementById('transcriptionProvider');
+        const modelGroup = document.getElementById('whisperModelSizeGroup');
+        activeProvider = providerSelect.value;
+        if (activeProvider === 'nova_sonic') {
+            modelGroup.style.display = 'none';
+        } else {
+            modelGroup.style.display = 'block';
+        }
+    }
+
+    document.getElementById('transcriptionProvider').addEventListener('change', () => {
+        updateProviderUI();
+    });
+
+    updateProviderUI();
 
     // Folder Browser Functions
     const folderBrowserModal = document.getElementById('folderBrowserModal');
@@ -493,6 +519,8 @@
     document.getElementById('scanBtn').addEventListener('click', async () => {
         const directoryPath = document.getElementById('directoryPath').value.trim();
         const recursive = document.getElementById('recursiveScan').checked;
+        const provider = document.getElementById('transcriptionProvider').value;
+        const modelSize = document.getElementById('modelSize').value;
 
         if (!directoryPath) {
             showAlert('Please enter a directory path', 'warning');
@@ -502,10 +530,15 @@
         try {
             showAlert('Scanning directory...', 'info');
 
+            const scanPayload = { directory_path: directoryPath, recursive, provider };
+            if (provider === 'whisper') {
+                scanPayload.model_size = modelSize;
+            }
+
             const response = await fetch('/transcription/api/scan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ directory_path: directoryPath, recursive })
+                body: JSON.stringify(scanPayload)
             });
 
             if (!response.ok) {
@@ -587,15 +620,21 @@
         const selectedFiles = selectedIndexes.map(i => scannedFiles[i].path);
         const language = document.getElementById('language').value.trim() || null;
         const force = document.getElementById('forceReprocess').checked;
+        const provider = document.getElementById('transcriptionProvider').value;
         const modelSize = document.getElementById('modelSize').value;
 
         try {
             showAlert(`Starting batch transcription of ${selectedFiles.length} files...`, 'info');
 
+            const batchPayload = { file_paths: selectedFiles, language, force, provider };
+            if (provider === 'whisper') {
+                batchPayload.model_size = modelSize;
+            }
+
             const response = await fetch('/transcription/api/start-batch', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ file_paths: selectedFiles, language, force, model_size: modelSize })
+                body: JSON.stringify(batchPayload)
             });
 
             if (!response.ok) {

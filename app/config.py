@@ -28,6 +28,13 @@ class Config:
     BEDROCK_BATCH_ROLE_ARN = os.getenv('BEDROCK_BATCH_ROLE_ARN')
     NOVA_BATCH_INPUT_PREFIX = os.getenv('NOVA_BATCH_INPUT_PREFIX', 'nova/batch/input')
     NOVA_BATCH_OUTPUT_PREFIX = os.getenv('NOVA_BATCH_OUTPUT_PREFIX', 'nova/batch/output')
+    NOVA_SONIC_MODEL_ID = os.getenv('NOVA_SONIC_MODEL_ID', 'amazon.nova-2-sonic-v1:0')
+    NOVA_SONIC_RUNTIME_ID = os.getenv('NOVA_SONIC_RUNTIME_ID', NOVA_SONIC_MODEL_ID)
+    NOVA_SONIC_MAX_TOKENS = int(os.getenv('NOVA_SONIC_MAX_TOKENS', '8192'))
+    NOVA_EMBED_MODEL_ID = os.getenv('NOVA_EMBED_MODEL_ID', 'amazon.nova-embed-v1:0')
+    NOVA_EMBED_DIMENSION = int(os.getenv('NOVA_EMBED_DIMENSION', '1024'))
+    NOVA_EMBED_REQUEST_FORMAT = os.getenv('NOVA_EMBED_REQUEST_FORMAT', 'input')
+    SQLITE_VEC_PATH = os.getenv('SQLITE_VEC_PATH')
 
     # Database settings
     DATABASE_PATH = BASE_DIR / os.getenv('DATABASE_PATH', 'data/app.db')

@@ -420,15 +420,16 @@ function renderFiles(files) {
                         <th style="width: 10%; cursor: pointer;" class="sortable" data-sort="size_bytes">
                             Size ${getSortIcon('size_bytes')}
                         </th>
-                        <th style="width: 10%; cursor: pointer;" class="sortable" data-sort="duration_seconds">
+                        <th style="width: 9%; cursor: pointer;" class="sortable" data-sort="duration_seconds">
                             Duration ${getSortIcon('duration_seconds')}
                         </th>
-                        <th style="width: 12%">Resolution</th>
-                        <th style="width: 15%">Status</th>
+                        <th style="width: 10%">Resolution</th>
+                        <th style="width: 14%">Status</th>
+                        <th style="width: 10%">Created</th>
                         <th style="width: 10%; cursor: pointer;" class="sortable" data-sort="uploaded_at">
                             Uploaded ${getSortIcon('uploaded_at')}
                         </th>
-                        <th style="width: 15%">Actions</th>
+                        <th style="width: 12%">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -503,6 +504,7 @@ function renderFileRow(file) {
                     ${statusBadges.length === 0 ? '<span class="text-muted small">No processing</span>' : ''}
                 </div>
             </td>
+            <td>${file.created_at || 'N/A'}</td>
             <td>${file.uploaded_at}</td>
             <td>
                 ${renderActionsDropdown(file)}

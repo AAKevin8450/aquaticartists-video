@@ -8,6 +8,7 @@ from app.utils.formatters import format_timestamp, format_file_size, format_dura
 from app.utils.validators import get_file_type, ValidationError
 from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
 from pathlib import Path
+from datetime import datetime, timezone
 import os
 import threading
 import uuid
@@ -201,6 +202,16 @@ def list_files():
         # Format files for display
         formatted_files = []
         for file in files:
+            metadata = file.get('metadata') or {}
+            created_epoch = metadata.get('file_ctime') or metadata.get('file_mtime')
+            created_at_display = None
+            if isinstance(created_epoch, (int, float)):
+                created_at_display = format_timestamp(
+                    datetime.fromtimestamp(created_epoch, tz=timezone.utc).isoformat().replace('+00:00', 'Z')
+                )
+            if not created_at_display:
+                created_at_display = format_timestamp(file['uploaded_at'])
+
             formatted_file = {
                 'id': file['id'],
                 'filename': file['filename'],
@@ -210,6 +221,7 @@ def list_files():
                 'size_display': format_file_size(file['size_bytes']),
                 'content_type': file['content_type'],
                 'uploaded_at': format_timestamp(file['uploaded_at']),
+                'created_at': created_at_display,
                 'local_path': file.get('local_path'),
 
                 # Media metadata
@@ -423,7 +435,21 @@ def import_directory():
             imported += 1
 
         if recursive:
-            for root, _, files in os.walk(directory_path):
+            seen_dirs = set()
+            for root, dirs, files in os.walk(directory_path, followlinks=True):
+                real_root = os.path.realpath(root)
+                if real_root in seen_dirs:
+                    dirs[:] = []
+                    continue
+                seen_dirs.add(real_root)
+
+                pruned_dirs = []
+                for name in dirs:
+                    real_path = os.path.realpath(os.path.join(root, name))
+                    if real_path not in seen_dirs:
+                        pruned_dirs.append(name)
+                dirs[:] = pruned_dirs
+
                 for name in files:
                     handle_file(os.path.join(root, name))
         else:
@@ -723,16 +749,71 @@ def start_transcription_for_file(file_id):
             return jsonify({'error': 'Local file not found'}), 404
 
         # Import and call the transcription service
-        from app.services.transcription_service import TranscriptionService
+        from app.models import TranscriptStatus
+        from app.services.transcription_service import create_transcription_service
+        from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
         from pathlib import Path
 
-        service = TranscriptionService(model_name=model_name)
+        device = current_app.config.get('WHISPER_DEVICE', 'auto')
+        compute_type = current_app.config.get('WHISPER_COMPUTE_TYPE', 'default')
+        service = create_transcription_service(model_name, device, compute_type)
 
-        # Start transcription
-        transcript_id = service.transcribe_file(
-            file_path=local_path,
-            language=language,
-            force=force
+        file_size, file_mtime = service.get_file_metadata(local_path)
+        existing = db.get_transcript_by_file_info(
+            local_path, file_size, file_mtime, model_name
+        )
+        if existing and existing['status'] == TranscriptStatus.COMPLETED and not force:
+            return jsonify({
+                'transcript_id': existing['id'],
+                'message': 'File already transcribed with this model (use force=true to reprocess)'
+            }), 200
+
+        if existing:
+            transcript_id = existing['id']
+            db.update_transcript_status(transcript_id, TranscriptStatus.IN_PROGRESS)
+        else:
+            transcript_id = db.create_transcript(
+                file_path=local_path,
+                file_name=os.path.basename(local_path),
+                file_size=file_size,
+                modified_time=file_mtime,
+                model_name=model_name
+            )
+
+        metadata = {}
+        try:
+            metadata = extract_media_metadata(local_path)
+        except MediaMetadataError as e:
+            current_app.logger.warning(f"Failed to extract metadata: {e}")
+
+        try:
+            result = service.transcribe_file(local_path, language=language)
+        except Exception as e:
+            db.update_transcript_status(
+                transcript_id=transcript_id,
+                status=TranscriptStatus.FAILED,
+                error_message=str(e)
+            )
+            raise
+
+        db.update_transcript_status(
+            transcript_id=transcript_id,
+            status=TranscriptStatus.COMPLETED,
+            transcript_text=result['transcript_text'],
+            character_count=result.get('character_count'),
+            word_count=result.get('word_count'),
+            duration_seconds=result.get('duration_seconds'),
+            segments=result.get('segments'),
+            word_timestamps=result.get('word_timestamps'),
+            language=result.get('language'),
+            confidence_score=result.get('confidence_score'),
+            processing_time=result.get('processing_time_seconds'),
+            resolution_width=metadata.get('resolution_width'),
+            resolution_height=metadata.get('resolution_height'),
+            frame_rate=metadata.get('frame_rate'),
+            codec_video=metadata.get('codec_video'),
+            codec_audio=metadata.get('codec_audio'),
+            bitrate=metadata.get('bitrate')
         )
 
         return jsonify({
@@ -1205,7 +1286,8 @@ def batch_transcribe():
             _batch_jobs[job_id] = job
 
         # Start background thread
-        thread = threading.Thread(target=_run_batch_transcribe, args=(job,))
+        app = current_app._get_current_object()
+        thread = threading.Thread(target=_run_batch_transcribe, args=(app, job))
         thread.daemon = True
         thread.start()
 
@@ -1525,59 +1607,122 @@ def _run_batch_proxy(job: BatchJob):
     )
 
 
-def _run_batch_transcribe(job: BatchJob):
+def _run_batch_transcribe(app, job: BatchJob):
     """Background worker for batch transcription."""
-    from app.services.transcription_service import TranscriptionService
+    with app.app_context():
+        from app.models import TranscriptStatus
+        from app.services.transcription_service import create_transcription_service
+        from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
 
-    options = job.options
-    service = TranscriptionService(model_name=options['model_name'])
+        options = job.options
+        model_name = options['model_name']
+        device = current_app.config.get('WHISPER_DEVICE', 'auto')
+        compute_type = current_app.config.get('WHISPER_COMPUTE_TYPE', 'default')
+        service = create_transcription_service(model_name, device, compute_type)
 
-    for file_id in job.file_ids:
-        if job.status == 'CANCELLED':
-            break
+        for file_id in job.file_ids:
+            if job.status == 'CANCELLED':
+                break
 
-        try:
-            # Get file info
-            db = get_db()
-            file = db.get_file(file_id)
-            if not file:
-                raise Exception(f'File {file_id} not found')
+            try:
+                # Get file info
+                db = get_db()
+                file = db.get_file(file_id)
+                if not file:
+                    raise Exception(f'File {file_id} not found')
 
-            local_path = file.get('local_path')
-            if not local_path or not Path(local_path).exists():
-                raise Exception(f'Local file not found: {local_path}')
+                local_path = file.get('local_path')
+                if not local_path or not Path(local_path).exists():
+                    raise Exception(f'Local file not found: {local_path}')
 
-            job.current_file = file['filename']
+                job.current_file = file['filename']
 
-            # Transcribe
-            transcript_id = service.transcribe_file(
-                file_path=local_path,
-                language=options.get('language'),
-                force=options.get('force', False)
-            )
+                file_size, file_mtime = service.get_file_metadata(local_path)
+                existing = db.get_transcript_by_file_info(
+                    local_path, file_size, file_mtime, model_name
+                )
+                if existing and existing['status'] == TranscriptStatus.COMPLETED and not options.get('force', False):
+                    job.completed_files += 1
+                    job.results.append({
+                        'file_id': file_id,
+                        'filename': file['filename'],
+                        'success': True,
+                        'transcript_id': existing['id'],
+                        'skipped': True
+                    })
+                    continue
 
-            job.completed_files += 1
-            job.results.append({
-                'file_id': file_id,
-                'filename': file['filename'],
-                'success': True,
-                'transcript_id': transcript_id
-            })
+                if existing:
+                    transcript_id = existing['id']
+                    db.update_transcript_status(transcript_id, TranscriptStatus.IN_PROGRESS)
+                else:
+                    transcript_id = db.create_transcript(
+                        file_path=local_path,
+                        file_name=os.path.basename(local_path),
+                        file_size=file_size,
+                        modified_time=file_mtime,
+                        model_name=model_name
+                    )
 
-        except Exception as e:
-            job.failed_files += 1
-            error_msg = str(e)
-            job.errors.append({
-                'file_id': file_id,
-                'filename': file.get('filename', f'File {file_id}'),
-                'error': error_msg
-            })
-            current_app.logger.error(f"Batch transcribe error for file {file_id}: {e}")
+                metadata = {}
+                try:
+                    metadata = extract_media_metadata(local_path)
+                except MediaMetadataError as e:
+                    current_app.logger.warning(f"Failed to extract metadata: {e}")
 
-    # Mark job as complete
-    job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
-    job.end_time = time.time()
-    job.current_file = None
+                try:
+                    result = service.transcribe_file(local_path, language=options.get('language'))
+                except Exception as e:
+                    db.update_transcript_status(
+                        transcript_id=transcript_id,
+                        status=TranscriptStatus.FAILED,
+                        error_message=str(e)
+                    )
+                    raise
+
+                db.update_transcript_status(
+                    transcript_id=transcript_id,
+                    status=TranscriptStatus.COMPLETED,
+                    transcript_text=result['transcript_text'],
+                    character_count=result.get('character_count'),
+                    word_count=result.get('word_count'),
+                    duration_seconds=result.get('duration_seconds'),
+                    segments=result.get('segments'),
+                    word_timestamps=result.get('word_timestamps'),
+                    language=result.get('language'),
+                    confidence_score=result.get('confidence_score'),
+                    processing_time=result.get('processing_time_seconds'),
+                    resolution_width=metadata.get('resolution_width'),
+                    resolution_height=metadata.get('resolution_height'),
+                    frame_rate=metadata.get('frame_rate'),
+                    codec_video=metadata.get('codec_video'),
+                    codec_audio=metadata.get('codec_audio'),
+                    bitrate=metadata.get('bitrate')
+                )
+
+                job.completed_files += 1
+                job.results.append({
+                    'file_id': file_id,
+                    'filename': file['filename'],
+                    'success': True,
+                    'transcript_id': transcript_id,
+                    'skipped': False
+                })
+
+            except Exception as e:
+                job.failed_files += 1
+                error_msg = str(e)
+                job.errors.append({
+                    'file_id': file_id,
+                    'filename': file.get('filename', f'File {file_id}'),
+                    'error': error_msg
+                })
+                current_app.logger.error(f"Batch transcribe error for file {file_id}: {e}")
+
+        # Mark job as complete
+        job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+        job.end_time = time.time()
+        job.current_file = None
 
 
 def _run_batch_nova(job: BatchJob):
