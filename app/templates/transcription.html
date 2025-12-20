@@ -1082,6 +1082,12 @@
         loadTranscripts();
     });
 
+    const urlParams = new URLSearchParams(window.location.search);
+    const preselectTranscriptId = urlParams.get('transcript_id');
+    if (preselectTranscriptId) {
+        viewTranscript(parseInt(preselectTranscriptId, 10));
+    }
+
     // Helper functions
     function formatFileSize(bytes) {
         if (bytes === 0 || !bytes) return '0 B';

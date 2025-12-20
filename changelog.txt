@@ -1,3 +1,36 @@
+2025-12-19 23:22:47 - Updated by Codex
+
+[Category: Bug Fix, UI, API, Refactoring, Database]
+Stabilize Nova model selection, surface analysis views from File Management, and align batch Nova tracking with source files.
+
+[Purpose]
+Prevent Nova video calls from selecting unsupported models while making analysis results discoverable from the file list.
+
+[Impact]
+- Nova Micro is no longer selectable or valid for analysis
+- Batch Nova analysis now attaches to source files so status and results appear in File Management
+- File Management badges link directly to the latest transcript and Nova analysis views
+- Nova Lite batch calls use the required inference profile and log runtime model IDs for debugging
+
+[Technical Details]
+- app/services/nova_service.py: remove Nova Micro config, log runtime model IDs, and use inference profile for batch jobs
+- app/routes/file_management.py: validate Nova model keys and bind analysis_jobs to source file IDs
+- app/static/js/file_management.js: add badge click handlers and deep links to transcript/Nova views
+- app/routes/nova_analysis.py: drop micro from valid models and model listing docs
+- app/services/nova_aggregator.py, app/services/video_chunker.py: remove micro references
+- app/templates/file_management.html, app/templates/transcription.html: remove micro option and support transcript deep-linking
+
+[Files Changed]
+- app/services/nova_service.py: remove Nova Micro and log runtime model IDs for Nova calls
+- app/routes/file_management.py: ensure batch Nova analyses track source files and validate model keys
+- app/static/js/file_management.js: make transcript/Nova badges open the latest analysis views
+- app/routes/nova_analysis.py: remove micro from model validation and docs
+- app/services/nova_aggregator.py: drop micro model mapping
+- app/services/video_chunker.py: drop micro chunk config
+- app/templates/file_management.html: remove Nova Micro option from batch model dropdown
+- app/templates/transcription.html: auto-open transcript when `transcript_id` is supplied
+- app/database.py: add Nova/Rekognition filters and proxy size summary fields for file listings
+
 2025-12-19 21:43:06 - Updated by Codex
 
 [Category: Feature, Bug Fix, UI]

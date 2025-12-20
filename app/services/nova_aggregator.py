@@ -50,7 +50,7 @@ class NovaAggregator:
 
         Args:
             chunk_results: List of chunk result dictionaries containing 'chunk' and 'summary' data
-            model: Nova model to use for aggregation ('micro', 'lite', 'pro', 'premier')
+            model: Nova model to use for aggregation ('lite', 'pro', 'premier')
 
         Returns:
             Dict with aggregated summary and metadata
@@ -356,7 +356,6 @@ Do NOT simply concatenate the summaries. Synthesize them into a cohesive whole t
     def _get_model_id(self, model: str) -> str:
         """Get full Bedrock model ID from short name."""
         model_ids = {
-            'micro': 'us.amazon.nova-micro-v1:0',
             'lite': 'us.amazon.nova-2-lite-v1:0',
             'pro': 'us.amazon.nova-pro-v1:0',
             'pro_2_preview': 'us.amazon.nova-pro-v2:0',

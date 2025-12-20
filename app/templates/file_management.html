@@ -103,6 +103,26 @@
                 </select>
             </div>
 
+            <!-- Nova Analysis Filter -->
+            <div class="col-md-2">
+                <label class="form-label">Nova Analysis</label>
+                <select class="form-select" id="novaFilter">
+                    <option value="">All Files</option>
+                    <option value="true">Has Nova</option>
+                    <option value="false">No Nova</option>
+                </select>
+            </div>
+
+            <!-- Rekognition Analysis Filter -->
+            <div class="col-md-2">
+                <label class="form-label">Rekognition</label>
+                <select class="form-select" id="rekognitionFilter">
+                    <option value="">All Files</option>
+                    <option value="true">Has Rekognition</option>
+                    <option value="false">No Rekognition</option>
+                </select>
+            </div>
+
             <!-- Upload Date Filters (Always Visible) -->
             <div class="col-md-2">
                 <label class="form-label small">Upload From</label>
@@ -217,19 +237,25 @@
         <!-- Summary Statistics -->
         <div class="alert alert-info mb-3" id="filesSummary" style="display: none;">
             <div class="row text-center">
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <div class="d-flex flex-column">
                         <small class="text-muted">Total Files</small>
                         <h5 class="mb-0" id="summaryCount">-</h5>
                     </div>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <div class="d-flex flex-column">
                         <small class="text-muted">Total Size</small>
                         <h5 class="mb-0" id="summarySize">-</h5>
                     </div>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
+                    <div class="d-flex flex-column">
+                        <small class="text-muted">Total Proxy Size</small>
+                        <h5 class="mb-0" id="summaryProxySize">-</h5>
+                    </div>
+                </div>
+                <div class="col-md-3">
                     <div class="d-flex flex-column">
                         <small class="text-muted">Total Duration</small>
                         <h5 class="mb-0" id="summaryDuration">-</h5>
@@ -359,14 +385,13 @@
                             <div class="col-md-6">
                                 <label class="form-label">Model</label>
                                 <select class="form-select" id="batchNovaModel">
-                                    <option value="micro">Nova Micro</option>
                                     <option value="lite" selected>Nova 2 Lite</option>
                                     <option value="pro">Nova Pro</option>
                                     <option value="pro_2_preview">Nova 2 Pro (Preview)</option>
                                     <option value="omni_2_preview">Nova 2 Omni (Preview)</option>
                                     <option value="premier">Nova Premier</option>
                                 </select>
-                                <small class="text-muted">Uses Nova model keys (micro, lite, pro, premier).</small>
+                                <small class="text-muted">Uses Nova model keys (lite, pro, premier).</small>
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Summary Depth</label>

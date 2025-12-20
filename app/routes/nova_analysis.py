@@ -136,7 +136,7 @@ def start_nova_analysis():
     Expected JSON:
         {
             "file_id": 123,
-            "model": "lite",  # 'micro', 'lite', 'pro', 'premier'
+            "model": "lite",  # 'lite', 'pro', 'premier'
             "analysis_types": ["summary", "chapters", "elements"],
             "options": {
                 "summary_depth": "standard",  # 'brief', 'standard', 'detailed'
@@ -173,7 +173,7 @@ def start_nova_analysis():
         if not isinstance(analysis_types, list) or not analysis_types:
             return jsonify({'error': 'analysis_types must be a non-empty array'}), 400
 
-        valid_models = ['micro', 'lite', 'pro', 'pro_2_preview', 'omni_2_preview', 'premier']
+        valid_models = ['lite', 'pro', 'pro_2_preview', 'omni_2_preview', 'premier']
         if model not in valid_models:
             return jsonify({'error': f'model must be one of: {valid_models}'}), 400
 
@@ -643,13 +643,13 @@ def get_available_models():
         {
             "models": [
                 {
-                    "id": "micro",
-                    "name": "Nova Micro",
-                    "context_tokens": 128000,
-                    "max_video_minutes": 12,
-                    "price_input_per_1k": 0.035,
-                    "price_output_per_1k": 0.14,
-                    "best_for": "Quick summaries, batch processing"
+                    "id": "lite",
+                    "name": "Nova 2 Lite",
+                    "context_tokens": 300000,
+                    "max_video_minutes": 30,
+                    "price_input_per_1k": 0.33,
+                    "price_output_per_1k": 2.75,
+                    "best_for": "General video understanding (recommended)"
                 },
                 ...
             ]

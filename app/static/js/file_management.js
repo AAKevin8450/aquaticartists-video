@@ -9,6 +9,8 @@ let currentFilters = {
     file_type: '',
     has_proxy: null,
     has_transcription: null,
+    has_nova_analysis: null,
+    has_rekognition_analysis: null,
     upload_from_date: '',
     upload_to_date: '',
     created_from_date: '',
@@ -145,6 +147,12 @@ function applyFilters() {
     const transcriptionFilter = document.getElementById('transcriptionFilter').value;
     currentFilters.has_transcription = transcriptionFilter === '' ? null : transcriptionFilter === 'true';
 
+    const novaFilter = document.getElementById('novaFilter').value;
+    currentFilters.has_nova_analysis = novaFilter === '' ? null : novaFilter === 'true';
+
+    const rekognitionFilter = document.getElementById('rekognitionFilter').value;
+    currentFilters.has_rekognition_analysis = rekognitionFilter === '' ? null : rekognitionFilter === 'true';
+
     // Upload date filters
     currentFilters.upload_from_date = document.getElementById('uploadFromDate').value;
     currentFilters.upload_to_date = document.getElementById('uploadToDate').value;
@@ -173,6 +181,8 @@ function resetFilters() {
     document.getElementById('fileTypeFilter').value = '';
     document.getElementById('proxyFilter').value = '';
     document.getElementById('transcriptionFilter').value = '';
+    document.getElementById('novaFilter').value = '';
+    document.getElementById('rekognitionFilter').value = '';
     document.getElementById('uploadFromDate').value = '';
     document.getElementById('uploadToDate').value = '';
     document.getElementById('createdFromDate').value = '';
@@ -188,6 +198,8 @@ function resetFilters() {
         file_type: '',
         has_proxy: null,
         has_transcription: null,
+        has_nova_analysis: null,
+        has_rekognition_analysis: null,
         upload_from_date: '',
         upload_to_date: '',
         created_from_date: '',
@@ -419,19 +431,20 @@ function renderFiles(files) {
                         <th style="width: 8%; cursor: pointer;" class="sortable" data-sort="file_type">
                             Type ${getSortIcon('file_type')}
                         </th>
-                        <th style="width: 10%; cursor: pointer;" class="sortable" data-sort="size_bytes">
+                        <th style="width: 9%; cursor: pointer;" class="sortable" data-sort="size_bytes">
                             Size ${getSortIcon('size_bytes')}
                         </th>
-                        <th style="width: 9%; cursor: pointer;" class="sortable" data-sort="duration_seconds">
+                        <th style="width: 7%">Proxy Size</th>
+                        <th style="width: 8%; cursor: pointer;" class="sortable" data-sort="duration_seconds">
                             Duration ${getSortIcon('duration_seconds')}
                         </th>
-                        <th style="width: 10%">Resolution</th>
-                        <th style="width: 14%">Status</th>
-                        <th style="width: 10%">Created</th>
-                        <th style="width: 10%; cursor: pointer;" class="sortable" data-sort="uploaded_at">
+                        <th style="width: 9%">Resolution</th>
+                        <th style="width: 13%">Status</th>
+                        <th style="width: 9%">Created</th>
+                        <th style="width: 9%; cursor: pointer;" class="sortable" data-sort="uploaded_at">
                             Uploaded ${getSortIcon('uploaded_at')}
                         </th>
-                        <th style="width: 12%">Actions</th>
+                        <th style="width: 11%">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -471,12 +484,20 @@ function renderFileRow(file) {
         statusBadges.push('<span class="badge bg-success" title="Proxy available"><i class="bi bi-cloud-check"></i> Proxy</span>');
     }
     if (file.completed_transcripts > 0) {
-        statusBadges.push(`<span class="badge bg-info" title="${file.completed_transcripts} completed transcripts"><i class="bi bi-mic"></i> ${file.completed_transcripts}</span>`);
+        statusBadges.push(
+            `<a href="#" class="badge bg-info text-decoration-none action-view-transcript" data-file-id="${file.id}" title="${file.completed_transcripts} completed transcripts">
+                <i class="bi bi-mic"></i> ${file.completed_transcripts}
+            </a>`
+        );
     }
     if (file.total_analyses > 0) {
         const badgeClass = file.running_analyses > 0 ? 'bg-warning' : 'bg-primary';
         const icon = file.running_analyses > 0 ? 'hourglass-split' : 'graph-up';
-        statusBadges.push(`<span class="badge ${badgeClass}" title="${file.completed_analyses}/${file.total_analyses} analyses"><i class="bi bi-${icon}"></i> ${file.completed_analyses}/${file.total_analyses}</span>`);
+        statusBadges.push(
+            `<a href="#" class="badge ${badgeClass} text-decoration-none action-view-analysis" data-file-id="${file.id}" title="${file.completed_analyses}/${file.total_analyses} analyses">
+                <i class="bi bi-${icon}"></i> ${file.completed_analyses}/${file.total_analyses}
+            </a>`
+        );
     }
 
     return `
@@ -498,6 +519,7 @@ function renderFileRow(file) {
                 </span>
             </td>
             <td>${file.size_display}</td>
+            <td>${file.proxy_size_display ? `<span class="text-success">${file.proxy_size_display}</span>` : '<span class="text-muted">—</span>'}</td>
             <td>${file.duration_display || 'N/A'}</td>
             <td>${file.resolution || 'N/A'}</td>
             <td>
@@ -635,6 +657,22 @@ function attachFileEventListeners() {
         });
     });
 
+    document.querySelectorAll('.action-view-transcript').forEach(link => {
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const fileId = parseInt(e.currentTarget.dataset.fileId);
+            openLatestTranscript(fileId);
+        });
+    });
+
+    document.querySelectorAll('.action-view-analysis').forEach(link => {
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            const fileId = parseInt(e.currentTarget.dataset.fileId);
+            openLatestNovaAnalysis(fileId);
+        });
+    });
+
     // Download
     document.querySelectorAll('.action-download').forEach(link => {
         link.addEventListener('click', (e) => {
@@ -748,11 +786,13 @@ function updateSummary(summary) {
     const summaryContainer = document.getElementById('filesSummary');
     const countEl = document.getElementById('summaryCount');
     const sizeEl = document.getElementById('summarySize');
+    const proxySizeEl = document.getElementById('summaryProxySize');
     const durationEl = document.getElementById('summaryDuration');
 
     if (summary && summary.total_count > 0) {
         countEl.textContent = summary.total_count.toLocaleString();
         sizeEl.textContent = summary.total_size_display || '0 B';
+        proxySizeEl.textContent = summary.total_proxy_size_display || '0 B';
         durationEl.textContent = summary.total_duration_display || 'N/A';
         summaryContainer.style.display = 'block';
     } else {
@@ -910,7 +950,7 @@ function renderFileDetails(data, container) {
                                     <td>${job.completed_at || 'N/A'}</td>
                                     <td>
                                         ${job.has_results ? `
-                                            <a href="/history" class="btn btn-sm btn-primary">
+                                            <a href="/dashboard/${job.job_id || job.id}" class="btn btn-sm btn-primary">
                                                 <i class="bi bi-graph-up"></i> View
                                             </a>
                                         ` : ''}
@@ -959,7 +999,7 @@ function renderFileDetails(data, container) {
                                     <td>${transcript.word_count ? transcript.word_count.toLocaleString() : 'N/A'}</td>
                                     <td>${transcript.created_at}</td>
                                     <td>
-                                        <a href="/transcription" class="btn btn-sm btn-info">
+                                        <a href="/transcription?transcript_id=${transcript.id}" class="btn btn-sm btn-info">
                                             <i class="bi bi-eye"></i> View
                                         </a>
                                     </td>
@@ -1010,6 +1050,75 @@ async function createProxy(fileId) {
     } catch (error) {
         console.error('Create proxy error:', error);
         showAlert(`Error: ${error.message}`, 'danger');
+    }
+}
+
+async function openLatestTranscript(fileId) {
+    try {
+        const response = await fetch(`/api/files/${fileId}`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to load file details');
+        }
+
+        const data = await response.json();
+        const transcripts = data.transcripts || [];
+        const completed = transcripts.filter(t => t.status === 'COMPLETED');
+        if (completed.length === 0) {
+            showAlert('No completed transcripts found for this file.', 'warning');
+            return;
+        }
+
+        completed.sort((a, b) => {
+            const aDate = new Date(a.completed_at || a.created_at || 0).getTime();
+            const bDate = new Date(b.completed_at || b.created_at || 0).getTime();
+            return bDate - aDate;
+        });
+
+        const transcriptId = completed[0].id;
+        window.location.href = `/transcription?transcript_id=${transcriptId}`;
+    } catch (error) {
+        console.error('Open transcript error:', error);
+        showAlert(`Failed to open transcript: ${error.message}`, 'danger');
+    }
+}
+
+async function openLatestNovaAnalysis(fileId) {
+    try {
+        const response = await fetch(`/api/files/${fileId}`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to load file details');
+        }
+
+        const data = await response.json();
+        const analysisJobs = data.analysis_jobs || [];
+        const novaJobs = analysisJobs.filter(job =>
+            job.analysis_type === 'nova' && (job.status === 'SUCCEEDED' || job.status === 'COMPLETED')
+        );
+
+        if (novaJobs.length === 0) {
+            showAlert('No completed Nova analyses found for this file.', 'warning');
+            return;
+        }
+
+        novaJobs.sort((a, b) => {
+            const aDate = new Date(a.completed_at || a.started_at || 0).getTime();
+            const bDate = new Date(b.completed_at || b.started_at || 0).getTime();
+            return bDate - aDate;
+        });
+
+        const job = novaJobs[0];
+        const jobId = job.job_id || job.id;
+        if (!jobId) {
+            showAlert('Nova analysis job id missing.', 'warning');
+            return;
+        }
+
+        window.location.href = `/dashboard/${jobId}`;
+    } catch (error) {
+        console.error('Open Nova analysis error:', error);
+        showAlert(`Failed to open Nova analysis: ${error.message}`, 'danger');
     }
 }
 
@@ -1086,7 +1195,7 @@ async function startNovaAnalysis(fileId) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                model: 'us.amazon.nova-lite-v1:0',
+                model: 'lite',
                 analysis_types: ['summary', 'chapters']
             })
         });
