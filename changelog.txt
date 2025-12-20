@@ -1,3 +1,26 @@
+2025-12-19 21:43:06 - Updated by Codex
+
+[Category: Feature, Bug Fix, UI]
+Add a batch options modal for File Management actions and ensure batch proxy runs within app context.
+
+[Purpose]
+Give batch actions a unified, configurable UI while preventing proxy batch failures caused by missing Flask context.
+
+[Impact]
+- Batch actions now launch a modal with full proxy/transcribe/Nova/Rekognition options
+- Nova batch options can load available models dynamically
+- Batch proxy creation runs inside Flask app context to avoid current_app errors
+
+[Technical Details]
+- app/templates/file_management.html: add batch options modal markup and per-action fields
+- app/static/js/file_management.js: modal-driven batch options flow with validation and Nova model loading
+- app/routes/file_management.py: run batch proxy worker inside app context thread
+
+[Files Changed]
+- app/templates/file_management.html: add batch options modal UI
+- app/static/js/file_management.js: replace prompt confirmations with modal-based batch options
+- app/routes/file_management.py: wrap batch proxy worker in app context
+
 2025-12-19 21:10:20 - Updated by Codex
 
 [Category: Feature, Bug Fix, API, Database, Dependencies, UI]

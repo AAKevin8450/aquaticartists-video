@@ -132,6 +132,8 @@ function initializeEventListeners() {
             if (modal) modal.hide();
         });
     }
+
+    initializeBatchOptionsModal();
 }
 
 function applyFilters() {
@@ -1398,6 +1400,11 @@ function getStatusBadgeClass(status) {
 let currentBatchJob = null;
 let batchProgressModal = null;
 let batchStatusInterval = null;
+let batchOptionsModal = null;
+let batchOptionsResolve = null;
+let batchOptionsResolved = false;
+let batchOptionsAction = null;
+let novaModelsLoaded = false;
 
 async function startBatchAction(actionType) {
     // Get confirmation and options based on action type
@@ -1450,40 +1457,199 @@ async function startBatchAction(actionType) {
 }
 
 async function getBatchOptions(actionType) {
+    return new Promise((resolve) => {
+        const modalEl = document.getElementById('batchOptionsModal');
+        if (!modalEl) {
+            resolve(null);
+            return;
+        }
+
+        if (!batchOptionsModal) {
+            batchOptionsModal = new bootstrap.Modal(modalEl);
+            modalEl.addEventListener('hidden.bs.modal', () => {
+                if (!batchOptionsResolved) {
+                    resolveBatchOptions(null);
+                }
+            });
+        }
+
+        batchOptionsAction = actionType;
+        batchOptionsResolve = resolve;
+        batchOptionsResolved = false;
+
+        const form = document.getElementById('batchOptionsForm');
+        if (form) {
+            form.reset();
+        }
+
+        const description = document.getElementById('batchOptionsDescription');
+        const descriptions = {
+            proxy: 'Generate 720p/15fps proxies for all eligible videos in the current view.',
+            transcribe: 'Configure Whisper transcription settings for the current file set.',
+            nova: 'Choose Nova model and analysis types for proxy-backed videos.',
+            rekognition: 'Select Rekognition analysis types and target files.'
+        };
+        if (description) {
+            description.textContent = descriptions[actionType] || 'Configure batch settings.';
+        }
+
+        const errorEl = document.getElementById('batchOptionsError');
+        if (errorEl) {
+            errorEl.classList.add('d-none');
+            errorEl.textContent = '';
+        }
+
+        document.querySelectorAll('.batch-options-group').forEach(group => {
+            group.style.display = group.dataset.action === actionType ? 'block' : 'none';
+        });
+
+        const confirmBtn = document.getElementById('batchOptionsConfirmBtn');
+        if (confirmBtn) {
+            const labels = {
+                proxy: 'Start Proxy Batch',
+                transcribe: 'Start Transcription Batch',
+                nova: 'Start Nova Batch',
+                rekognition: 'Start Rekognition Batch'
+            };
+            confirmBtn.textContent = labels[actionType] || 'Start Batch';
+        }
+
+        if (actionType === 'nova') {
+            loadNovaModels();
+        }
+
+        batchOptionsModal.show();
+    });
+}
+
+function initializeBatchOptionsModal() {
+    const modalEl = document.getElementById('batchOptionsModal');
+    if (!modalEl) return;
+
+    const confirmBtn = document.getElementById('batchOptionsConfirmBtn');
+    if (confirmBtn) {
+        confirmBtn.addEventListener('click', () => {
+            const options = buildBatchOptions(batchOptionsAction);
+            if (!options) {
+                return;
+            }
+            resolveBatchOptions(options);
+            if (batchOptionsModal) {
+                batchOptionsModal.hide();
+            }
+        });
+    }
+
+    const cancelBtn = document.getElementById('batchOptionsCancelBtn');
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+            resolveBatchOptions(null);
+        });
+    }
+}
+
+function resolveBatchOptions(value) {
+    if (batchOptionsResolved) return;
+    batchOptionsResolved = true;
+    if (batchOptionsResolve) {
+        batchOptionsResolve(value);
+    }
+    batchOptionsResolve = null;
+}
+
+function buildBatchOptions(actionType) {
+    const errorEl = document.getElementById('batchOptionsError');
+    if (errorEl) {
+        errorEl.classList.add('d-none');
+        errorEl.textContent = '';
+    }
+
     switch (actionType) {
         case 'proxy':
-            return confirm('Create proxy videos (720p/15fps) for all filtered files?') ? {} : null;
-
-        case 'transcribe':
-            const model = prompt('Enter Whisper model (tiny, base, small, medium, large-v2, large-v3):', 'medium');
-            if (!model) return null;
-
-            const language = prompt('Enter language code (optional, e.g., "en" for English):', '');
+            return {};
+        case 'transcribe': {
+            const model = document.getElementById('batchTranscribeModel')?.value || 'medium';
+            const language = document.getElementById('batchTranscribeLanguage')?.value.trim();
+            const force = !!document.getElementById('batchTranscribeForce')?.checked;
             return {
                 model_name: model,
-                language: language || undefined
+                language: language || undefined,
+                force: force
             };
-
-        case 'nova':
-            if (!confirm('Start Nova analysis (summary + chapters) for all filtered files with proxies?')) {
+        }
+        case 'nova': {
+            const model = document.getElementById('batchNovaModel')?.value || 'lite';
+            const analysisTypes = Array.from(document.querySelectorAll('.batch-nova-type:checked'))
+                .map(input => input.value);
+            if (analysisTypes.length === 0) {
+                showBatchOptionsError('Select at least one Nova analysis type.');
                 return null;
             }
-            return {
-                model: 'us.amazon.nova-lite-v1:0',
-                analysis_types: ['summary', 'chapters']
+            const options = {
+                summary_depth: document.getElementById('batchNovaSummaryDepth')?.value || 'standard',
+                language: document.getElementById('batchNovaLanguage')?.value || 'auto'
             };
-
-        case 'rekognition':
-            if (!confirm('Start Rekognition label detection for all filtered files?')) {
+            return {
+                model: model,
+                analysis_types: analysisTypes,
+                options: options
+            };
+        }
+        case 'rekognition': {
+            const analysisTypes = Array.from(document.querySelectorAll('.batch-rekognition-type:checked'))
+                .map(input => input.value);
+            if (analysisTypes.length === 0) {
+                showBatchOptionsError('Select at least one Rekognition analysis type.');
                 return null;
             }
+            const useProxy = !!document.getElementById('batchRekognitionUseProxy')?.checked;
             return {
-                analysis_types: ['label_detection'],
-                use_proxy: true
+                analysis_types: analysisTypes,
+                use_proxy: useProxy
             };
-
+        }
         default:
             return null;
+    }
+}
+
+function showBatchOptionsError(message) {
+    const errorEl = document.getElementById('batchOptionsError');
+    if (!errorEl) return;
+    errorEl.textContent = message;
+    errorEl.classList.remove('d-none');
+}
+
+async function loadNovaModels() {
+    if (novaModelsLoaded) return;
+    const modelSelect = document.getElementById('batchNovaModel');
+    if (!modelSelect) return;
+
+    try {
+        const response = await fetch('/api/nova/models');
+        if (!response.ok) {
+            throw new Error('Failed to load Nova models');
+        }
+        const data = await response.json();
+        if (!data.models || data.models.length === 0) {
+            return;
+        }
+
+        modelSelect.innerHTML = '';
+        data.models.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model.id;
+            option.textContent = model.name;
+            modelSelect.appendChild(option);
+        });
+
+        const defaultOption = modelSelect.querySelector('option[value="lite"]');
+        if (defaultOption) {
+            defaultOption.selected = true;
+        }
+        novaModelsLoaded = true;
+    } catch (error) {
+        console.warn('Failed to load Nova models:', error);
     }
 }
 

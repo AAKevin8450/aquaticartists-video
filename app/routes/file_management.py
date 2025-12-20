@@ -1199,7 +1199,8 @@ def batch_create_proxy():
         current_app.logger.info(f"Created batch job {job_id} for {len(eligible_file_ids)} files")
 
         # Start background thread
-        thread = threading.Thread(target=_run_batch_proxy, args=(job,))
+        app = current_app._get_current_object()
+        thread = threading.Thread(target=_run_batch_proxy, args=(app, job))
         thread.daemon = True
         thread.start()
 
@@ -1540,71 +1541,72 @@ def cancel_batch_job(job_id: str):
 # BATCH PROCESSING WORKERS
 # ============================================================================
 
-def _run_batch_proxy(job: BatchJob):
+def _run_batch_proxy(app, job: BatchJob):
     """Background worker for batch proxy creation."""
-    from app.routes.upload import create_proxy_internal
-    import traceback
-    import logging
+    with app.app_context():
+        from app.routes.upload import create_proxy_internal
+        import traceback
+        import logging
 
-    logger = logging.getLogger('app')
-    logger.info(f"Batch proxy worker started for job {job.job_id} with {len(job.file_ids)} files")
-    print(f"[BATCH PROXY] Worker started for job {job.job_id} with {len(job.file_ids)} files", flush=True)
+        logger = logging.getLogger('app')
+        logger.info(f"Batch proxy worker started for job {job.job_id} with {len(job.file_ids)} files")
+        print(f"[BATCH PROXY] Worker started for job {job.job_id} with {len(job.file_ids)} files", flush=True)
 
-    for file_id in job.file_ids:
-        if job.status == 'CANCELLED':
-            logger.info(f"Batch job {job.job_id} was cancelled")
-            print(f"[BATCH PROXY] Job {job.job_id} was cancelled", flush=True)
-            break
+        for file_id in job.file_ids:
+            if job.status == 'CANCELLED':
+                logger.info(f"Batch job {job.job_id} was cancelled")
+                print(f"[BATCH PROXY] Job {job.job_id} was cancelled", flush=True)
+                break
 
-        try:
-            # Get file info
-            db = get_db()
-            file = db.get_file(file_id)
-            if not file:
-                raise Exception(f'File {file_id} not found')
+            try:
+                # Get file info
+                db = get_db()
+                file = db.get_file(file_id)
+                if not file:
+                    raise Exception(f'File {file_id} not found')
 
-            job.current_file = file['filename']
-            logger.info(f"Processing file {file_id}: {file['filename']}")
-            print(f"[BATCH PROXY] Processing file {file_id}: {file['filename']}", flush=True)
+                job.current_file = file['filename']
+                logger.info(f"Processing file {file_id}: {file['filename']}")
+                print(f"[BATCH PROXY] Processing file {file_id}: {file['filename']}", flush=True)
 
-            # Create proxy (local only, no S3 upload)
-            result = create_proxy_internal(file_id, upload_to_s3=False)
+                # Create proxy (local only, no S3 upload)
+                result = create_proxy_internal(file_id, upload_to_s3=False)
 
-            job.completed_files += 1
-            job.results.append({
-                'file_id': file_id,
-                'filename': file['filename'],
-                'success': True,
-                'result': result
-            })
-            logger.info(f"Successfully created proxy for file {file_id}: {file['filename']}")
-            print(f"[BATCH PROXY] Successfully created proxy for file {file_id}: {file['filename']}", flush=True)
+                job.completed_files += 1
+                job.results.append({
+                    'file_id': file_id,
+                    'filename': file['filename'],
+                    'success': True,
+                    'result': result
+                })
+                logger.info(f"Successfully created proxy for file {file_id}: {file['filename']}")
+                print(f"[BATCH PROXY] Successfully created proxy for file {file_id}: {file['filename']}", flush=True)
 
-        except Exception as e:
-            job.failed_files += 1
-            error_msg = str(e)
-            tb = traceback.format_exc()
-            job.errors.append({
-                'file_id': file_id,
-                'filename': file.get('filename', f'File {file_id}') if file else f'File {file_id}',
-                'error': error_msg
-            })
-            logger.error(f"Batch proxy error for file {file_id}: {e}", exc_info=True)
-            print(f"[BATCH PROXY ERROR] File {file_id}: {e}", flush=True)
-            print(f"[BATCH PROXY ERROR] Full traceback:\n{tb}", flush=True)
+            except Exception as e:
+                job.failed_files += 1
+                error_msg = str(e)
+                tb = traceback.format_exc()
+                job.errors.append({
+                    'file_id': file_id,
+                    'filename': file.get('filename', f'File {file_id}') if file else f'File {file_id}',
+                    'error': error_msg
+                })
+                logger.error(f"Batch proxy error for file {file_id}: {e}", exc_info=True)
+                print(f"[BATCH PROXY ERROR] File {file_id}: {e}", flush=True)
+                print(f"[BATCH PROXY ERROR] Full traceback:\n{tb}", flush=True)
 
-    # Mark job as complete
-    job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
-    job.end_time = time.time()
-    job.current_file = None
-    logger.info(
-        f"Batch proxy job {job.job_id} completed: {job.completed_files} succeeded, "
-        f"{job.failed_files} failed, status: {job.status}"
-    )
-    print(
-        f"[BATCH PROXY] Job {job.job_id} completed: {job.completed_files} succeeded, "
-        f"{job.failed_files} failed, status: {job.status}", flush=True
-    )
+        # Mark job as complete
+        job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+        job.end_time = time.time()
+        job.current_file = None
+        logger.info(
+            f"Batch proxy job {job.job_id} completed: {job.completed_files} succeeded, "
+            f"{job.failed_files} failed, status: {job.status}"
+        )
+        print(
+            f"[BATCH PROXY] Job {job.job_id} completed: {job.completed_files} succeeded, "
+            f"{job.failed_files} failed, status: {job.status}", flush=True
+        )
 
 
 def _run_batch_transcribe(app, job: BatchJob):
