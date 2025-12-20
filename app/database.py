@@ -3,6 +3,8 @@ Database management for SQLite with schema initialization and helper functions.
 """
 import sqlite3
 import json
+import os
+import struct
 from pathlib import Path
 from datetime import datetime
 from contextlib import contextmanager
@@ -22,6 +24,89 @@ class Database:
         """Ensure database directory exists."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
+    def _get_embedding_dimension(self) -> int:
+        """Get configured embedding dimension."""
+        try:
+            return int(os.getenv('NOVA_EMBED_DIMENSION', '1024'))
+        except ValueError:
+            return 1024
+
+    def _load_vector_extension(self, conn: sqlite3.Connection) -> bool:
+        """Attempt to load the SQLite vector extension for this connection."""
+        try:
+            conn.enable_load_extension(True)
+        except Exception:
+            pass
+
+        loaded = False
+        try:
+            import sqlite_vec  # type: ignore
+            sqlite_vec.load(conn)
+            loaded = True
+        except Exception:
+            loaded = False
+
+        if not loaded:
+            vec_path = os.getenv('SQLITE_VEC_PATH')
+            try:
+                if vec_path:
+                    conn.load_extension(vec_path)
+                    loaded = True
+            except Exception:
+                loaded = False
+
+        if not loaded:
+            try:
+                conn.load_extension('vec0')
+                loaded = True
+            except Exception:
+                loaded = False
+
+        try:
+            conn.enable_load_extension(False)
+        except Exception:
+            pass
+
+        return loaded
+
+    def _ensure_embedding_tables(self, conn: sqlite3.Connection):
+        """Ensure embedding tables exist (requires vector extension for vec0)."""
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS nova_embedding_metadata (
+                rowid INTEGER PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                source_id INTEGER NOT NULL,
+                file_id INTEGER,
+                model_name TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_nova_embedding_source
+            ON nova_embedding_metadata(source_type, source_id)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_nova_embedding_file
+            ON nova_embedding_metadata(file_id)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_nova_embedding_model
+            ON nova_embedding_metadata(model_name)
+        ''')
+        cursor.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_nova_embedding_unique
+            ON nova_embedding_metadata(source_type, source_id, model_name, content_hash)
+        ''')
+
+        if self._load_vector_extension(conn):
+            dimension = self._get_embedding_dimension()
+            cursor.execute(f'''
+                CREATE VIRTUAL TABLE IF NOT EXISTS nova_embeddings
+                USING vec0(embedding float[{dimension}])
+            ''')
+
     @contextmanager
     def get_connection(self):
         """Context manager for database connections."""
@@ -29,6 +114,10 @@ class Database:
         conn.row_factory = sqlite3.Row  # Enable dict-like access to rows
         # Enable WAL mode for better concurrent access
         conn.execute('PRAGMA journal_mode=WAL')
+        try:
+            self._load_vector_extension(conn)
+        except Exception:
+            pass
         try:
             yield conn
             conn.commit()
@@ -214,6 +303,9 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_transcripts_file_name
                 ON transcripts(file_name)
             ''')
+
+            # Embedding tables (requires vector extension for vec0 virtual table)
+            self._ensure_embedding_tables(conn)
 
     def _parse_json_field(self, value: Any, default: Any = None, max_depth: int = 1) -> Any:
         """Parse a JSON field safely, returning default on errors."""
@@ -876,6 +968,21 @@ class Database:
                 return job
             return None
 
+    def get_analysis_job(self, analysis_job_id: int) -> Optional[Dict[str, Any]]:
+        """Get analysis job by database ID."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM analysis_jobs WHERE id = ?', (analysis_job_id,))
+            row = cursor.fetchone()
+            if row:
+                job = dict(row)
+                if job.get('parameters'):
+                    job['parameters'] = self._parse_json_field(job['parameters'], max_depth=2)
+                if job.get('results'):
+                    job['results'] = self._parse_json_field(job['results'], max_depth=2)
+                return job
+            return None
+
     def update_job_status(self, job_id: str, status: str, results: Optional[Dict] = None,
                          error_message: Optional[str] = None):
         """Update job status and results."""
@@ -1017,6 +1124,23 @@ class Database:
             if row:
                 transcript = dict(row)
                 # Parse JSON fields
+                for field in ['segments', 'word_timestamps']:
+                    if transcript.get(field):
+                        transcript[field] = json.loads(transcript[field])
+                return transcript
+            return None
+
+    def get_transcript_by_path_and_model(self, file_path: str, model_name: str) -> Optional[Dict[str, Any]]:
+        """Get transcript by file path and model name."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM transcripts
+                WHERE file_path = ? AND model_name = ?
+            ''', (file_path, model_name))
+            row = cursor.fetchone()
+            if row:
+                transcript = dict(row)
                 for field in ['segments', 'word_timestamps']:
                     if transcript.get(field):
                         transcript[field] = json.loads(transcript[field])
@@ -1203,6 +1327,63 @@ class Database:
             cursor = conn.cursor()
             cursor.execute('SELECT DISTINCT language FROM transcripts WHERE language IS NOT NULL ORDER BY language')
             return [row[0] for row in cursor.fetchall()]
+
+    # ============================================================================
+    # EMBEDDING OPERATIONS
+    # ============================================================================
+
+    def _serialize_embedding(self, vector: List[float]) -> bytes:
+        """Serialize embedding vector to float32 bytes for sqlite-vec."""
+        return struct.pack(f'{len(vector)}f', *vector)
+
+    def _validate_embedding_dimension(self, vector: List[float]):
+        """Validate embedding length matches configured dimension."""
+        expected = self._get_embedding_dimension()
+        if len(vector) != expected:
+            raise ValueError(f"Embedding dimension mismatch: expected {expected}, got {len(vector)}")
+
+    def get_embedding_by_hash(self, source_type: str, source_id: int,
+                              model_name: str, content_hash: str) -> Optional[Dict[str, Any]]:
+        """Get embedding metadata by content hash."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM nova_embedding_metadata
+                WHERE source_type = ? AND source_id = ? AND model_name = ? AND content_hash = ?
+            ''', (source_type, source_id, model_name, content_hash))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def create_nova_embedding(self, embedding_vector: List[float], source_type: str,
+                              source_id: int, model_name: str, content_hash: str,
+                              file_id: Optional[int] = None) -> int:
+        """Store embedding vector and metadata in sqlite-vec tables."""
+        self._validate_embedding_dimension(embedding_vector)
+
+        with self.get_connection() as conn:
+            if not self._load_vector_extension(conn):
+                raise RuntimeError("SQLite vector extension not available. Set SQLITE_VEC_PATH or install sqlite-vec.")
+
+            self._ensure_embedding_tables(conn)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT rowid FROM nova_embedding_metadata
+                WHERE source_type = ? AND source_id = ? AND model_name = ? AND content_hash = ?
+            ''', (source_type, source_id, model_name, content_hash))
+            existing = cursor.fetchone()
+            if existing:
+                return existing['rowid']
+
+            vector_blob = self._serialize_embedding(embedding_vector)
+            cursor.execute('INSERT INTO nova_embeddings(embedding) VALUES (?)', (vector_blob,))
+            rowid = cursor.lastrowid
+            cursor.execute('''
+                INSERT INTO nova_embedding_metadata (
+                    rowid, source_type, source_id, file_id, model_name, content_hash, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (rowid, source_type, source_id, file_id, model_name, content_hash, datetime.now().isoformat()))
+            return rowid
 
     # ============================================================================
     # NOVA JOB OPERATIONS
@@ -1417,6 +1598,7 @@ class Database:
                     f.size_bytes,
                     f.content_type,
                     f.uploaded_at,
+                    f.metadata,
                     f.local_path,
                     f.resolution_width,
                     f.resolution_height,
@@ -1510,6 +1692,8 @@ class Database:
             files = []
             for row in cursor.fetchall():
                 file = dict(row)
+                if 'metadata' in file:
+                    file['metadata'] = self._parse_json_field(file['metadata'], default={})
                 files.append(file)
             return files
 

@@ -25,10 +25,10 @@ bp = Blueprint('upload', __name__, url_prefix='/api/upload')
 DEFAULT_PROXY_SPEC = '720p15'
 
 
-def _build_proxy_filename(source_filename: str, proxy_spec: str) -> str:
+def _build_proxy_filename(source_filename: str, source_file_id: int, proxy_spec: str) -> str:
     name_parts = Path(source_filename)
     suffix = name_parts.suffix or '.mp4'
-    return f"{name_parts.stem}_{proxy_spec}{suffix}"
+    return f"{name_parts.stem}_{source_file_id}_{proxy_spec}{suffix}"
 
 
 def _format_duration_seconds(duration_seconds):
@@ -239,7 +239,7 @@ def upload_file_direct():
             # Create proxy video in proxy_video folder
             proxy_video_dir = Path('proxy_video')
             proxy_video_dir.mkdir(parents=True, exist_ok=True)
-            proxy_filename = _build_proxy_filename(safe_filename, proxy_spec)
+            proxy_filename = _build_proxy_filename(safe_filename, source_file_id, proxy_spec)
             proxy_local_path = proxy_video_dir / proxy_filename
 
             try:
@@ -410,7 +410,7 @@ def create_proxy_internal(file_id: int, force: bool = False, upload_to_s3: bool 
     # Generate proxy filename
     proxy_spec = DEFAULT_PROXY_SPEC
     source_filename = file['filename']
-    proxy_filename = _build_proxy_filename(source_filename, proxy_spec)
+    proxy_filename = _build_proxy_filename(source_filename, file_id, proxy_spec)
 
     # Determine where to save proxy
     if upload_to_s3:

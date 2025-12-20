@@ -4,11 +4,14 @@ Provides API endpoints for intelligent video comprehension using Amazon Nova mod
 """
 from flask import Blueprint, request, jsonify, current_app
 from app.services.nova_service import NovaVideoService, NovaError
+from app.services.nova_embeddings_service import NovaEmbeddingsService, NovaEmbeddingsError
 from app.database import get_db
 import json
 import logging
 from datetime import datetime
 import traceback
+import hashlib
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,17 @@ def get_nova_service():
         region=current_app.config['AWS_REGION'],
         aws_access_key=current_app.config.get('AWS_ACCESS_KEY_ID'),
         aws_secret_key=current_app.config.get('AWS_SECRET_ACCESS_KEY')
+    )
+
+
+def get_nova_embeddings_service():
+    """Get configured Nova embeddings service instance."""
+    return NovaEmbeddingsService(
+        region=current_app.config['AWS_REGION'],
+        model_id=current_app.config.get('NOVA_EMBED_MODEL_ID', 'amazon.nova-embed-v1:0'),
+        aws_access_key=current_app.config.get('AWS_ACCESS_KEY_ID'),
+        aws_secret_key=current_app.config.get('AWS_SECRET_ACCESS_KEY'),
+        request_format=current_app.config.get('NOVA_EMBED_REQUEST_FORMAT', 'input')
     )
 
 
@@ -45,6 +59,73 @@ def _ensure_json_dict(value):
     if isinstance(value, str):
         return json.loads(value)
     return dict(value)
+
+
+def _normalize_text(value: Any) -> str:
+    """Normalize text for embedding input."""
+    if value is None:
+        return ''
+    text = str(value)
+    return ' '.join(text.split())
+
+
+def _build_analysis_text(job: Dict[str, Any]) -> str:
+    """Build a plain text representation of Nova analysis results."""
+    parts: List[str] = []
+
+    summary = job.get('summary_result')
+    if summary:
+        summary_data = summary if isinstance(summary, dict) else _ensure_json_dict(summary)
+        summary_text = summary_data.get('text')
+        if summary_text:
+            parts.append(f"Summary: {_normalize_text(summary_text)}")
+
+    chapters = job.get('chapters_result')
+    if chapters:
+        if isinstance(chapters, list):
+            chapter_list = chapters
+        else:
+            chapters_data = chapters if isinstance(chapters, dict) else _ensure_json_dict(chapters)
+            chapter_list = chapters_data.get('chapters', [])
+        if isinstance(chapter_list, list) and chapter_list:
+            chapter_lines = []
+            for chapter in chapter_list:
+                if not isinstance(chapter, dict):
+                    continue
+                title = _normalize_text(chapter.get('title') or chapter.get('name') or '')
+                summary_text = _normalize_text(chapter.get('summary') or '')
+                start_time = _normalize_text(chapter.get('start_time') or '')
+                end_time = _normalize_text(chapter.get('end_time') or '')
+                line = " | ".join([v for v in [title, summary_text, start_time, end_time] if v])
+                if line:
+                    chapter_lines.append(line)
+            if chapter_lines:
+                parts.append("Chapters: " + " || ".join(chapter_lines))
+
+    elements = job.get('elements_result')
+    if elements:
+        elements_data = elements if isinstance(elements, dict) else _ensure_json_dict(elements)
+        equipment = elements_data.get('equipment', [])
+        topics = elements_data.get('topics_discussed', [])
+        speakers = elements_data.get('speakers', [])
+
+        if equipment:
+            names = [_normalize_text(e.get('name')) for e in equipment if isinstance(e, dict)]
+            names = [n for n in names if n]
+            if names:
+                parts.append("Equipment: " + ", ".join(names))
+        if topics:
+            names = [_normalize_text(t.get('topic')) for t in topics if isinstance(t, dict)]
+            names = [n for n in names if n]
+            if names:
+                parts.append("Topics: " + ", ".join(names))
+        if speakers:
+            names = [_normalize_text(s.get('role') or s.get('speaker_id')) for s in speakers if isinstance(s, dict)]
+            names = [n for n in names if n]
+            if names:
+                parts.append("Speakers: " + ", ".join(names))
+
+    return "\n\n".join([p for p in parts if p])
 
 
 @bp.route('/analyze', methods=['POST'])
@@ -659,4 +740,118 @@ def estimate_analysis_cost():
 
     except Exception as e:
         logger.error(f"Error estimating cost: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/embeddings/generate', methods=['POST'])
+def generate_embeddings():
+    """
+    Generate Nova embeddings for analysis results and/or a transcript.
+
+    Expected JSON:
+        {
+            "nova_job_id": 123,          # required if embed_analysis is true
+            "transcript_id": 456,        # required if embed_transcript is true
+            "embed_analysis": true,
+            "embed_transcript": true
+        }
+    """
+    try:
+        data = request.get_json() or {}
+        nova_job_id = data.get('nova_job_id')
+        transcript_id = data.get('transcript_id')
+        embed_analysis = bool(data.get('embed_analysis', True))
+        embed_transcript = bool(data.get('embed_transcript', True))
+
+        if not embed_analysis and not embed_transcript:
+            return jsonify({'error': 'At least one of embed_analysis or embed_transcript must be true.'}), 400
+
+        db = get_db()
+        analysis_text = None
+        transcript_text = None
+        file_id = None
+
+        if embed_analysis:
+            if not nova_job_id:
+                return jsonify({'error': 'nova_job_id is required when embed_analysis is true.'}), 400
+            job = db.get_nova_job(nova_job_id)
+            if not job:
+                return jsonify({'error': 'Nova job not found.'}), 404
+            if job.get('status') != 'COMPLETED':
+                return jsonify({'error': 'Nova job must be COMPLETED before embedding.'}), 400
+            analysis_text = _build_analysis_text(job)
+            if not analysis_text:
+                return jsonify({'error': 'Nova job has no analysis text to embed.'}), 400
+
+            analysis_job = db.get_analysis_job(job['analysis_job_id'])
+            if analysis_job:
+                file_id = analysis_job.get('file_id')
+
+        if embed_transcript:
+            if not transcript_id:
+                return jsonify({'error': 'transcript_id is required when embed_transcript is true.'}), 400
+            transcript = db.get_transcript(transcript_id)
+            if not transcript:
+                return jsonify({'error': 'Transcript not found.'}), 404
+            if transcript.get('status') != 'COMPLETED':
+                return jsonify({'error': 'Transcript must be COMPLETED before embedding.'}), 400
+            transcript_text = _normalize_text(transcript.get('transcript_text'))
+            if not transcript_text:
+                return jsonify({'error': 'Transcript text is empty.'}), 400
+
+            if file_id is None:
+                file_path = transcript.get('file_path')
+                if file_path:
+                    file_record = db.get_file_by_local_path(file_path)
+                    if file_record:
+                        file_id = file_record.get('id')
+
+        embeddings_service = get_nova_embeddings_service()
+        model_name = embeddings_service.model_id
+        results: Dict[str, Any] = {
+            'model': model_name,
+            'embeddings': {}
+        }
+
+        if embed_analysis and analysis_text:
+            analysis_hash = hashlib.sha256(
+                f"nova_analysis:{nova_job_id}:{model_name}:{analysis_text}".encode('utf-8')
+            ).hexdigest()
+            vector = embeddings_service.embed_text(analysis_text)
+            embedding_id = db.create_nova_embedding(
+                embedding_vector=vector,
+                source_type='nova_analysis',
+                source_id=nova_job_id,
+                model_name=model_name,
+                content_hash=analysis_hash,
+                file_id=file_id
+            )
+            results['embeddings']['analysis_embedding_id'] = embedding_id
+
+        if embed_transcript and transcript_text:
+            transcript_hash = hashlib.sha256(
+                f"transcript:{transcript_id}:{model_name}:{transcript_text}".encode('utf-8')
+            ).hexdigest()
+            vector = embeddings_service.embed_text(transcript_text)
+            embedding_id = db.create_nova_embedding(
+                embedding_vector=vector,
+                source_type='transcript',
+                source_id=transcript_id,
+                model_name=model_name,
+                content_hash=transcript_hash,
+                file_id=file_id
+            )
+            results['embeddings']['transcript_embedding_id'] = embedding_id
+
+        return jsonify(results), 201
+
+    except NovaEmbeddingsError as e:
+        logger.error(f"Embedding error: {e}")
+        return jsonify({'error': str(e)}), 500
+    except RuntimeError as e:
+        logger.error(f"Embedding storage error: {e}")
+        return jsonify({'error': str(e)}), 500
+    except Exception as e:
+        logger.error(f"Error generating embeddings: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500

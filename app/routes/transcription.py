@@ -4,12 +4,13 @@ Routes for local video transcription.
 from flask import Blueprint, request, jsonify, render_template, current_app, send_file
 from app.database import get_db
 from app.services.transcription_service import create_transcription_service, TranscriptionError
+from app.services.nova_transcription_service import create_nova_transcription_service
 from app.models import TranscriptStatus
 import os
 import threading
 import uuid
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import io
 import json
 
@@ -18,6 +19,9 @@ bp = Blueprint('transcription', __name__, url_prefix='/transcription')
 # Global transcription service instance (lazy loaded)
 _transcription_service = None
 _service_lock = threading.Lock()
+_nova_transcription_service = None
+_nova_service_lock = threading.Lock()
+_batch_job_providers: Dict[str, str] = {}
 
 
 def get_transcription_service():
@@ -32,6 +36,48 @@ def get_transcription_service():
                 compute_type = current_app.config.get('WHISPER_COMPUTE_TYPE', 'default')
                 _transcription_service = create_transcription_service(model_size, device, compute_type)
     return _transcription_service
+
+
+def get_nova_transcription_service():
+    """Get or create Nova Sonic transcription service instance."""
+    global _nova_transcription_service
+    if _nova_transcription_service is None:
+        with _nova_service_lock:
+            if _nova_transcription_service is None:
+                model_id = current_app.config.get('NOVA_SONIC_MODEL_ID')
+                runtime_model_id = current_app.config.get('NOVA_SONIC_RUNTIME_ID', model_id)
+                max_tokens = current_app.config.get('NOVA_SONIC_MAX_TOKENS', 8192)
+                _nova_transcription_service = create_nova_transcription_service(
+                    bucket_name=current_app.config.get('S3_BUCKET_NAME'),
+                    region=current_app.config.get('AWS_REGION'),
+                    model_id=model_id,
+                    runtime_model_id=runtime_model_id,
+                    aws_access_key=current_app.config.get('AWS_ACCESS_KEY_ID'),
+                    aws_secret_key=current_app.config.get('AWS_SECRET_ACCESS_KEY'),
+                    max_tokens=max_tokens
+                )
+    return _nova_transcription_service
+
+
+def _normalize_provider(provider: str) -> str:
+    if not provider:
+        return 'whisper'
+    provider = provider.lower()
+    if provider in ('nova', 'sonic', 'nova_sonic'):
+        return 'nova_sonic'
+    return provider
+
+
+def _get_model_name(provider: str, model_size: Optional[str] = None) -> str:
+    if provider == 'nova_sonic':
+        return 'nova-2-sonic'
+    return model_size or get_transcription_service().model_size
+
+
+def _validate_provider(provider: str) -> Optional[str]:
+    if provider not in ('whisper', 'nova_sonic'):
+        return f"Invalid provider: {provider}. Valid options: whisper, nova_sonic."
+    return None
 
 
 @bp.route('/')
@@ -161,6 +207,11 @@ def scan_directory():
         directory_path = data.get('directory_path')
         recursive = data.get('recursive', True)
         extensions = data.get('extensions')
+        provider = _normalize_provider(data.get('provider', 'whisper'))
+        provider_error = _validate_provider(provider)
+        if provider_error:
+            return jsonify({'error': provider_error}), 400
+        model_size = data.get('model_size')
 
         if not directory_path:
             return jsonify({'error': 'directory_path is required'}), 400
@@ -170,6 +221,8 @@ def scan_directory():
 
         # Scan directory
         service = get_transcription_service()
+        if provider != 'nova_sonic' and model_size:
+            service.set_model_size(model_size)
         video_files = service.scan_directory(directory_path, extensions, recursive)
 
         # Check which files are already transcribed
@@ -180,8 +233,7 @@ def scan_directory():
         already_transcribed_count = 0
 
         # Get current model for checking existing transcripts
-        service = get_transcription_service()
-        current_model = service.model_size
+        current_model = _get_model_name(provider, model_size)
 
         for file_path in video_files:
             file_stat = os.stat(file_path)
@@ -242,6 +294,11 @@ def transcribe_single():
         file_path = data.get('file_path')
         language = data.get('language')
         force = data.get('force', False)
+        provider = _normalize_provider(data.get('provider', 'whisper'))
+        provider_error = _validate_provider(provider)
+        if provider_error:
+            return jsonify({'error': provider_error}), 400
+        model_size = data.get('model_size')
 
         if not file_path:
             return jsonify({'error': 'file_path is required'}), 400
@@ -250,15 +307,21 @@ def transcribe_single():
             return jsonify({'error': f'File not found: {file_path}'}), 404
 
         db = get_db()
-        service = get_transcription_service()
+        if provider == 'nova_sonic':
+            service = get_nova_transcription_service()
+        else:
+            service = get_transcription_service()
+            if model_size:
+                service.set_model_size(model_size)
 
         # Get file metadata (instant - no file reading)
         file_size, file_mtime = service.get_file_metadata(file_path)
         file_name = os.path.basename(file_path)
 
         # Check if already transcribed with current model
+        model_name = _get_model_name(provider, model_size)
         existing_transcript = db.get_transcript_by_file_info(
-            file_path, file_size, file_mtime, service.model_size
+            file_path, file_size, file_mtime, model_name
         )
         if existing_transcript and existing_transcript['status'] == TranscriptStatus.COMPLETED and not force:
             return jsonify({
@@ -278,7 +341,7 @@ def transcribe_single():
                 file_name=file_name,
                 file_size=file_size,
                 modified_time=file_mtime,
-                model_name=service.model_size
+                model_name=model_name
             )
 
         try:
@@ -301,9 +364,9 @@ def transcribe_single():
                 character_count=result.get('character_count'),
                 word_count=result.get('word_count'),
                 duration_seconds=result.get('duration_seconds'),
-                segments=result['segments'],
-                word_timestamps=result['word_timestamps'],
-                language=result['language'],
+                segments=result.get('segments'),
+                word_timestamps=result.get('word_timestamps'),
+                language=result.get('language'),
                 confidence_score=result['confidence_score'],
                 processing_time=result['processing_time_seconds'],
                 resolution_width=metadata.get('resolution_width'),
@@ -365,7 +428,11 @@ def start_batch():
         file_paths = data.get('file_paths', [])
         language = data.get('language')
         force = data.get('force', False)
-        model_size = data.get('model_size')  # Get model size from request
+        model_size = data.get('model_size')  # Whisper model size
+        provider = _normalize_provider(data.get('provider', 'whisper'))
+        provider_error = _validate_provider(provider)
+        if provider_error:
+            return jsonify({'error': provider_error}), 400
 
         if not file_paths:
             return jsonify({'error': 'file_paths is required'}), 400
@@ -374,7 +441,12 @@ def start_batch():
         job_id = str(uuid.uuid4())
 
         # Start batch transcription in background thread
-        service = get_transcription_service()
+        if provider == 'nova_sonic':
+            service = get_nova_transcription_service()
+        else:
+            service = get_transcription_service()
+            if model_size:
+                service.set_model_size(model_size)
 
         # Get app reference for background thread
         app = current_app._get_current_object()
@@ -394,7 +466,8 @@ def start_batch():
                 print(f"[DB_CALLBACK] Got file metadata: size={file_size}, mtime={file_mtime}")
 
                 # Check if already exists with current model
-                existing = db.get_transcript_by_file_info(file_path, file_size, file_mtime, service.model_size)
+                model_name = _get_model_name(provider, model_size)
+                existing = db.get_transcript_by_file_info(file_path, file_size, file_mtime, model_name)
                 print(f"[DB_CALLBACK] Checked existing: {existing is not None}")
 
                 if existing and not force:
@@ -410,7 +483,7 @@ def start_batch():
                             file_name=file_name,
                             file_size=file_size,
                             modified_time=file_mtime,
-                            model_name=service.model_size
+                            model_name=model_name
                         )
                         print(f"[DB_CALLBACK] Created new transcript ID: {transcript_id}")
 
@@ -431,10 +504,10 @@ def start_batch():
                         character_count=result.get('character_count'),
                         word_count=result.get('word_count'),
                         duration_seconds=result.get('duration_seconds'),
-                        segments=result['segments'],
-                        word_timestamps=result['word_timestamps'],
-                        language=result['language'],
-                        confidence_score=result['confidence_score'],
+                        segments=result.get('segments'),
+                        word_timestamps=result.get('word_timestamps'),
+                        language=result.get('language'),
+                        confidence_score=result.get('confidence_score'),
                         processing_time=result['processing_time_seconds'],
                         resolution_width=metadata.get('resolution_width'),
                         resolution_height=metadata.get('resolution_height'),
@@ -455,20 +528,31 @@ def start_batch():
             """Run batch transcription in background."""
             with app.app_context():
                 try:
-                    service.batch_transcribe(
-                        file_paths=file_paths,
-                        job_id=job_id,
-                        db_callback=db_callback,
-                        force=force,
-                        model_size=model_size,
-                        language=language
-                    )
+                    if provider == 'nova_sonic':
+                        service.batch_transcribe(
+                            file_paths=file_paths,
+                            job_id=job_id,
+                            db_callback=db_callback,
+                            force=force,
+                            language=language
+                        )
+                    else:
+                        service.batch_transcribe(
+                            file_paths=file_paths,
+                            job_id=job_id,
+                            db_callback=db_callback,
+                            force=force,
+                            model_size=model_size,
+                            language=language
+                        )
                 except Exception as e:
                     app.logger.error(f"Batch transcription error: {e}")
 
         # Start background thread
         thread = threading.Thread(target=run_batch, daemon=True)
         thread.start()
+
+        _batch_job_providers[job_id] = provider
 
         return jsonify({
             'job_id': job_id,
@@ -500,7 +584,8 @@ def batch_status(job_id: str):
         }
     """
     try:
-        service = get_transcription_service()
+        provider = _batch_job_providers.get(job_id, 'whisper')
+        service = get_nova_transcription_service() if provider == 'nova_sonic' else get_transcription_service()
         progress = service.get_batch_progress(job_id)
 
         if progress is None:
@@ -529,7 +614,8 @@ def batch_status(job_id: str):
 def cancel_batch(job_id: str):
     """Cancel a running batch job."""
     try:
-        service = get_transcription_service()
+        provider = _batch_job_providers.get(job_id, 'whisper')
+        service = get_nova_transcription_service() if provider == 'nova_sonic' else get_transcription_service()
         cancelled = service.cancel_batch(job_id)
 
         if not cancelled:
