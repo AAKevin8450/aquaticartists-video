@@ -5,11 +5,14 @@ from flask import Blueprint, request, jsonify, current_app, render_template
 from app.database import get_db
 from app.services.s3_service import get_s3_service
 from app.utils.formatters import format_timestamp, format_file_size, format_duration
+from app.utils.validators import get_file_type, ValidationError
+from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
 from pathlib import Path
 import os
 import threading
 import uuid
 import time
+import mimetypes
 from typing import Dict, Any, List
 
 bp = Blueprint('file_management', __name__)
@@ -201,7 +204,7 @@ def list_files():
             formatted_file = {
                 'id': file['id'],
                 'filename': file['filename'],
-                's3_key': file['s3_key'],
+                's3_key': file.get('s3_key'),
                 'file_type': file['file_type'],
                 'size_bytes': file['size_bytes'],
                 'size_display': format_file_size(file['size_bytes']),
@@ -262,6 +265,185 @@ def list_files():
         return jsonify({'error': 'Failed to list files'}), 500
 
 
+@bp.route('/api/files/browse', methods=['POST'])
+def browse_directory():
+    """
+    Browse directory structure for folder picker.
+
+    Expected JSON:
+        {
+            "path": "E:\\"  # optional, defaults to drives on Windows or / on Linux
+        }
+    """
+    try:
+        data = request.get_json() or {}
+        requested_path = data.get('path', '')
+
+        import platform
+        is_windows = platform.system() == 'Windows'
+
+        # Get available drives on Windows
+        drives = []
+        if is_windows:
+            import string
+            for letter in string.ascii_uppercase:
+                drive = f"{letter}:\\"
+                if os.path.exists(drive):
+                    drives.append(drive)
+
+        # Determine current path
+        if not requested_path:
+            if is_windows:
+                current_path = drives[0] if drives else "C:\\"
+            else:
+                current_path = "/"
+        else:
+            current_path = os.path.abspath(requested_path)
+
+        if not os.path.isdir(current_path):
+            return jsonify({'error': f'Directory not found: {current_path}'}), 404
+
+        parent_path = os.path.dirname(current_path)
+        if parent_path == current_path:
+            parent_path = None
+
+        directories = []
+        try:
+            for entry in os.scandir(current_path):
+                if entry.is_dir():
+                    try:
+                        os.listdir(entry.path)
+                        directories.append({
+                            'name': entry.name,
+                            'path': entry.path
+                        })
+                    except PermissionError:
+                        pass
+        except PermissionError:
+            return jsonify({'error': f'Permission denied: {current_path}'}), 403
+
+        directories.sort(key=lambda d: d['name'].lower())
+
+        return jsonify({
+            'current_path': current_path,
+            'parent_path': parent_path,
+            'directories': directories,
+            'drives': drives if is_windows else []
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Browse directory error: {e}")
+        return jsonify({'error': 'Failed to browse directory'}), 500
+
+
+@bp.route('/api/files/import-directory', methods=['POST'])
+def import_directory():
+    """
+    Import files from a directory into the files table without copying.
+
+    Expected JSON:
+        {
+            "directory_path": "E:\\videos",
+            "recursive": true
+        }
+    """
+    try:
+        data = request.get_json() or {}
+        directory_path = data.get('directory_path')
+        recursive = bool(data.get('recursive', True))
+
+        if not directory_path:
+            return jsonify({'error': 'directory_path is required'}), 400
+
+        if not os.path.isdir(directory_path):
+            return jsonify({'error': f'Directory not found: {directory_path}'}), 404
+
+        allowed_video = current_app.config['ALLOWED_VIDEO_EXTENSIONS']
+        allowed_image = current_app.config['ALLOWED_IMAGE_EXTENSIONS']
+
+        db = get_db()
+        imported = 0
+        skipped_existing = 0
+        skipped_unsupported = 0
+        errors = []
+        scanned = 0
+
+        def handle_file(file_path: str):
+            nonlocal imported, skipped_existing, skipped_unsupported, scanned
+            scanned += 1
+            abs_path = os.path.abspath(file_path)
+            filename = os.path.basename(abs_path)
+
+            try:
+                file_type = get_file_type(filename, allowed_video, allowed_image)
+            except ValidationError:
+                skipped_unsupported += 1
+                return
+
+            if db.get_file_by_local_path(abs_path):
+                skipped_existing += 1
+                return
+
+            try:
+                file_stat = os.stat(abs_path)
+            except OSError as e:
+                errors.append({'path': abs_path, 'error': str(e)})
+                return
+
+            content_type = mimetypes.guess_type(abs_path)[0] or 'application/octet-stream'
+
+            media_metadata = {}
+            try:
+                media_metadata = extract_media_metadata(abs_path)
+            except MediaMetadataError as e:
+                current_app.logger.warning(f"Failed to extract metadata for {abs_path}: {e}")
+
+            db.create_source_file(
+                filename=filename,
+                s3_key=None,
+                file_type=file_type,
+                size_bytes=file_stat.st_size,
+                content_type=content_type,
+                local_path=abs_path,
+                resolution_width=media_metadata.get('resolution_width'),
+                resolution_height=media_metadata.get('resolution_height'),
+                frame_rate=media_metadata.get('frame_rate'),
+                codec_video=media_metadata.get('codec_video'),
+                codec_audio=media_metadata.get('codec_audio'),
+                duration_seconds=media_metadata.get('duration_seconds'),
+                bitrate=media_metadata.get('bitrate'),
+                metadata={
+                    'imported_from': 'directory',
+                    'source_directory': directory_path,
+                    'original_size_bytes': file_stat.st_size,
+                    'file_mtime': file_stat.st_mtime,
+                    'file_ctime': file_stat.st_ctime
+                }
+            )
+            imported += 1
+
+        if recursive:
+            for root, _, files in os.walk(directory_path):
+                for name in files:
+                    handle_file(os.path.join(root, name))
+        else:
+            for entry in os.scandir(directory_path):
+                if entry.is_file():
+                    handle_file(entry.path)
+
+        return jsonify({
+            'scanned': scanned,
+            'imported': imported,
+            'skipped_existing': skipped_existing,
+            'skipped_unsupported': skipped_unsupported,
+            'errors': errors
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Import directory error: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to import directory'}), 500
+
+
 @bp.route('/api/files/<int:file_id>', methods=['GET'])
 def get_file_details(file_id):
     """
@@ -287,7 +469,7 @@ def get_file_details(file_id):
         formatted_file = {
             'id': file['id'],
             'filename': file['filename'],
-            's3_key': file['s3_key'],
+            's3_key': file.get('s3_key'),
             'file_type': file['file_type'],
             'size_bytes': file['size_bytes'],
             'size_display': format_file_size(file['size_bytes']),
@@ -310,12 +492,14 @@ def get_file_details(file_id):
         proxy = data.get('proxy')
         formatted_proxy = None
         if proxy:
-            s3_service = get_s3_service(current_app)
-            presigned_url = s3_service.generate_presigned_url(proxy['s3_key'], expires_in=3600)
+            presigned_url = None
+            if proxy.get('s3_key'):
+                s3_service = get_s3_service(current_app)
+                presigned_url = s3_service.generate_presigned_url(proxy['s3_key'], expires_in=3600)
             formatted_proxy = {
                 'id': proxy['id'],
                 'filename': proxy['filename'],
-                's3_key': proxy['s3_key'],
+                's3_key': proxy.get('s3_key'),
                 'size_bytes': proxy['size_bytes'],
                 'size_display': format_file_size(proxy['size_bytes']),
                 'local_path': proxy.get('local_path'),
@@ -388,7 +572,7 @@ def get_file_s3_files(file_id):
         proxy = db.get_proxy_for_source(file_id)
 
         s3_files = []
-        if proxy:
+        if proxy and proxy.get('s3_key'):
             s3_service = get_s3_service(current_app)
             presigned_url = s3_service.generate_presigned_url(proxy['s3_key'], expires_in=3600)
 

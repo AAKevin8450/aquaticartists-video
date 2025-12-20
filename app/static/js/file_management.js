@@ -26,6 +26,8 @@ let currentFilters = {
 let currentFiles = [];
 let currentPagination = null;
 let s3FilesLoaded = false;
+let importBrowsingPath = '';
+let importBrowserParentPath = null;
 
 // ============================================================================
 // INITIALIZATION
@@ -86,6 +88,49 @@ function initializeEventListeners() {
     const deleteAllS3Btn = document.getElementById('deleteAllS3Btn');
     if (deleteAllS3Btn) {
         deleteAllS3Btn.addEventListener('click', deleteAllS3Files);
+    }
+
+    // Import directory
+    const importDirectoryBtn = document.getElementById('importDirectoryBtn');
+    if (importDirectoryBtn) {
+        importDirectoryBtn.addEventListener('click', importDirectory);
+    }
+
+    const importFolderModal = document.getElementById('importFolderBrowserModal');
+    if (importFolderModal) {
+        importFolderModal.addEventListener('show.bs.modal', () => {
+            const existingPath = document.getElementById('importDirectoryPath').value.trim();
+            importBrowseTo(existingPath || '');
+        });
+    }
+
+    const importGoUpBtn = document.getElementById('importGoUpBtn');
+    if (importGoUpBtn) {
+        importGoUpBtn.addEventListener('click', () => {
+            if (importBrowserParentPath) {
+                importBrowseTo(importBrowserParentPath);
+            }
+        });
+    }
+
+    const importGoToPathBtn = document.getElementById('importGoToPathBtn');
+    if (importGoToPathBtn) {
+        importGoToPathBtn.addEventListener('click', () => {
+            const pathInput = document.getElementById('importCurrentBrowsePath').value.trim();
+            if (pathInput) {
+                importBrowseTo(pathInput);
+            }
+        });
+    }
+
+    const importSelectFolderBtn = document.getElementById('importSelectFolderBtn');
+    if (importSelectFolderBtn) {
+        importSelectFolderBtn.addEventListener('click', () => {
+            if (!importBrowsingPath) return;
+            document.getElementById('importDirectoryPath').value = importBrowsingPath;
+            const modal = bootstrap.Modal.getInstance(importFolderModal);
+            if (modal) modal.hide();
+        });
     }
 }
 
@@ -156,6 +201,137 @@ function resetFilters() {
     };
 
     loadFiles();
+}
+
+// ============================================================================
+// DIRECTORY IMPORT
+// ============================================================================
+
+async function importBrowseTo(path) {
+    const folderList = document.getElementById('importFolderList');
+    folderList.innerHTML = `
+        <div class="text-center p-4">
+            <div class="spinner-border" role="status"></div>
+            <p class="mt-2 mb-0">Loading folders...</p>
+        </div>
+    `;
+
+    try {
+        const response = await fetch('/api/files/browse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: path })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to browse directory');
+        }
+
+        const data = await response.json();
+        importBrowsingPath = data.current_path;
+        importBrowserParentPath = data.parent_path;
+
+        document.getElementById('importCurrentBrowsePath').value = data.current_path;
+        document.getElementById('importGoUpBtn').disabled = !data.parent_path;
+
+        if (data.drives && data.drives.length > 0) {
+            document.getElementById('importDriveSelector').style.display = 'block';
+            const driveButtons = document.getElementById('importDriveButtons');
+            driveButtons.innerHTML = data.drives.map(drive =>
+                `<button type="button" class="btn btn-sm btn-outline-primary import-drive-btn" data-path="${drive}">
+                    <i class="bi bi-hdd"></i> ${drive}
+                </button>`
+            ).join('');
+
+            driveButtons.querySelectorAll('.import-drive-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    importBrowseTo(btn.dataset.path);
+                });
+            });
+        } else {
+            document.getElementById('importDriveSelector').style.display = 'none';
+        }
+
+        if (!data.directories || data.directories.length === 0) {
+            folderList.innerHTML = `
+                <div class="text-center p-4 text-muted">
+                    <i class="bi bi-folder-x fs-3"></i>
+                    <p class="mt-2 mb-0">No subfolders found</p>
+                </div>
+            `;
+            return;
+        }
+
+        folderList.innerHTML = data.directories.map(dir => `
+            <button type="button" class="list-group-item list-group-item-action import-folder-item"
+                    data-path="${dir.path}">
+                <i class="bi bi-folder me-2"></i> ${dir.name}
+            </button>
+        `).join('');
+
+        folderList.querySelectorAll('.import-folder-item').forEach(btn => {
+            btn.addEventListener('click', () => {
+                importBrowseTo(btn.dataset.path);
+            });
+        });
+
+    } catch (error) {
+        console.error('Browse error:', error);
+        folderList.innerHTML = `
+            <div class="alert alert-danger m-3">
+                <i class="bi bi-exclamation-triangle"></i> ${error.message}
+            </div>
+        `;
+    }
+}
+
+async function importDirectory() {
+    const directoryPath = document.getElementById('importDirectoryPath').value.trim();
+    const recursive = document.getElementById('importRecursive').checked;
+
+    if (!directoryPath) {
+        showAlert('Please enter a directory path to import', 'warning');
+        return;
+    }
+
+    const importButton = document.getElementById('importDirectoryBtn');
+    importButton.disabled = true;
+
+    try {
+        showAlert('Importing files...', 'info');
+
+        const response = await fetch('/api/files/import-directory', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                directory_path: directoryPath,
+                recursive: recursive
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to import directory');
+        }
+
+        const result = await response.json();
+        const message = `Imported ${result.imported} file(s) (scanned ${result.scanned}, ` +
+            `skipped existing ${result.skipped_existing}, unsupported ${result.skipped_unsupported})`;
+        showAlert(message, result.errors && result.errors.length > 0 ? 'warning' : 'success');
+
+        if (result.errors && result.errors.length > 0) {
+            console.warn('Import errors:', result.errors);
+        }
+
+        loadFiles();
+
+    } catch (error) {
+        console.error('Import error:', error);
+        showAlert(`Import failed: ${error.message}`, 'danger');
+    } finally {
+        importButton.disabled = false;
+    }
 }
 
 // ============================================================================
@@ -289,7 +465,7 @@ function renderFileRow(file) {
     // Status badges
     const statusBadges = [];
     if (file.has_proxy) {
-        statusBadges.push('<span class="badge bg-success" title="Proxy available on S3"><i class="bi bi-cloud-check"></i> Proxy</span>');
+        statusBadges.push('<span class="badge bg-success" title="Proxy available"><i class="bi bi-cloud-check"></i> Proxy</span>');
     }
     if (file.completed_transcripts > 0) {
         statusBadges.push(`<span class="badge bg-info" title="${file.completed_transcripts} completed transcripts"><i class="bi bi-mic"></i> ${file.completed_transcripts}</span>`);

@@ -16,10 +16,19 @@ import re
 import shutil
 import subprocess
 import tempfile
+import mimetypes
 from datetime import datetime
 from pathlib import PurePosixPath, Path
 
 bp = Blueprint('upload', __name__, url_prefix='/api/upload')
+
+DEFAULT_PROXY_SPEC = '720p15'
+
+
+def _build_proxy_filename(source_filename: str, proxy_spec: str) -> str:
+    name_parts = Path(source_filename)
+    suffix = name_parts.suffix or '.mp4'
+    return f"{name_parts.stem}_{proxy_spec}{suffix}"
 
 
 def _format_duration_seconds(duration_seconds):
@@ -93,55 +102,12 @@ def get_presigned_url():
     """
     Generate presigned POST URL for direct browser-to-S3 upload.
 
-    Expected JSON:
-        {
-            "filename": "video.mp4",
-            "content_type": "video/mp4",
-            "size_bytes": 1024000
-        }
-
-    Returns:
-        {
-            "url": "https://s3.amazonaws.com/...",
-            "fields": {...},
-            "s3_key": "uploads/uuid/filename"
-        }
+    This endpoint is disabled in local-first mode.
     """
     try:
-        data = request.get_json()
-        filename = data.get('filename')
-        content_type = data.get('content_type')
-        size_bytes = data.get('size_bytes', 0)
-
-        if not filename or not content_type:
-            return jsonify({'error': 'filename and content_type are required'}), 400
-
-        # Validate file type
-        file_type = get_file_type(
-            filename,
-            current_app.config['ALLOWED_VIDEO_EXTENSIONS'],
-            current_app.config['ALLOWED_IMAGE_EXTENSIONS']
-        )
-
-        # Validate file size
-        max_size_mb = (
-            current_app.config['MAX_VIDEO_SIZE_MB'] if file_type == 'video'
-            else current_app.config['MAX_IMAGE_SIZE_MB']
-        )
-        validate_file_size(size_bytes, max_size_mb)
-
-        if file_type == 'video':
-            return jsonify({
-                'error': 'Video uploads must use /api/upload/file to generate a local proxy first'
-            }), 400
-
-        # Get S3 service and generate presigned POST
-        s3_service = get_s3_service(current_app)
-        presigned_data = s3_service.generate_presigned_post(
-            filename, content_type, max_size_mb
-        )
-
-        return jsonify(presigned_data), 200
+        return jsonify({
+            'error': 'Direct S3 uploads are disabled in local-first mode. Use /api/upload/file.'
+        }), 400
 
     except ValidationError as e:
         return jsonify({'error': str(e)}), 400
@@ -156,67 +122,12 @@ def get_presigned_url():
 def complete_upload():
     """
     Complete upload by recording file metadata in database.
-
-    Expected JSON:
-        {
-            "s3_key": "uploads/uuid/filename",
-            "filename": "video.mp4",
-            "size_bytes": 1024000,
-            "content_type": "video/mp4"
-        }
-
-    Returns:
-        {
-            "file_id": 123,
-            "message": "File uploaded successfully"
-        }
+    This endpoint is disabled in local-first mode.
     """
     try:
-        data = request.get_json()
-        s3_key = data.get('s3_key')
-        filename = data.get('filename')
-        size_bytes = data.get('size_bytes', 0)
-        content_type = data.get('content_type', '')
-
-        if not s3_key or not filename:
-            return jsonify({'error': 's3_key and filename are required'}), 400
-
-        # Determine file type
-        file_type = get_file_type(
-            filename,
-            current_app.config['ALLOWED_VIDEO_EXTENSIONS'],
-            current_app.config['ALLOWED_IMAGE_EXTENSIONS']
-        )
-
-        if file_type == 'video':
-            return jsonify({
-                'error': 'Video uploads must use /api/upload/file to generate a proxy'
-            }), 400
-
-        # Verify file exists in S3
-        s3_service = get_s3_service(current_app)
-        if not s3_service.file_exists(s3_key):
-            return jsonify({'error': 'File not found in S3'}), 404
-
-        # Get actual file metadata from S3
-        s3_metadata = s3_service.get_file_metadata(s3_key)
-        actual_size = s3_metadata['size']
-
-        # Record in database
-        db = get_db()
-        file_id = db.create_file(
-            filename=filename,
-            s3_key=s3_key,
-            file_type=file_type,
-            size_bytes=actual_size,
-            content_type=content_type,
-            metadata={'original_size': size_bytes}
-        )
-
         return jsonify({
-            'file_id': file_id,
-            'message': 'File uploaded successfully'
-        }), 201
+            'error': 'Direct S3 uploads are disabled in local-first mode. Use /api/upload/file.'
+        }), 400
 
     except ValidationError as e:
         return jsonify({'error': str(e)}), 400
@@ -250,7 +161,7 @@ def upload_file_direct():
             current_app.config['ALLOWED_IMAGE_EXTENSIONS']
         )
 
-        # Generate S3 key
+        # Generate upload ID and safe filename
         safe_filename = sanitize_filename(file.filename)
         upload_id = uuid.uuid4()
 
@@ -262,39 +173,73 @@ def upload_file_direct():
         if request.content_length:
             validate_file_size(request.content_length, max_size_mb)
 
-        # Upload to S3
-        s3_service = get_s3_service(current_app)
+        upload_root = Path(current_app.config['UPLOAD_FOLDER'])
+        upload_root.mkdir(parents=True, exist_ok=True)
+        temp_source_path = upload_root / f"tmp_{upload_id}_{safe_filename}"
+
         if file_type == 'video':
             # Proxy creation is now always required
             if not shutil.which('ffmpeg'):
                 return jsonify({'error': 'ffmpeg is not available on the server'}), 500
 
             # Save source video to local storage
-            upload_root = Path(current_app.config['UPLOAD_FOLDER'])
-            upload_dir = upload_root / str(upload_id)
-            upload_dir.mkdir(parents=True, exist_ok=True)
-            source_local_path = upload_dir / safe_filename
-            file.save(source_local_path)
+            file.save(temp_source_path)
 
-            source_size_bytes = os.path.getsize(source_local_path)
+            source_size_bytes = os.path.getsize(temp_source_path)
             try:
                 validate_file_size(source_size_bytes, max_size_mb)
             except ValidationError as e:
-                if source_local_path.exists():
-                    source_local_path.unlink()
+                if temp_source_path.exists():
+                    temp_source_path.unlink()
                 return jsonify({'error': str(e)}), 400
 
             # Extract media metadata from source video
             try:
-                source_metadata = extract_media_metadata(str(source_local_path))
+                source_metadata = extract_media_metadata(str(temp_source_path))
             except MediaMetadataError as e:
                 current_app.logger.warning(f"Failed to extract metadata: {e}")
                 source_metadata = {}
 
+            db = get_db()
+            source_file_id = db.create_source_file(
+                filename=file.filename,
+                s3_key=None,
+                file_type=file_type,
+                size_bytes=source_size_bytes,
+                content_type=file.content_type or 'video/mp4',
+                local_path=str(temp_source_path),
+                resolution_width=source_metadata.get('resolution_width'),
+                resolution_height=source_metadata.get('resolution_height'),
+                frame_rate=source_metadata.get('frame_rate'),
+                codec_video=source_metadata.get('codec_video'),
+                codec_audio=source_metadata.get('codec_audio'),
+                duration_seconds=source_metadata.get('duration_seconds'),
+                bitrate=source_metadata.get('bitrate'),
+                metadata={
+                    'upload_id': str(upload_id),
+                    'original_content_type': file.content_type or '',
+                    'original_size_bytes': source_size_bytes
+                }
+            )
+
+            name_parts = Path(safe_filename)
+            final_filename = f"{name_parts.stem}_{source_file_id}{name_parts.suffix}"
+            source_local_path = upload_root / final_filename
+            try:
+                temp_source_path.replace(source_local_path)
+                db.update_file_local_path(source_file_id, str(source_local_path))
+            except Exception:
+                if temp_source_path.exists():
+                    temp_source_path.unlink()
+                db.delete_file(source_file_id)
+                raise
+
+            proxy_spec = DEFAULT_PROXY_SPEC
+
             # Create proxy video in proxy_video folder
             proxy_video_dir = Path('proxy_video')
             proxy_video_dir.mkdir(parents=True, exist_ok=True)
-            proxy_filename = f"{upload_id}_720p15.mp4"
+            proxy_filename = _build_proxy_filename(safe_filename, proxy_spec)
             proxy_local_path = proxy_video_dir / proxy_filename
 
             try:
@@ -302,6 +247,9 @@ def upload_file_direct():
             except RuntimeError as e:
                 if source_local_path.exists():
                     source_local_path.unlink()
+                if proxy_local_path.exists():
+                    proxy_local_path.unlink()
+                db.delete_file(source_file_id)
                 raise
 
             proxy_size_bytes = os.path.getsize(proxy_local_path)
@@ -313,39 +261,11 @@ def upload_file_direct():
                 current_app.logger.warning(f"Failed to extract proxy metadata: {e}")
                 proxy_metadata = {}
 
-            # Upload proxy to S3
-            proxy_s3_key = f"uploads/{upload_id}/proxy_720p15.mp4"
-            with open(proxy_local_path, 'rb') as proxy_file:
-                s3_service.upload_file(proxy_file, proxy_s3_key, 'video/mp4')
-
-            # Create source file record in database (no S3 upload for source)
-            db = get_db()
-            source_s3_key = f"uploads/{upload_id}/{safe_filename}"  # Not uploaded, just for reference
-            source_file_id = db.create_source_file(
-                filename=file.filename,
-                s3_key=source_s3_key,
-                file_type=file_type,
-                size_bytes=source_size_bytes,
-                content_type=file.content_type or 'video/mp4',
-                local_path=str(source_local_path),
-                resolution_width=source_metadata.get('resolution_width'),
-                resolution_height=source_metadata.get('resolution_height'),
-                frame_rate=source_metadata.get('frame_rate'),
-                codec_video=source_metadata.get('codec_video'),
-                codec_audio=source_metadata.get('codec_audio'),
-                duration_seconds=source_metadata.get('duration_seconds'),
-                bitrate=source_metadata.get('bitrate'),
-                metadata={
-                    'upload_id': str(upload_id),
-                    'original_content_type': file.content_type or ''
-                }
-            )
-
             # Create proxy file record in database
             proxy_file_id = db.create_proxy_file(
                 source_file_id=source_file_id,
                 filename=proxy_filename,
-                s3_key=proxy_s3_key,
+                s3_key=None,
                 size_bytes=proxy_size_bytes,
                 content_type='video/mp4',
                 local_path=str(proxy_local_path),
@@ -358,7 +278,7 @@ def upload_file_direct():
                 bitrate=proxy_metadata.get('bitrate'),
                 metadata={
                     'upload_id': str(upload_id),
-                    'proxy_spec': '720p15',
+                    'proxy_spec': proxy_spec,
                     'proxy_generated_at': datetime.utcnow().isoformat() + 'Z'
                 }
             )
@@ -367,7 +287,6 @@ def upload_file_direct():
                 'file_id': source_file_id,
                 'proxy_file_id': proxy_file_id,
                 'message': 'File uploaded successfully',
-                's3_key': proxy_s3_key,
                 'size_bytes': source_size_bytes,
                 'proxy_size_bytes': proxy_size_bytes,
                 'display_size': format_file_size(source_size_bytes),
@@ -375,27 +294,56 @@ def upload_file_direct():
                 'display_duration': _format_duration_seconds(source_metadata.get('duration_seconds'))
             }), 201
 
-        s3_key = f"uploads/{upload_id}/{safe_filename}"
-        file.seek(0, 2)
-        size_bytes = file.tell()
-        file.seek(0)
+        # Image upload (local only)
+        file.save(temp_source_path)
+        size_bytes = os.path.getsize(temp_source_path)
         validate_file_size(size_bytes, max_size_mb)
-        s3_service.upload_file(file, s3_key, file.content_type)
+
+        try:
+            image_metadata = extract_media_metadata(str(temp_source_path))
+        except MediaMetadataError as e:
+            current_app.logger.warning(f"Failed to extract image metadata: {e}")
+            image_metadata = {}
 
         # Record in database
+        content_type = file.content_type or mimetypes.guess_type(safe_filename)[0] or 'application/octet-stream'
         db = get_db()
-        file_id = db.create_file(
+        file_id = db.create_source_file(
             filename=file.filename,
-            s3_key=s3_key,
+            s3_key=None,
             file_type=file_type,
             size_bytes=size_bytes,
-            content_type=file.content_type
+            content_type=content_type,
+            local_path=str(temp_source_path),
+            resolution_width=image_metadata.get('resolution_width'),
+            resolution_height=image_metadata.get('resolution_height'),
+            frame_rate=image_metadata.get('frame_rate'),
+            codec_video=image_metadata.get('codec_video'),
+            codec_audio=image_metadata.get('codec_audio'),
+            duration_seconds=image_metadata.get('duration_seconds'),
+            bitrate=image_metadata.get('bitrate'),
+            metadata={
+                'upload_id': str(upload_id),
+                'original_content_type': file.content_type or '',
+                'original_size_bytes': size_bytes
+            }
         )
+
+        name_parts = Path(safe_filename)
+        final_filename = f"{name_parts.stem}_{file_id}{name_parts.suffix}"
+        source_local_path = upload_root / final_filename
+        try:
+            temp_source_path.replace(source_local_path)
+            db.update_file_local_path(file_id, str(source_local_path))
+        except Exception:
+            if temp_source_path.exists():
+                temp_source_path.unlink()
+            db.delete_file(file_id)
+            raise
 
         return jsonify({
             'file_id': file_id,
             'message': 'File uploaded successfully',
-            's3_key': s3_key,
             'size_bytes': size_bytes,
             'display_size': format_file_size(size_bytes)
         }), 201
@@ -412,7 +360,7 @@ def upload_file_direct():
         return jsonify({'error': 'Failed to upload file'}), 500
 
 
-def create_proxy_internal(file_id: int, force: bool = False, upload_to_s3: bool = True):
+def create_proxy_internal(file_id: int, force: bool = False, upload_to_s3: bool = False):
     """
     Internal function to create a proxy video for a file.
 
@@ -460,8 +408,9 @@ def create_proxy_internal(file_id: int, force: bool = False, upload_to_s3: bool 
         raise Exception('Local source video not available for proxy creation')
 
     # Generate proxy filename
+    proxy_spec = DEFAULT_PROXY_SPEC
     source_filename = file['filename']
-    proxy_filename = f"proxy_720p15_{source_filename}"
+    proxy_filename = _build_proxy_filename(source_filename, proxy_spec)
 
     # Determine where to save proxy
     if upload_to_s3:
@@ -527,7 +476,7 @@ def create_proxy_internal(file_id: int, force: bool = False, upload_to_s3: bool 
         duration_seconds=proxy_metadata.get('duration_seconds'),
         bitrate=proxy_metadata.get('bitrate'),
         metadata={
-            'proxy_spec': '720p15',
+            'proxy_spec': proxy_spec,
             'uploaded_to_s3': upload_to_s3
         }
     )
@@ -603,11 +552,11 @@ def list_files():
         db = get_db()
         files = db.list_files(file_type=file_type, limit=limit, offset=offset)
 
-        # Format file data
+    # Format file data
         formatted_files = []
         for file in files:
             size_bytes = _get_display_size_bytes(file)
-            duration_seconds = (file.get('metadata') or {}).get('duration_seconds')
+            duration_seconds = file.get('duration_seconds') or (file.get('metadata') or {}).get('duration_seconds')
             formatted_files.append({
                 'id': file['id'],
                 'filename': file['filename'],
@@ -654,19 +603,21 @@ def get_file(file_id):
         if not file:
             return jsonify({'error': 'File not found'}), 404
 
-        # Generate presigned URL for viewing
-        s3_service = get_s3_service(current_app)
-        presigned_url = s3_service.generate_presigned_url(file['s3_key'])
+        # Generate presigned URL for viewing (only if file is in S3)
+        presigned_url = None
+        if file.get('s3_key'):
+            s3_service = get_s3_service(current_app)
+            presigned_url = s3_service.generate_presigned_url(file['s3_key'])
 
         return jsonify({
             'id': file['id'],
             'filename': file['filename'],
-            's3_key': file['s3_key'],
+            's3_key': file.get('s3_key'),
             'file_type': file['file_type'],
             'size': format_file_size(_get_display_size_bytes(file)),
             'size_bytes': _get_display_size_bytes(file),
-            'duration_seconds': (file.get('metadata') or {}).get('duration_seconds'),
-            'duration': _format_duration_seconds((file.get('metadata') or {}).get('duration_seconds')),
+            'duration_seconds': file.get('duration_seconds') or (file.get('metadata') or {}).get('duration_seconds'),
+            'duration': _format_duration_seconds(file.get('duration_seconds') or (file.get('metadata') or {}).get('duration_seconds')),
             'content_type': file['content_type'],
             'uploaded_at': format_timestamp(file['uploaded_at']),
             'presigned_url': presigned_url
@@ -696,9 +647,10 @@ def delete_file(file_id):
         if not file:
             return jsonify({'error': 'File not found'}), 404
 
-        # Delete from S3
-        s3_service = get_s3_service(current_app)
-        s3_service.delete_file(file['s3_key'])
+        # Delete from S3 (only if file is in S3)
+        if file.get('s3_key'):
+            s3_service = get_s3_service(current_app)
+            s3_service.delete_file(file['s3_key'])
 
         # Delete from database (cascade will delete related jobs)
         db.delete_file(file_id)

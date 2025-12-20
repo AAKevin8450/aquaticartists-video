@@ -15,6 +15,42 @@
 <!-- Alert Container -->
 <div id="alert-container"></div>
 
+<!-- Import Directory -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-folder-plus"></i> Import Directory</h5>
+    </div>
+    <div class="card-body">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-6">
+                <label for="importDirectoryPath" class="form-label">Directory Path</label>
+                <div class="input-group">
+                    <input type="text" class="form-control" id="importDirectoryPath"
+                           placeholder="E:\\videos">
+                    <button class="btn btn-outline-secondary" type="button" id="importBrowseBtn"
+                            data-bs-toggle="modal" data-bs-target="#importFolderBrowserModal">
+                        <i class="bi bi-folder2-open"></i> Browse
+                    </button>
+                </div>
+                <small class="text-muted">Import files recursively without moving or copying them</small>
+            </div>
+            <div class="col-md-3">
+                <div class="form-check mt-4">
+                    <input class="form-check-input" type="checkbox" id="importRecursive" checked>
+                    <label class="form-check-label" for="importRecursive">
+                        Include subfolders
+                    </label>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-primary w-100" id="importDirectoryBtn">
+                    <i class="bi bi-box-arrow-in-down"></i> Import Directory
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Search and Filters Card -->
 <div class="card mb-4">
     <div class="card-header">
@@ -343,6 +379,57 @@
                 </button>
                 <button type="button" class="btn btn-secondary" id="batchDoneBtn" style="display: none;" data-bs-dismiss="modal">
                     Close
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Folder Browser Modal -->
+<div class="modal fade" id="importFolderBrowserModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="bi bi-folder2-open"></i> Select Folder</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label fw-bold">Current Path:</label>
+                    <div class="input-group">
+                        <input type="text" class="form-control" id="importCurrentBrowsePath" readonly>
+                        <button class="btn btn-outline-secondary" type="button" id="importGoToPathBtn">
+                            <i class="bi bi-arrow-right"></i> Go
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mb-3" id="importDriveSelector" style="display: none;">
+                    <label class="form-label fw-bold">Drives:</label>
+                    <div id="importDriveButtons" class="btn-group flex-wrap" role="group">
+                        <!-- Populated by JavaScript -->
+                    </div>
+                </div>
+
+                <div class="mb-3">
+                    <button class="btn btn-sm btn-outline-secondary" id="importGoUpBtn" disabled>
+                        <i class="bi bi-arrow-up"></i> Parent Folder
+                    </button>
+                </div>
+
+                <div class="border rounded" style="height: 350px; overflow-y: auto;">
+                    <div id="importFolderList" class="list-group list-group-flush">
+                        <div class="text-center p-4">
+                            <div class="spinner-border" role="status"></div>
+                            <p class="mt-2 mb-0">Loading folders...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" id="importSelectFolderBtn">
+                    <i class="bi bi-check-lg"></i> Select This Folder
                 </button>
             </div>
         </div>

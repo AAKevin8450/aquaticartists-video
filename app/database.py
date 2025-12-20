@@ -48,12 +48,22 @@ class Database:
                 CREATE TABLE IF NOT EXISTS files (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     filename TEXT NOT NULL,
-                    s3_key TEXT UNIQUE NOT NULL,
+                    s3_key TEXT UNIQUE,
                     file_type TEXT NOT NULL,
                     size_bytes INTEGER NOT NULL,
                     content_type TEXT NOT NULL,
                     uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    metadata JSON
+                    metadata JSON,
+                    is_proxy BOOLEAN DEFAULT 0,
+                    source_file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
+                    local_path TEXT,
+                    resolution_width INTEGER,
+                    resolution_height INTEGER,
+                    frame_rate REAL,
+                    codec_video TEXT,
+                    codec_audio TEXT,
+                    duration_seconds REAL,
+                    bitrate INTEGER
                 )
             ''')
 
@@ -301,6 +311,13 @@ class Database:
                 UPDATE files SET metadata = ? WHERE id = ?
             ''', (json.dumps(existing), file_id))
             return existing
+
+    def update_file_local_path(self, file_id: int, local_path: str) -> bool:
+        """Update local_path for a file."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE files SET local_path = ? WHERE id = ?', (local_path, file_id))
+            return cursor.rowcount > 0
 
     def create_source_file(self, filename: str, s3_key: str, file_type: str,
                           size_bytes: int, content_type: str,
