@@ -25,8 +25,11 @@ let currentFilters = {
     per_page: 50
 };
 
+const FILE_MANAGEMENT_STATE_KEY = 'fileManagementState';
+let pendingScrollY = null;
 let currentFiles = [];
 let currentPagination = null;
+let currentTranscriptId = null;
 let s3FilesLoaded = false;
 let importBrowsingPath = '';
 let importBrowserParentPath = null;
@@ -37,7 +40,9 @@ let importBrowserParentPath = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     initializeEventListeners();
-    loadFiles();
+    if (!restoreFileManagementState()) {
+        loadFiles();
+    }
 });
 
 // ============================================================================
@@ -137,6 +142,26 @@ function initializeEventListeners() {
 
     initializeBatchOptionsModal();
     initializeSingleOptionsModal();
+
+    const transcriptModal = document.getElementById('transcriptDetailsModal');
+    if (transcriptModal) {
+        transcriptModal.addEventListener('hidden.bs.modal', () => {
+            currentTranscriptId = null;
+        });
+    }
+
+    document.querySelectorAll('.download-transcript-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            if (!currentTranscriptId) return;
+
+            const format = btn.dataset.format;
+            const link = document.createElement('a');
+            link.href = `/transcriptions/api/transcript/${currentTranscriptId}/download?format=${format}`;
+            link.download = `transcript_${currentTranscriptId}.${format}`;
+            link.click();
+        });
+    });
 }
 
 function applyFilters() {
@@ -216,6 +241,83 @@ function resetFilters() {
     };
 
     loadFiles();
+}
+
+function saveFileManagementState() {
+    const state = {
+        filters: currentFilters,
+        scrollY: window.scrollY
+    };
+    sessionStorage.setItem(FILE_MANAGEMENT_STATE_KEY, JSON.stringify(state));
+}
+
+function restoreFileManagementState() {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('restore') !== '1') {
+        return false;
+    }
+
+    const rawState = sessionStorage.getItem(FILE_MANAGEMENT_STATE_KEY);
+    if (!rawState) {
+        return false;
+    }
+
+    try {
+        const state = JSON.parse(rawState);
+        if (!state || !state.filters) {
+            return false;
+        }
+
+        currentFilters = { ...currentFilters, ...state.filters };
+        applyFiltersToInputs();
+        if (typeof state.scrollY === 'number') {
+            pendingScrollY = state.scrollY;
+        }
+        loadFiles();
+        return true;
+    } catch (error) {
+        console.warn('Failed to restore file management state:', error);
+        return false;
+    }
+}
+
+function applyFiltersToInputs() {
+    document.getElementById('searchInput').value = currentFilters.search || '';
+    document.getElementById('fileTypeFilter').value = currentFilters.file_type || '';
+    document.getElementById('proxyFilter').value = normalizeTriState(currentFilters.has_proxy);
+    document.getElementById('transcriptionFilter').value = normalizeTriState(currentFilters.has_transcription);
+    document.getElementById('novaFilter').value = normalizeTriState(currentFilters.has_nova_analysis);
+    document.getElementById('rekognitionFilter').value = normalizeTriState(currentFilters.has_rekognition_analysis);
+    document.getElementById('uploadFromDate').value = currentFilters.upload_from_date || '';
+    document.getElementById('uploadToDate').value = currentFilters.upload_to_date || '';
+    document.getElementById('createdFromDate').value = currentFilters.created_from_date || '';
+    document.getElementById('createdToDate').value = currentFilters.created_to_date || '';
+    document.getElementById('minSize').value = toMegabytes(currentFilters.min_size);
+    document.getElementById('maxSize').value = toMegabytes(currentFilters.max_size);
+    document.getElementById('minDuration').value = currentFilters.min_duration || '';
+    document.getElementById('maxDuration').value = currentFilters.max_duration || '';
+
+    const hasAdvancedFilters = currentFilters.min_size || currentFilters.max_size ||
+        currentFilters.min_duration || currentFilters.max_duration;
+    const advancedFiltersCollapse = document.getElementById('advancedFiltersCollapse');
+    if (hasAdvancedFilters && advancedFiltersCollapse) {
+        const collapse = new bootstrap.Collapse(advancedFiltersCollapse, { toggle: false });
+        collapse.show();
+    }
+}
+
+function normalizeTriState(value) {
+    if (value === null || value === undefined || value === '') {
+        return '';
+    }
+    return value ? 'true' : 'false';
+}
+
+function toMegabytes(value) {
+    if (value === null || value === undefined || value === '') {
+        return '';
+    }
+    return Math.round(parseInt(value, 10) / (1024 * 1024));
 }
 
 // ============================================================================
@@ -381,6 +483,10 @@ async function loadFiles() {
         renderPagination(currentPagination);
         updateFilesCount(currentPagination.total);
         updateSummary(data.summary);
+        if (pendingScrollY !== null) {
+            window.scrollTo(0, pendingScrollY);
+            pendingScrollY = null;
+        }
 
     } catch (error) {
         console.error('Failed to load files:', error);
@@ -485,8 +591,15 @@ function renderFileRow(file) {
         statusBadges.push('<span class="badge bg-success" title="Proxy available"><i class="bi bi-cloud-check"></i> Proxy</span>');
     }
     if (file.completed_transcripts > 0) {
+        const shortTranscript = file.max_completed_transcript_chars !== null &&
+            file.max_completed_transcript_chars !== undefined &&
+            file.max_completed_transcript_chars < 20;
+        const transcriptBadgeClass = shortTranscript ? 'bg-warning' : 'bg-info';
+        const transcriptTitle = shortTranscript
+            ? `${file.completed_transcripts} completed transcripts (short transcript)`
+            : `${file.completed_transcripts} completed transcripts`;
         statusBadges.push(
-            `<a href="#" class="badge bg-info text-decoration-none action-view-transcript" data-file-id="${file.id}" title="${file.completed_transcripts} completed transcripts">
+            `<a href="#" class="badge ${transcriptBadgeClass} text-decoration-none action-view-transcript" data-file-id="${file.id}" title="${transcriptTitle}">
                 <i class="bi bi-mic"></i> ${file.completed_transcripts}
             </a>`
         );
@@ -969,9 +1082,9 @@ function renderFileDetails(data, container) {
                                     <td>${job.completed_at || 'N/A'}</td>
                                     <td>
                                         ${job.has_results ? `
-                                            <a href="/dashboard/${job.job_id || job.id}" class="btn btn-sm btn-primary">
-                                                <i class="bi bi-graph-up"></i> View
-                                            </a>
+                                        <a href="/dashboard/${job.job_id || job.id}" class="btn btn-sm btn-primary detail-view-analysis">
+                                            <i class="bi bi-graph-up"></i> View
+                                        </a>
                                         ` : ''}
                                     </td>
                                 </tr>
@@ -1018,9 +1131,9 @@ function renderFileDetails(data, container) {
                                     <td>${transcript.word_count ? transcript.word_count.toLocaleString() : 'N/A'}</td>
                                     <td>${transcript.created_at}</td>
                                     <td>
-                                        <a href="/transcription?transcript_id=${transcript.id}" class="btn btn-sm btn-info">
+                                        <button type="button" class="btn btn-sm btn-info detail-view-transcript" data-transcript-id="${transcript.id}">
                                             <i class="bi bi-eye"></i> View
-                                        </a>
+                                        </button>
                                     </td>
                                 </tr>
                             `).join('')}
@@ -1061,6 +1174,21 @@ function attachFileDetailsActionListeners(container) {
         btn.addEventListener('click', (e) => {
             const fileId = parseInt(e.currentTarget.dataset.fileId);
             startNovaAnalysis(fileId);
+        });
+    });
+
+    container.querySelectorAll('.detail-view-analysis').forEach(link => {
+        link.addEventListener('click', () => {
+            saveFileManagementState();
+        });
+    });
+
+    container.querySelectorAll('.detail-view-transcript').forEach(link => {
+        link.addEventListener('click', (e) => {
+            const transcriptId = parseInt(e.currentTarget.dataset.transcriptId, 10);
+            if (transcriptId) {
+                openTranscriptDetails(transcriptId);
+            }
         });
     });
 }
@@ -1119,10 +1247,98 @@ async function openLatestTranscript(fileId) {
         });
 
         const transcriptId = completed[0].id;
-        window.location.href = `/transcription?transcript_id=${transcriptId}`;
+        openTranscriptDetails(transcriptId);
     } catch (error) {
         console.error('Open transcript error:', error);
         showAlert(`Failed to open transcript: ${error.message}`, 'danger');
+    }
+}
+
+async function openTranscriptDetails(transcriptId) {
+    const modalEl = document.getElementById('transcriptDetailsModal');
+    const modalBody = document.getElementById('transcriptDetailsBody');
+    if (!modalEl || !modalBody) {
+        showAlert('Transcript details modal not available.', 'warning');
+        return;
+    }
+
+    currentTranscriptId = transcriptId;
+    const modal = new bootstrap.Modal(modalEl);
+    modalBody.innerHTML = '<div class="text-center"><div class="spinner-border"></div></div>';
+    modal.show();
+
+    try {
+        const response = await fetch(`/transcriptions/api/transcript/${transcriptId}`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to load transcript');
+        }
+
+        const transcript = await response.json();
+        const statusClass = `bg-${getStatusBadgeClass(transcript.status)}`;
+        const transcriptText = transcript.transcript_text ? escapeHtml(transcript.transcript_text) : '';
+
+        modalBody.innerHTML = `
+            <div class="mb-3">
+                <h6 class="mb-1"><i class="bi bi-file-earmark-play"></i> ${escapeHtml(transcript.file_name || 'Unknown file')}</h6>
+                <p class="text-muted small mb-2">${escapeHtml(transcript.file_path || 'N/A')}</p>
+                <div class="row g-2">
+                    <div class="col-md-3">
+                        <strong>Status:</strong> <span class="badge ${statusClass}">${transcript.status || 'N/A'}</span>
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Model:</strong> <span class="badge bg-primary">${escapeHtml(transcript.model_name || 'N/A')}</span>
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Language:</strong> ${transcript.language ? transcript.language.toUpperCase() : 'N/A'}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Duration:</strong> ${formatDurationUI(transcript.duration_seconds)}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>File Size:</strong> ${formatFileSize(transcript.file_size)}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Words:</strong> ${formatCount(transcript.word_count)}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Characters:</strong> ${formatCount(transcript.character_count)}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Confidence:</strong> ${transcript.confidence_score ? transcript.confidence_score.toFixed(2) : 'N/A'}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Created:</strong> ${formatTranscriptDate(transcript.created_at)}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Completed:</strong> ${formatTranscriptDate(transcript.completed_at)}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Processing Time:</strong> ${transcript.processing_time ? transcript.processing_time.toFixed(1) + 's' : 'N/A'}
+                    </div>
+                </div>
+            </div>
+            ${transcript.error_message ? `
+                <div class="alert alert-danger">
+                    <i class="bi bi-exclamation-triangle"></i> ${escapeHtml(transcript.error_message)}
+                </div>
+            ` : ''}
+            <div class="card">
+                <div class="card-header">
+                    <h6 class="mb-0">Transcript Text</h6>
+                </div>
+                <div class="card-body" style="white-space: pre-wrap; max-height: 400px; overflow-y: auto;">
+                    ${transcriptText || '<span class="text-muted">No transcript text available.</span>'}
+                </div>
+            </div>
+        `;
+    } catch (error) {
+        console.error('Transcript details error:', error);
+        modalBody.innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> Failed to load transcript: ${escapeHtml(error.message)}
+            </div>
+        `;
     }
 }
 
@@ -1158,6 +1374,7 @@ async function openLatestNovaAnalysis(fileId) {
             return;
         }
 
+        saveFileManagementState();
         window.location.href = `/dashboard/${jobId}`;
     } catch (error) {
         console.error('Open Nova analysis error:', error);
@@ -1522,6 +1739,50 @@ function escapeHtml(unsafe) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0 || !bytes) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+}
+
+function formatCount(count) {
+    if (count === null || count === undefined || count === 0) {
+        return 'N/A';
+    }
+    return count.toLocaleString();
+}
+
+function formatDurationUI(seconds) {
+    if (seconds === null || seconds === undefined || seconds === 0) {
+        return 'N/A';
+    }
+
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+
+    if (hours > 0) {
+        return `${hours}h ${minutes}m ${secs}s`;
+    } else if (minutes > 0) {
+        return `${minutes}m ${secs}s`;
+    }
+    return `${secs}s`;
+}
+
+function formatTranscriptDate(isoDate) {
+    if (!isoDate) return 'N/A';
+    const date = new Date(isoDate);
+    if (isNaN(date.getTime())) return 'N/A';
+    return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
 }
 
 function getStatusBadgeClass(status) {

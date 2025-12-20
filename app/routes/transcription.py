@@ -14,7 +14,7 @@ from typing import Dict, Any, Optional
 import io
 import json
 
-bp = Blueprint('transcription', __name__, url_prefix='/transcription')
+bp = Blueprint('transcription', __name__, url_prefix='/transcriptions')
 
 # Global transcription service instance (lazy loaded)
 _transcription_service = None

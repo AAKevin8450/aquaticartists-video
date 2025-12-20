@@ -327,6 +327,47 @@
     </div>
 </div>
 
+<!-- Transcript Details Modal -->
+<div class="modal fade" id="transcriptDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Transcript Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="transcriptDetailsBody">
+                <div class="text-center">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                <div class="btn-group" role="group">
+                    <button type="button" class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown">
+                        <i class="bi bi-download"></i> Download
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item download-transcript-btn" href="#" data-format="txt">
+                            <i class="bi bi-file-text"></i> Plain Text (.txt)
+                        </a></li>
+                        <li><a class="dropdown-item download-transcript-btn" href="#" data-format="json">
+                            <i class="bi bi-file-code"></i> JSON (.json)
+                        </a></li>
+                        <li><a class="dropdown-item download-transcript-btn" href="#" data-format="srt">
+                            <i class="bi bi-badge-cc"></i> SubRip (.srt)
+                        </a></li>
+                        <li><a class="dropdown-item download-transcript-btn" href="#" data-format="vtt">
+                            <i class="bi bi-badge-cc"></i> WebVTT (.vtt)
+                        </a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Single File Options Modal -->
 <div class="modal fade" id="singleOptionsModal" tabindex="-1">
     <div class="modal-dialog modal-lg">

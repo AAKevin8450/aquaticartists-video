@@ -1,3 +1,35 @@
+2025-12-20 14:46:19 - Updated by Codex
+
+[Category: Feature/API/UI]
+Introduce a Reports page with date-range analytics, improve transcript visibility in File Management, and streamline transcription navigation.
+
+[Purpose]
+Give operators a dedicated reporting surface for token usage, processing outcomes, and file mix while making transcript access and navigation more consistent across the app.
+
+[Impact]
+- Reports page adds date filters, quick ranges, and rollups for tokens, costs, jobs, files, and analysis breakdowns.
+- New reports summary API provides daily token/job series for dashboards.
+- File Management preserves filter state on deep links and offers transcript detail modal with download actions.
+- ⚠️ Transcriptions route now uses `/transcriptions`, and navigation links point back to File Management.
+- Archived standalone analysis templates removed to reduce clutter.
+
+[Files Modified]
+- app/__init__.py: Register the new reports blueprint.
+- app/database.py: Extend file stats with max completed transcript character count.
+- app/routes/file_management.py: Surface transcript length metadata in file listings.
+- app/routes/transcription.py: Move transcription routes to `/transcriptions`.
+- app/routes/reports.py: Add reports page and summary API endpoint.
+- app/static/js/file_management.js: Persist filters/scroll, add transcript modal view/downloads, and restore navigation state.
+- app/static/js/reports.js: Fetch and render report metrics with charts and tables.
+- app/templates/base.html: Add Transcriptions and Reports navigation links.
+- app/templates/dashboard.html: Update back link to restore File Management state.
+- app/templates/file_management.html: Add transcript details modal and download menu.
+- app/templates/history.html: Point empty-state actions to File Management.
+- app/templates/transcription.html: Redesign transcription UI for transcript browsing and back navigation.
+- app/templates/reports.html: Build reports UI with date range controls and KPI sections.
+- app/templates/image_analysis.html.archived: Removed archived image analysis template.
+- app/templates/video_analysis.html.archived: Removed archived video analysis template.
+
 2025-12-20 13:22:52 - Updated by Codex
 
 [Category: Feature/Bug Fix/API]
