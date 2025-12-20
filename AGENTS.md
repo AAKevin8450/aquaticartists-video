@@ -1,11 +1,12 @@
 # AGENTS
 
-Last Updated: 2025-12-19 23:22:47
+Last Updated: 2025-12-20 13:22:52
 
 Nova batch processing
 - Enable async batch mode by setting `BEDROCK_BATCH_ROLE_ARN`, `NOVA_BATCH_INPUT_PREFIX`, `NOVA_BATCH_OUTPUT_PREFIX` in `.env`.
 - Batch submissions use Bedrock batch jobs; results are finalized when `/api/nova/status/<nova_job_id>` is polled.
 - Batch cost estimates apply a 50% discount and are surfaced in the Nova UI.
+- Batch Nova runs auto-create proxies when missing and reuse the core Nova start flow.
 
 Nova transcription & embeddings
 - Transcription supports `whisper` (local) and `nova_sonic` (Bedrock) providers; Nova Sonic requires S3 access.
@@ -26,8 +27,10 @@ Local-first file handling
 - Uploads are stored locally in `./uploads` with a flat naming scheme: `originalname_<file_id>.ext`.
 - Video uploads create local proxies in `proxy_video` named `originalname_<source_file_id>_<proxy_spec>.ext`; `proxy_spec` is stored in proxy file metadata.
 - Direct S3 uploads are disabled; files may have `s3_key` set to NULL for local-only records.
+- Nova analysis will upload local files to S3 on-demand if `s3_key` is missing.
 - File Management supports directory import via `/api/files/import-directory`, scanning recursively without moving source files.
-- File Management batch actions use a modal with configurable options; Nova models can be pulled from `/api/nova/models`.
+- File Management single-file actions prompt for options (transcription, Nova, Rekognition) with defaults prefilled.
+- File Management batch actions use a modal with configurable options, including transcription provider/device/compute and Nova processing mode; Nova models can be pulled from `/api/nova/models`.
 - File Management status badges link to the latest Nova analysis and transcript views.
 
 Runtime & operations

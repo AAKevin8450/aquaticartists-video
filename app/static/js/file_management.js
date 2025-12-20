@@ -136,6 +136,7 @@ function initializeEventListeners() {
     }
 
     initializeBatchOptionsModal();
+    initializeSingleOptionsModal();
 }
 
 function applyFilters() {
@@ -835,6 +836,24 @@ function renderFileDetails(data, container) {
     const { file, proxy, analysis_jobs, transcripts } = data;
 
     let html = `
+        <div class="mb-4">
+            <h6 class="border-bottom pb-2">Actions</h6>
+            <div class="d-flex flex-wrap gap-2">
+                ${file.file_type === 'video' ? `
+                    <button class="btn btn-sm btn-outline-primary detail-transcribe-btn" data-file-id="${file.id}">
+                        <i class="bi bi-mic"></i> Transcribe
+                    </button>
+                ` : ''}
+                <button class="btn btn-sm btn-outline-success detail-rekognition-btn" data-file-id="${file.id}">
+                    <i class="bi bi-eye"></i> Rekognition
+                </button>
+                ${file.file_type === 'video' ? `
+                    <button class="btn btn-sm btn-outline-warning detail-nova-btn" data-file-id="${file.id}">
+                        <i class="bi bi-stars"></i> Nova
+                    </button>
+                ` : ''}
+            </div>
+        </div>
         <!-- File Info Section -->
         <div class="row mb-4">
             <div class="col-md-8">
@@ -1020,6 +1039,30 @@ function renderFileDetails(data, container) {
     }
 
     container.innerHTML = html;
+    attachFileDetailsActionListeners(container);
+}
+
+function attachFileDetailsActionListeners(container) {
+    container.querySelectorAll('.detail-transcribe-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const fileId = parseInt(e.currentTarget.dataset.fileId);
+            startTranscription(fileId);
+        });
+    });
+
+    container.querySelectorAll('.detail-rekognition-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const fileId = parseInt(e.currentTarget.dataset.fileId);
+            startRekognitionAnalysis(fileId);
+        });
+    });
+
+    container.querySelectorAll('.detail-nova-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const fileId = parseInt(e.currentTarget.dataset.fileId);
+            startNovaAnalysis(fileId);
+        });
+    });
 }
 
 // ============================================================================
@@ -1123,8 +1166,8 @@ async function openLatestNovaAnalysis(fileId) {
 }
 
 async function startTranscription(fileId) {
-    const model = prompt('Enter Whisper model (tiny, base, small, medium, large-v2, large-v3):', 'medium');
-    if (!model) return;
+    const options = await getSingleOptions('transcribe', fileId);
+    if (!options) return;
 
     try {
         showAlert('Starting transcription...', 'info');
@@ -1132,7 +1175,7 @@ async function startTranscription(fileId) {
         const response = await fetch(`/api/files/${fileId}/start-transcription`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model_name: model })
+            body: JSON.stringify(options)
         });
 
         if (!response.ok) {
@@ -1151,10 +1194,8 @@ async function startTranscription(fileId) {
 }
 
 async function startRekognitionAnalysis(fileId) {
-    // For simplicity, start label detection. In a full implementation, show a modal to select analysis types.
-    if (!confirm('Start Rekognition label detection analysis?')) {
-        return;
-    }
+    const options = await getSingleOptions('rekognition', fileId);
+    if (!options) return;
 
     try {
         showAlert('Starting analysis...', 'info');
@@ -1162,10 +1203,7 @@ async function startRekognitionAnalysis(fileId) {
         const response = await fetch(`/api/files/${fileId}/start-analysis`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                analysis_types: ['label_detection'],
-                use_proxy: true
-            })
+            body: JSON.stringify(options)
         });
 
         if (!response.ok) {
@@ -1184,9 +1222,8 @@ async function startRekognitionAnalysis(fileId) {
 }
 
 async function startNovaAnalysis(fileId) {
-    if (!confirm('Start Nova analysis with summary and chapters?')) {
-        return;
-    }
+    const options = await getSingleOptions('nova', fileId);
+    if (!options) return;
 
     try {
         showAlert('Starting Nova analysis...', 'info');
@@ -1194,10 +1231,7 @@ async function startNovaAnalysis(fileId) {
         const response = await fetch(`/api/files/${fileId}/start-nova`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                model: 'lite',
-                analysis_types: ['summary', 'chapters']
-            })
+            body: JSON.stringify(options)
         });
 
         if (!response.ok) {
@@ -1513,6 +1547,11 @@ let batchOptionsModal = null;
 let batchOptionsResolve = null;
 let batchOptionsResolved = false;
 let batchOptionsAction = null;
+let singleOptionsModal = null;
+let singleOptionsResolve = null;
+let singleOptionsResolved = false;
+let singleOptionsAction = null;
+let singleOptionsFileId = null;
 let novaModelsLoaded = false;
 
 async function startBatchAction(actionType) {
@@ -1623,6 +1662,10 @@ async function getBatchOptions(actionType) {
             confirmBtn.textContent = labels[actionType] || 'Start Batch';
         }
 
+        if (actionType === 'transcribe') {
+            updateTranscribeProviderUI('batch');
+        }
+
         if (actionType === 'nova') {
             loadNovaModels();
         }
@@ -1655,6 +1698,11 @@ function initializeBatchOptionsModal() {
             resolveBatchOptions(null);
         });
     }
+
+    const providerSelect = document.getElementById('batchTranscribeProvider');
+    if (providerSelect) {
+        providerSelect.addEventListener('change', () => updateTranscribeProviderUI('batch'));
+    }
 }
 
 function resolveBatchOptions(value) {
@@ -1664,6 +1712,15 @@ function resolveBatchOptions(value) {
         batchOptionsResolve(value);
     }
     batchOptionsResolve = null;
+}
+
+function updateTranscribeProviderUI(prefix) {
+    const providerSelect = document.getElementById(`${prefix}TranscribeProvider`);
+    if (!providerSelect) return;
+    const isNova = providerSelect.value === 'nova_sonic';
+    document.querySelectorAll(`.${prefix}-whisper-settings`).forEach(group => {
+        group.style.display = isNova ? 'none' : '';
+    });
 }
 
 function buildBatchOptions(actionType) {
@@ -1677,13 +1734,19 @@ function buildBatchOptions(actionType) {
         case 'proxy':
             return {};
         case 'transcribe': {
+            const provider = document.getElementById('batchTranscribeProvider')?.value || 'whisper';
             const model = document.getElementById('batchTranscribeModel')?.value || 'medium';
             const language = document.getElementById('batchTranscribeLanguage')?.value.trim();
             const force = !!document.getElementById('batchTranscribeForce')?.checked;
+            const device = document.getElementById('batchTranscribeDevice')?.value || 'auto';
+            const computeType = document.getElementById('batchTranscribeCompute')?.value || 'default';
             return {
-                model_name: model,
+                provider: provider,
+                model_size: model,
                 language: language || undefined,
-                force: force
+                force: force,
+                device: device,
+                compute_type: computeType
             };
         }
         case 'nova': {
@@ -1694,6 +1757,7 @@ function buildBatchOptions(actionType) {
                 showBatchOptionsError('Select at least one Nova analysis type.');
                 return null;
             }
+            const processingMode = document.getElementById('batchNovaProcessingMode')?.value || 'realtime';
             const options = {
                 summary_depth: document.getElementById('batchNovaSummaryDepth')?.value || 'standard',
                 language: document.getElementById('batchNovaLanguage')?.value || 'auto'
@@ -1701,7 +1765,8 @@ function buildBatchOptions(actionType) {
             return {
                 model: model,
                 analysis_types: analysisTypes,
-                options: options
+                options: options,
+                processing_mode: processingMode
             };
         }
         case 'rekognition': {
@@ -1722,6 +1787,233 @@ function buildBatchOptions(actionType) {
     }
 }
 
+async function getSingleOptions(actionType, fileId) {
+    return new Promise((resolve) => {
+        const modalEl = document.getElementById('singleOptionsModal');
+        if (!modalEl) {
+            resolve(null);
+            return;
+        }
+
+        if (!singleOptionsModal) {
+            singleOptionsModal = new bootstrap.Modal(modalEl);
+            modalEl.addEventListener('hidden.bs.modal', () => {
+                if (!singleOptionsResolved) {
+                    resolveSingleOptions(null);
+                }
+            });
+        }
+
+        singleOptionsAction = actionType;
+        singleOptionsFileId = fileId;
+        singleOptionsResolve = resolve;
+        singleOptionsResolved = false;
+
+        const form = document.getElementById('singleOptionsForm');
+        if (form) form.reset();
+
+        const description = document.getElementById('singleOptionsDescription');
+        if (description) {
+            const descriptions = {
+                transcribe: 'Choose transcription settings for this file.',
+                nova: 'Choose Nova analysis settings for this file.',
+                rekognition: 'Choose Rekognition settings for this file.'
+            };
+            description.textContent = descriptions[actionType] || 'Configure processing settings.';
+        }
+
+        const errorEl = document.getElementById('singleOptionsError');
+        if (errorEl) {
+            errorEl.textContent = '';
+            errorEl.classList.add('d-none');
+        }
+
+        document.querySelectorAll('.single-options-group').forEach(group => {
+            group.style.display = group.dataset.action === actionType ? '' : 'none';
+        });
+
+        const confirmBtn = document.getElementById('singleOptionsConfirmBtn');
+        if (confirmBtn) {
+            const labels = {
+                transcribe: 'Start Transcription',
+                nova: 'Start Nova Analysis',
+                rekognition: 'Start Rekognition Analysis'
+            };
+            confirmBtn.textContent = labels[actionType] || 'Start';
+        }
+
+        setSingleDefaults(actionType);
+        loadNovaModels();
+
+        singleOptionsModal.show();
+    });
+}
+
+function initializeSingleOptionsModal() {
+    const modalEl = document.getElementById('singleOptionsModal');
+    if (!modalEl) return;
+
+    const confirmBtn = document.getElementById('singleOptionsConfirmBtn');
+    if (confirmBtn) {
+        confirmBtn.addEventListener('click', () => {
+            const options = buildSingleOptions(singleOptionsAction);
+            if (!options) return;
+            resolveSingleOptions(options);
+            if (singleOptionsModal) {
+                singleOptionsModal.hide();
+            }
+        });
+    }
+
+    const cancelBtn = document.getElementById('singleOptionsCancelBtn');
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+            resolveSingleOptions(null);
+        });
+    }
+
+    const providerSelect = document.getElementById('singleTranscribeProvider');
+    if (providerSelect) {
+        providerSelect.addEventListener('change', () => updateTranscribeProviderUI('single'));
+    }
+}
+
+function resolveSingleOptions(value) {
+    if (singleOptionsResolved) return;
+    singleOptionsResolved = true;
+    if (singleOptionsResolve) {
+        singleOptionsResolve(value);
+    }
+    singleOptionsResolve = null;
+    singleOptionsFileId = null;
+}
+
+function setSingleDefaults(actionType) {
+    if (actionType === 'transcribe') {
+        const provider = document.getElementById('singleTranscribeProvider');
+        if (provider) provider.value = 'whisper';
+        const model = document.getElementById('singleTranscribeModel');
+        if (model) model.value = 'medium';
+        const language = document.getElementById('singleTranscribeLanguage');
+        if (language) language.value = '';
+        const force = document.getElementById('singleTranscribeForce');
+        if (force) force.checked = false;
+        const device = document.getElementById('singleTranscribeDevice');
+        if (device) device.value = 'auto';
+        const compute = document.getElementById('singleTranscribeCompute');
+        if (compute) compute.value = 'default';
+        updateTranscribeProviderUI('single');
+        return;
+    }
+
+    if (actionType === 'nova') {
+        const model = document.getElementById('singleNovaModel');
+        if (model) model.value = 'lite';
+        const processingMode = document.getElementById('singleNovaProcessingMode');
+        if (processingMode) processingMode.value = 'realtime';
+        const depth = document.getElementById('singleNovaSummaryDepth');
+        if (depth) depth.value = 'standard';
+        const language = document.getElementById('singleNovaLanguage');
+        if (language) language.value = 'auto';
+        const summary = document.getElementById('singleNovaSummary');
+        const chapters = document.getElementById('singleNovaChapters');
+        const elements = document.getElementById('singleNovaElements');
+        if (summary) summary.checked = true;
+        if (chapters) chapters.checked = true;
+        if (elements) elements.checked = false;
+        return;
+    }
+
+    if (actionType === 'rekognition') {
+        const label = document.getElementById('singleRekognitionLabels');
+        const faces = document.getElementById('singleRekognitionFaces');
+        const celebs = document.getElementById('singleRekognitionCelebrities');
+        const mod = document.getElementById('singleRekognitionModeration');
+        const text = document.getElementById('singleRekognitionText');
+        const persons = document.getElementById('singleRekognitionPersons');
+        const shots = document.getElementById('singleRekognitionShots');
+        const ppe = document.getElementById('singleRekognitionPPE');
+        if (label) label.checked = true;
+        if (faces) faces.checked = false;
+        if (celebs) celebs.checked = false;
+        if (mod) mod.checked = false;
+        if (text) text.checked = false;
+        if (persons) persons.checked = false;
+        if (shots) shots.checked = false;
+        if (ppe) ppe.checked = false;
+        const useProxy = document.getElementById('singleRekognitionUseProxy');
+        if (useProxy) useProxy.checked = true;
+    }
+}
+
+function buildSingleOptions(actionType) {
+    const errorEl = document.getElementById('singleOptionsError');
+    if (errorEl) {
+        errorEl.classList.add('d-none');
+    }
+
+    switch (actionType) {
+        case 'transcribe': {
+            const provider = document.getElementById('singleTranscribeProvider')?.value || 'whisper';
+            const model = document.getElementById('singleTranscribeModel')?.value || 'medium';
+            const language = document.getElementById('singleTranscribeLanguage')?.value.trim();
+            const force = !!document.getElementById('singleTranscribeForce')?.checked;
+            const device = document.getElementById('singleTranscribeDevice')?.value || 'auto';
+            const computeType = document.getElementById('singleTranscribeCompute')?.value || 'default';
+            return {
+                provider: provider,
+                model_size: model,
+                language: language || undefined,
+                force: force,
+                device: device,
+                compute_type: computeType
+            };
+        }
+        case 'nova': {
+            const model = document.getElementById('singleNovaModel')?.value || 'lite';
+            const analysisTypes = Array.from(document.querySelectorAll('.single-nova-type:checked'))
+                .map(input => input.value);
+            if (analysisTypes.length === 0) {
+                showSingleOptionsError('Select at least one Nova analysis type.');
+                return null;
+            }
+            const processingMode = document.getElementById('singleNovaProcessingMode')?.value || 'realtime';
+            const options = {
+                summary_depth: document.getElementById('singleNovaSummaryDepth')?.value || 'standard',
+                language: document.getElementById('singleNovaLanguage')?.value || 'auto'
+            };
+            return {
+                model: model,
+                analysis_types: analysisTypes,
+                options: options,
+                processing_mode: processingMode
+            };
+        }
+        case 'rekognition': {
+            const analysisTypes = Array.from(document.querySelectorAll('.single-rekognition-type:checked'))
+                .map(input => input.value);
+            if (analysisTypes.length === 0) {
+                showSingleOptionsError('Select at least one Rekognition analysis type.');
+                return null;
+            }
+            const useProxy = !!document.getElementById('singleRekognitionUseProxy')?.checked;
+            return {
+                analysis_types: analysisTypes,
+                use_proxy: useProxy
+            };
+        }
+        default:
+            return null;
+    }
+}
+
+function showSingleOptionsError(message) {
+    const errorEl = document.getElementById('singleOptionsError');
+    if (!errorEl) return;
+    errorEl.textContent = message;
+    errorEl.classList.remove('d-none');
+}
+
 function showBatchOptionsError(message) {
     const errorEl = document.getElementById('batchOptionsError');
     if (!errorEl) return;
@@ -1731,8 +2023,11 @@ function showBatchOptionsError(message) {
 
 async function loadNovaModels() {
     if (novaModelsLoaded) return;
-    const modelSelect = document.getElementById('batchNovaModel');
-    if (!modelSelect) return;
+    const modelSelects = [
+        document.getElementById('batchNovaModel'),
+        document.getElementById('singleNovaModel')
+    ].filter(Boolean);
+    if (modelSelects.length === 0) return;
 
     try {
         const response = await fetch('/api/nova/models');
@@ -1744,18 +2039,20 @@ async function loadNovaModels() {
             return;
         }
 
-        modelSelect.innerHTML = '';
-        data.models.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.id;
-            option.textContent = model.name;
-            modelSelect.appendChild(option);
-        });
+        modelSelects.forEach(modelSelect => {
+            modelSelect.innerHTML = '';
+            data.models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model.id;
+                option.textContent = model.name;
+                modelSelect.appendChild(option);
+            });
 
-        const defaultOption = modelSelect.querySelector('option[value="lite"]');
-        if (defaultOption) {
-            defaultOption.selected = true;
-        }
+            const defaultOption = modelSelect.querySelector('option[value="lite"]');
+            if (defaultOption) {
+                defaultOption.selected = true;
+            }
+        });
         novaModelsLoaded = true;
     } catch (error) {
         console.warn('Failed to load Nova models:', error);
