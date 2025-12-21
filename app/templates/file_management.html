@@ -444,8 +444,6 @@
                                 <select class="form-select" id="singleNovaModel">
                                     <option value="lite" selected>Nova 2 Lite</option>
                                     <option value="pro">Nova Pro</option>
-                                    <option value="pro_2_preview">Nova 2 Pro (Preview)</option>
-                                    <option value="omni_2_preview">Nova 2 Omni (Preview)</option>
                                     <option value="premier">Nova Premier</option>
                                 </select>
                                 <small class="text-muted">Uses Nova model keys (lite, pro, premier).</small>
@@ -456,7 +454,7 @@
                                     <option value="realtime" selected>Realtime</option>
                                     <option value="batch">Batch (50% off)</option>
                                 </select>
-                                <small class="text-muted">Batch runs via Bedrock batch jobs.</small>
+                                <small class="text-muted" id="singleNovaProcessingNote">Batch runs via Bedrock batch jobs.</small>
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Summary Depth</label>
@@ -656,8 +654,6 @@
                                 <select class="form-select" id="batchNovaModel">
                                     <option value="lite" selected>Nova 2 Lite</option>
                                     <option value="pro">Nova Pro</option>
-                                    <option value="pro_2_preview">Nova 2 Pro (Preview)</option>
-                                    <option value="omni_2_preview">Nova 2 Omni (Preview)</option>
                                     <option value="premier">Nova Premier</option>
                                 </select>
                                 <small class="text-muted">Uses Nova model keys (lite, pro, premier).</small>
@@ -666,7 +662,7 @@
                                     <option value="realtime" selected>Realtime</option>
                                     <option value="batch">Batch (50% off)</option>
                                 </select>
-                                <small class="text-muted">Batch runs via Bedrock batch jobs.</small>
+                                <small class="text-muted" id="batchNovaProcessingNote">Batch runs via Bedrock batch jobs.</small>
                             </div>
                             <div class="col-md-6">
                                 <label class="form-label">Summary Depth</label>
@@ -818,19 +814,25 @@
 
                 <!-- Statistics -->
                 <div class="row text-center mb-3" id="batchStats" style="display: none;">
-                    <div class="col-4">
+                    <div class="col-3">
+                        <div class="d-flex flex-column">
+                            <small class="text-muted">Total</small>
+                            <h5 class="mb-0" id="batchTotal">0</h5>
+                        </div>
+                    </div>
+                    <div class="col-3">
                         <div class="d-flex flex-column">
                             <small class="text-muted">Completed</small>
                             <h5 class="mb-0 text-success" id="batchCompleted">0</h5>
                         </div>
                     </div>
-                    <div class="col-4">
+                    <div class="col-3">
                         <div class="d-flex flex-column">
                             <small class="text-muted">Failed</small>
                             <h5 class="mb-0 text-danger" id="batchFailed">0</h5>
                         </div>
                     </div>
-                    <div class="col-4">
+                    <div class="col-3">
                         <div class="d-flex flex-column">
                             <small class="text-muted">Elapsed</small>
                             <h5 class="mb-0" id="batchElapsed">0s</h5>

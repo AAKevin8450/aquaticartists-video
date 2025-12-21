@@ -1,3 +1,83 @@
+2025-12-21 16:47:17 - Updated by Claude Code
+
+[Category: Bug Fix/Enhancement/Infrastructure]
+Improve Nova Sonic transcription reliability, enhance file filtering with separate date ranges, fix FFmpeg proxy audio handling, and optimize batch operations to process full filtered result sets.
+
+[Purpose]
+Address multiple production issues discovered during real-world usage: Nova Sonic API response parsing failures, proxy creation errors for videos without audio or with multiple audio streams, file management date filtering confusion between upload vs creation dates, and batch operations only processing currently visible page instead of all filtered files.
+
+[Impact]
+- Nova Sonic transcription now handles all Bedrock response formats (streaming/non-streaming, multiple content structures)
+- Debug logging available via NOVA_SONIC_DEBUG environment variable for troubleshooting API issues
+- FFmpeg proxy creation intelligently selects best audio stream (highest channel count) and handles audio-less videos gracefully
+- File management date filters split into upload_from_date/upload_to_date and created_from_date/created_to_date for clarity
+- Batch operations (proxy, transcription, Nova, Rekognition) now fetch ALL filtered files across all pages (500 files per request)
+- Batch Nova UI displays minimum file requirement (100 files) and disables batch mode when threshold not met
+- Removed Nova 2 Pro Preview and Nova 2 Omni Preview models (preview models removed from production)
+- ⚠️ Breaking: File management API date parameters changed from from_date/to_date to upload_from_date/upload_to_date + created_from_date/created_to_date
+
+[Files Modified]
+- app/services/nova_transcription_service.py (+147 lines): Complete rewrite of Bedrock response parsing with _read_invoke_response(), _read_stream_response(), _invoke_bedrock() methods, fallback content extraction from multiple response formats, debug logging with redacted S3 URIs
+- app/routes/upload.py (+55 lines): Added _select_audio_stream() to probe audio streams via ffprobe, select highest channel count, handle videos without audio in _create_proxy_video()
+- app/routes/file_management.py (+73 lines): Split date filtering into 4 parameters (upload_from/to, created_from/to), improved created_at calculation using min(ctime, mtime), added _normalize_transcription_provider() helper, fetchFilteredFileIds() for batch operations
+- app/static/js/file_management.js (+109 lines): Added buildFileQueryParams(), fetchFilteredFileIds() for paginated batch fetching (500 files per page), updateNovaBatchModeAvailability() to enforce 100-file minimum, display total files in batch progress, batch operations now process full filtered set
+- app/routes/transcription.py (+16 lines): Enhanced _normalize_provider() to handle sonic2/sonic_2/sonic_2_online aliases, improved error messages
+- app/services/nova_service.py (-20 lines): Removed pro_2_preview and omni_2_preview model definitions (preview models deprecated)
+- app/routes/nova_analysis.py (-2 lines): Updated valid_models list to exclude preview models
+- app/templates/file_management.html (-20 lines): Removed Nova 2 Pro Preview and Nova 2 Omni Preview from model dropdown, updated UI text
+- app/templates/history.html (+6 lines): Minor UI text improvements
+
+[Technical Details]
+**Nova Sonic Response Parsing**:
+- Multi-format support: handles response.output.message.content (list/dict), response.message.content, response.transcript, response.text
+- Streaming support: processes event stream chunks, handles internalServerException and modelStreamError events
+- Non-streaming support: reads body as StreamingBody or string, JSON parses with fallback to last valid line
+- Debug mode: logs request/response payloads with S3 URI redaction when NOVA_SONIC_DEBUG=1
+- invoke_model_with_response_stream API used when available, falls back to invoke_model
+
+**FFmpeg Audio Stream Selection**:
+- Probes all audio streams via ffprobe -select_streams a -show_entries stream=index,codec_name,channels
+- Filters streams with valid codec_name (excludes 'none' codec)
+- Selects stream with highest channel count (stereo preferred over mono)
+- Proxy command now conditionally includes audio mapping only if valid stream found
+- Handles audio-less videos without errors (no -c:a, -b:a, -ac flags when no audio)
+
+**Batch Operation Improvements**:
+- BATCH_FETCH_PAGE_SIZE constant = 500 files per request
+- fetchFilteredFileIds() paginates through full filtered result set (calculates totalPages = ceil(total / 500))
+- buildFileQueryParams() helper creates URLSearchParams from currentFilters with overrides
+- All batch actions (proxy, transcription, Nova, Rekognition) now call fetchFilteredFileIds() instead of using currentFiles array
+- getCurrentFileTotal() safely extracts total from pagination or currentFiles array
+- Batch progress UI shows total_files in statistics panel
+
+**Date Filtering Architecture**:
+- upload_from_date/upload_to_date: Filters on files.uploaded_at (when file was uploaded to S3/system)
+- created_from_date/created_to_date: Filters on files.created_at (file creation timestamp from metadata)
+- created_at calculation: min(file_ctime, file_mtime) with fallback to mtime or ctime if one is missing
+- Database list_files() method accepts all 4 date parameters separately
+- Frontend sends separate parameters based on filter type selection
+
+**Nova Batch Mode UI**:
+- NOVA_BATCH_MIN_FILES constant = 100 files
+- updateNovaProcessingSelect() checks current file total against minimum threshold
+- Batch option disabled in dropdown when fileCount < 100
+- Dynamic note text explains requirement and current file count
+- Called on page load and when filters change (updateNovaBatchModeAvailability)
+
+[Removed/Deprecated]
+- Nova 2 Pro Preview model (us.amazon.nova-pro-v2:0) - removed from NOVA_MODELS dictionary
+- Nova 2 Omni Preview model (us.amazon.nova-omni-v2:0) - removed from NOVA_MODELS dictionary
+- Date filter parameters: from_date, to_date (replaced by upload_from_date/upload_to_date + created_from_date/created_to_date)
+
+[Testing Considerations]
+- Test Nova Sonic with various Bedrock response formats (streaming vs non-streaming)
+- Enable NOVA_SONIC_DEBUG=1 and verify logs show redacted S3 URIs
+- Test proxy creation with: audio-less videos, single audio stream, multiple audio streams (different channel counts)
+- Verify file management date filters work independently (upload date only, created date only, both combined)
+- Test batch operations with >500 files to ensure pagination fetches all filtered files
+- Verify Nova batch mode UI disables correctly when <100 files in filtered view
+- Test batch progress display shows total_files count
+
 2025-12-21 00:00:00 - Updated by Claude Code
 
 [Category: Feature/Infrastructure/UI]

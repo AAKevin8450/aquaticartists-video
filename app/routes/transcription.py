@@ -63,7 +63,11 @@ def _normalize_provider(provider: str) -> str:
     if not provider:
         return 'whisper'
     provider = provider.lower()
-    if provider in ('nova', 'sonic', 'nova_sonic'):
+    if provider in (
+        'nova', 'sonic', 'nova_sonic',
+        'sonic2', 'sonic_2', 'sonic_2_online',
+        'nova2_sonic', 'nova_2_sonic'
+    ):
         return 'nova_sonic'
     return provider
 
@@ -76,7 +80,7 @@ def _get_model_name(provider: str, model_size: Optional[str] = None) -> str:
 
 def _validate_provider(provider: str) -> Optional[str]:
     if provider not in ('whisper', 'nova_sonic'):
-        return f"Invalid provider: {provider}. Valid options: whisper, nova_sonic."
+        return f"Invalid provider: {provider}. Valid options: whisper, nova_sonic (sonic_2_online)."
     return None
 
 
@@ -184,7 +188,8 @@ def scan_directory():
         {
             "directory_path": "/path/to/videos",
             "recursive": true,
-            "extensions": [".mp4", ".mov"]  # optional
+            "extensions": [".mp4", ".mov"],  # optional
+            "provider": "whisper"  # optional (whisper or nova_sonic)
         }
 
     Returns:
@@ -279,6 +284,8 @@ def transcribe_single():
         {
             "file_path": "/path/to/video.mp4",
             "language": "en",  # optional
+            "provider": "whisper",  # optional (whisper or nova_sonic)
+            "model_size": "medium",  # optional (whisper only)
             "force": false  # optional, reprocess even if already exists
         }
 
@@ -395,7 +402,8 @@ def start_batch():
             "file_paths": ["/path/to/video1.mp4", "/path/to/video2.mp4"],
             "language": "en",  # optional
             "force": false,  # optional
-            "model_size": "large-v3"  # optional (tiny, base, small, medium, large-v2, large-v3)
+            "model_size": "large-v3",  # optional (whisper only)
+            "provider": "whisper"  # optional (whisper or nova_sonic)
         }
 
     Returns:

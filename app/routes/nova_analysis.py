@@ -149,7 +149,7 @@ def start_nova_analysis_internal(
     if not isinstance(analysis_types, list) or not analysis_types:
         return {'error': 'analysis_types must be a non-empty array'}, 400
 
-    valid_models = ['lite', 'pro', 'pro_2_preview', 'omni_2_preview', 'premier']
+    valid_models = ['lite', 'pro', 'premier']
     if model not in valid_models:
         return {'error': f'model must be one of: {valid_models}'}, 400
 

@@ -201,6 +201,8 @@
     import { showAlert } from '{{ url_for('static', filename='js/utils.js') }}';
 
     let currentJobResults = null;
+    let pollingInterval = null;
+    let currentJobs = [];
 
     // Attach event listeners to dynamically loaded content
     function attachEventListeners() {
@@ -537,10 +539,6 @@
 
     // Load jobs automatically on page load
     loadJobs();
-
-    // Auto-polling for running jobs
-    let pollingInterval = null;
-    let currentJobs = [];
 
     function startPolling() {
         // Clear existing interval if any

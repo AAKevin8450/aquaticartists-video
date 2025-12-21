@@ -26,6 +26,7 @@ let currentFilters = {
 };
 
 const FILE_MANAGEMENT_STATE_KEY = 'fileManagementState';
+const BATCH_FETCH_PAGE_SIZE = 500;
 let pendingScrollY = null;
 let currentFiles = [];
 let currentPagination = null;
@@ -460,15 +461,7 @@ async function loadFiles() {
     container.innerHTML = '<div class="text-center"><div class="spinner-border"></div></div>';
 
     try {
-        // Build query string
-        const params = new URLSearchParams();
-        Object.keys(currentFilters).forEach(key => {
-            const value = currentFilters[key];
-            if (value !== '' && value !== null && value !== undefined) {
-                params.append(key, value);
-            }
-        });
-
+        const params = buildFileQueryParams();
         const response = await fetch(`/api/files?${params.toString()}`);
         if (!response.ok) {
             const error = await response.json();
@@ -894,6 +887,8 @@ function updateFilesCount(total) {
     if (batchCount) {
         batchCount.textContent = `${total} file${total !== 1 ? 's' : ''}`;
     }
+
+    updateNovaBatchModeAvailability(total);
 }
 
 function updateSummary(summary) {
@@ -1814,6 +1809,90 @@ let singleOptionsResolved = false;
 let singleOptionsAction = null;
 let singleOptionsFileId = null;
 let novaModelsLoaded = false;
+const NOVA_BATCH_MIN_FILES = 100;
+
+function updateNovaProcessingSelect(selectId, noteId, fileCount, isSingle) {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+
+    const batchOption = select.querySelector('option[value="batch"]');
+    if (!batchOption) return;
+
+    const meetsMinimum = fileCount >= NOVA_BATCH_MIN_FILES;
+    batchOption.disabled = !meetsMinimum;
+
+    if (!meetsMinimum && select.value === 'batch') {
+        select.value = 'realtime';
+    }
+
+    const note = document.getElementById(noteId);
+    if (!note) return;
+
+    if (meetsMinimum) {
+        note.textContent = 'Batch runs via Bedrock batch jobs.';
+    } else if (isSingle) {
+        note.textContent = `Batch requires at least ${NOVA_BATCH_MIN_FILES} files and is only available for batch runs.`;
+    } else {
+        note.textContent = `Batch requires at least ${NOVA_BATCH_MIN_FILES} files in the current view (currently ${fileCount}).`;
+    }
+}
+
+function updateNovaBatchModeAvailability(totalFiles) {
+    const safeTotal = Number.isFinite(totalFiles) ? totalFiles : 0;
+    updateNovaProcessingSelect('batchNovaProcessingMode', 'batchNovaProcessingNote', safeTotal, false);
+    updateNovaProcessingSelect('singleNovaProcessingMode', 'singleNovaProcessingNote', 1, true);
+}
+
+function getCurrentFileTotal() {
+    if (currentPagination && Number.isFinite(currentPagination.total)) {
+        return currentPagination.total;
+    }
+    if (Array.isArray(currentFiles)) {
+        return currentFiles.length;
+    }
+    return 0;
+}
+
+function buildFileQueryParams(overrides = {}) {
+    const params = new URLSearchParams();
+    const merged = { ...currentFilters, ...overrides };
+    Object.keys(merged).forEach(key => {
+        const value = merged[key];
+        if (value !== '' && value !== null && value !== undefined) {
+            params.append(key, value);
+        }
+    });
+    return params;
+}
+
+async function fetchFilteredFileIds() {
+    const total = getCurrentFileTotal();
+    if (!total) {
+        return [];
+    }
+
+    const perPage = Math.min(BATCH_FETCH_PAGE_SIZE, total);
+    const totalPages = Math.ceil(total / perPage);
+    const fileIds = [];
+
+    for (let page = 1; page <= totalPages; page += 1) {
+        const params = buildFileQueryParams({ page, per_page: perPage });
+        const response = await fetch(`/api/files?${params.toString()}`);
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.error || 'Failed to fetch batch files');
+        }
+
+        const data = await response.json();
+        (data.files || []).forEach(file => {
+            if (file && file.id > 0) {
+                fileIds.push(file.id);
+            }
+        });
+    }
+
+    return fileIds;
+}
 
 async function startBatchAction(actionType) {
     // Get confirmation and options based on action type
@@ -1823,12 +1902,11 @@ async function startBatchAction(actionType) {
     }
 
     try {
-        // Extract file IDs from currently displayed/filtered files
-        // This ensures batch operations only affect the files the user can currently see
-        const fileIds = currentFiles.map(file => file.id).filter(id => id > 0);
+        // Extract file IDs from the full filtered result set
+        const fileIds = await fetchFilteredFileIds();
 
         if (fileIds.length === 0) {
-            showAlert('No files to process in the current view', 'warning');
+            showAlert('No files to process for the current filters', 'warning');
             return;
         }
 
@@ -1929,6 +2007,7 @@ async function getBatchOptions(actionType) {
 
         if (actionType === 'nova') {
             loadNovaModels();
+            updateNovaBatchModeAvailability(getCurrentFileTotal());
         }
 
         batchOptionsModal.show();
@@ -2105,6 +2184,9 @@ async function getSingleOptions(actionType, fileId) {
 
         setSingleDefaults(actionType);
         loadNovaModels();
+        if (actionType === 'nova') {
+            updateNovaBatchModeAvailability(getCurrentFileTotal());
+        }
 
         singleOptionsModal.show();
     });
@@ -2400,6 +2482,7 @@ function updateBatchProgress(data) {
     // Statistics
     if (data.status === 'RUNNING' || data.status === 'COMPLETED') {
         document.getElementById('batchStats').style.display = 'flex';
+        document.getElementById('batchTotal').textContent = data.total_files;
         document.getElementById('batchCompleted').textContent = data.completed_files;
         document.getElementById('batchFailed').textContent = data.failed_files;
         document.getElementById('batchElapsed').textContent = `${data.elapsed_seconds.toFixed(1)}s`;
