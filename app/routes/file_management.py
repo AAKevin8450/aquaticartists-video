@@ -64,6 +64,19 @@ class BatchJob:
         }
 
 
+def _normalize_transcription_provider(provider: str) -> str:
+    if not provider:
+        return 'whisper'
+    provider = provider.lower()
+    if provider in (
+        'nova', 'sonic', 'nova_sonic',
+        'sonic2', 'sonic_2', 'sonic_2_online',
+        'nova2_sonic', 'nova_2_sonic'
+    ):
+        return 'nova_sonic'
+    return provider
+
+
 # ============================================================================
 # PAGE ROUTES
 # ============================================================================
@@ -88,8 +101,10 @@ def list_files():
         - has_proxy: Filter files with proxy (true/false)
         - has_transcription: Filter files with transcripts (true/false)
         - search: Full-text search across filenames, metadata, transcripts
-        - from_date: Uploaded after date (ISO format)
-        - to_date: Uploaded before date (ISO format)
+        - upload_from_date: Uploaded after date (YYYY-MM-DD)
+        - upload_to_date: Uploaded before date (YYYY-MM-DD)
+        - created_from_date: Created after date (YYYY-MM-DD)
+        - created_to_date: Created before date (YYYY-MM-DD)
         - sort_by: Sort field (uploaded_at, filename, size_bytes, duration_seconds)
         - sort_order: 'asc' or 'desc'
         - page: Page number (default 1)
@@ -119,13 +134,9 @@ def list_files():
         upload_from_date = request.args.get('upload_from_date')
         upload_to_date = request.args.get('upload_to_date')
 
-        # Created date filters (for now, both filter on uploaded_at until we store actual file creation dates)
+        # Created date filters (based on file metadata when available, otherwise uploaded_at)
         created_from_date = request.args.get('created_from_date')
         created_to_date = request.args.get('created_to_date')
-
-        # Combine date filters (use whichever is set, prefer upload dates)
-        from_date = upload_from_date or created_from_date
-        to_date = upload_to_date or created_to_date
 
         min_size = request.args.get('min_size')
         max_size = request.args.get('max_size')
@@ -171,8 +182,10 @@ def list_files():
             has_nova_analysis=has_nova_analysis,
             has_rekognition_analysis=has_rekognition_analysis,
             search=search or None,
-            from_date=from_date,
-            to_date=to_date,
+            upload_from_date=upload_from_date,
+            upload_to_date=upload_to_date,
+            created_from_date=created_from_date,
+            created_to_date=created_to_date,
             min_size=min_size,
             max_size=max_size,
             min_duration=min_duration,
@@ -191,8 +204,10 @@ def list_files():
             has_nova_analysis=has_nova_analysis,
             has_rekognition_analysis=has_rekognition_analysis,
             search=search or None,
-            from_date=from_date,
-            to_date=to_date,
+            upload_from_date=upload_from_date,
+            upload_to_date=upload_to_date,
+            created_from_date=created_from_date,
+            created_to_date=created_to_date,
             min_size=min_size,
             max_size=max_size,
             min_duration=min_duration,
@@ -207,8 +222,10 @@ def list_files():
             has_nova_analysis=has_nova_analysis,
             has_rekognition_analysis=has_rekognition_analysis,
             search=search or None,
-            from_date=from_date,
-            to_date=to_date,
+            upload_from_date=upload_from_date,
+            upload_to_date=upload_to_date,
+            created_from_date=created_from_date,
+            created_to_date=created_to_date,
             min_size=min_size,
             max_size=max_size,
             min_duration=min_duration,
@@ -219,7 +236,15 @@ def list_files():
         formatted_files = []
         for file in files:
             metadata = file.get('metadata') or {}
-            created_epoch = metadata.get('file_ctime') or metadata.get('file_mtime')
+            file_ctime = metadata.get('file_ctime')
+            file_mtime = metadata.get('file_mtime')
+            created_epoch = None
+            if isinstance(file_ctime, (int, float)) and isinstance(file_mtime, (int, float)):
+                created_epoch = min(file_ctime, file_mtime)
+            elif isinstance(file_mtime, (int, float)):
+                created_epoch = file_mtime
+            elif isinstance(file_ctime, (int, float)):
+                created_epoch = file_ctime
             created_at_display = None
             if isinstance(created_epoch, (int, float)):
                 created_at_display = format_timestamp(
@@ -742,7 +767,7 @@ def start_transcription_for_file(file_id):
 
     Request body:
         {
-            "provider": "whisper",
+            "provider": "whisper",  # whisper or nova_sonic
             "model_size": "medium",
             "language": "en",
             "force": false,
@@ -758,11 +783,9 @@ def start_transcription_for_file(file_id):
     """
     try:
         data = request.get_json() or {}
-        provider = (data.get('provider') or 'whisper').lower()
-        if provider in ('nova', 'sonic', 'nova_sonic'):
-            provider = 'nova_sonic'
+        provider = _normalize_transcription_provider(data.get('provider'))
         if provider not in ('whisper', 'nova_sonic'):
-            return jsonify({'error': 'Invalid provider. Use whisper or nova_sonic.'}), 400
+            return jsonify({'error': 'Invalid provider. Use whisper or nova_sonic (sonic_2_online).'}), 400
 
         model_name = data.get('model_size') or data.get('model_name') or current_app.config.get('WHISPER_MODEL_SIZE', 'medium')
         language = data.get('language')
@@ -1287,7 +1310,7 @@ def batch_transcribe():
     Request body:
         {
             "file_ids": [1, 2, 3, ...],
-            "provider": "whisper",
+            "provider": "whisper",  # whisper or nova_sonic
             "model_size": "medium",
             "language": "en",
             "force": false,
@@ -1312,11 +1335,9 @@ def batch_transcribe():
             return jsonify({'error': 'No file IDs provided'}), 400
 
         # Transcription options
-        provider = (data.get('provider') or 'whisper').lower()
-        if provider in ('nova', 'sonic', 'nova_sonic'):
-            provider = 'nova_sonic'
+        provider = _normalize_transcription_provider(data.get('provider'))
         if provider not in ('whisper', 'nova_sonic'):
-            return jsonify({'error': 'Invalid provider. Use whisper or nova_sonic.'}), 400
+            return jsonify({'error': 'Invalid provider. Use whisper or nova_sonic (sonic_2_online).'}), 400
 
         model_name = data.get('model_size') or data.get('model_name') or current_app.config.get('WHISPER_MODEL_SIZE', 'medium')
         language = data.get('language')
@@ -1712,9 +1733,7 @@ def _run_batch_transcribe(app, job: BatchJob):
         from app.utils.media_metadata import extract_media_metadata, MediaMetadataError
 
         options = job.options or {}
-        provider = (options.get('provider') or 'whisper').lower()
-        if provider in ('nova', 'sonic', 'nova_sonic'):
-            provider = 'nova_sonic'
+        provider = _normalize_transcription_provider(options.get('provider'))
         model_name = options.get('model_name') or current_app.config.get('WHISPER_MODEL_SIZE', 'medium')
         device = options.get('device') or current_app.config.get('WHISPER_DEVICE', 'auto')
         compute_type = options.get('compute_type') or current_app.config.get('WHISPER_COMPUTE_TYPE', 'default')

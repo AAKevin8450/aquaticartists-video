@@ -76,26 +76,6 @@ class NovaVideoService:
             'best_for': 'Complex reasoning, detailed analysis',
             'supports_batch': True
         },
-        'pro_2_preview': {
-            'id': 'us.amazon.nova-pro-v2:0',
-            'name': 'Nova 2 Pro (Preview)',
-            'context_tokens': 300000,
-            'max_video_minutes': 30,
-            'price_input_per_1k': 0.80,
-            'price_output_per_1k': 3.20,
-            'best_for': 'Preview model for advanced reasoning',
-            'supports_batch': True
-        },
-        'omni_2_preview': {
-            'id': 'us.amazon.nova-omni-v2:0',
-            'name': 'Nova 2 Omni (Preview)',
-            'context_tokens': 300000,
-            'max_video_minutes': 30,
-            'price_input_per_1k': 2.00,
-            'price_output_per_1k': 8.00,
-            'best_for': 'Preview model for multimodal comprehension',
-            'supports_batch': True
-        },
         'premier': {
             'id': 'us.amazon.nova-premier-v1:0',
             'name': 'Nova Premier',

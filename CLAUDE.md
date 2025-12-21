@@ -40,6 +40,8 @@ Critical environment variables are stored in .env file (not in git):
 4. **Face Collections** (app/services/face_collection_service.py) - Face management
 5. **Transcription Service** (app/services/transcription_service.py) - Local video transcription using faster-whisper
 6. **Nova Service** (app/services/nova_service.py) - AWS Bedrock Nova intelligent video analysis (summary, chapters, elements)
+   - Supported models: Lite, Pro, Premier (preview models pro_2_preview and omni_2_preview removed 2025-12-21)
+   - Nova Sonic transcription via app/services/nova_transcription_service.py with enhanced Bedrock API compatibility
 7. **Database Layer** (app/database.py) - SQLite operations with optimized queries
    - get_dashboard_stats(): Returns 20+ metrics across 8 categories (library overview, processing statistics, proxy statistics, transcription statistics, analysis breakdown, recent activity, content percentages, performance metrics)
    - list_files(): High-performance LEFT JOIN query with aggregated statistics (eliminates N+1 problem)
@@ -50,8 +52,10 @@ Critical environment variables are stored in .env file (not in git):
 8. **Analysis API** (app/routes/analysis.py) - Multi-select analysis endpoint (supports arrays of analysis types)
 9. **Nova API** (app/routes/nova_analysis.py) - Nova video analysis endpoints (5 endpoints: /analyze, /status, /results, /models, /estimate-cost)
 10. **File Management API** (app/routes/file_management.py) - Centralized file management with search/filter/actions (10 endpoints: list, details, create-proxy, start-analysis, start-transcription, start-nova, delete-cascade, s3-files)
-    - Batch operations (proxy, transcribe, nova, rekognition) process only currently filtered/displayed files
+    - Batch operations (proxy, transcribe, nova, rekognition) fetch ALL filtered files across all pages (500 files per paginated request)
     - Batch proxy creation creates local-only proxies (no S3 upload) to save costs for large video libraries
+    - Date filtering: upload_from_date/upload_to_date (S3 upload time), created_from_date/created_to_date (file metadata creation time)
+    - Nova batch mode requires minimum 100 files (enforced in UI with dynamic availability checks)
 11. **Search API** (app/routes/search.py) - Unified search across all data sources (4 endpoints: /search, /api/search, /api/search/count, /api/search/filters)
     - Multi-source search with advanced filtering, sorting, and pagination
     - Performance-optimized with 7 database indexes for sub-500ms response times
@@ -91,7 +95,7 @@ Critical environment variables are stored in .env file (not in git):
 - Excel export: Professional formatted Excel files with Summary and Data sheets using openpyxl
 - Visual dashboard: Interactive charts, graphs, and insights for video analysis results (accessible via /dashboard/<job_id>)
 - File management: Centralized file view showing 3,161+ files (uploaded + transcribed) with summary statistics (count, total size, total duration), full-text search, advanced filtering, status badges, quick actions, and S3 file operations (view/download/delete)
-- Batch operations: All batch actions (proxy creation, transcription, Nova analysis, Rekognition analysis) respect current search/filter criteria and only process displayed files
+- Batch operations: All batch actions (proxy creation, transcription, Nova analysis, Rekognition analysis) respect current search/filter criteria and fetch ALL filtered files across pages (not just displayed page)
 - High-performance database: LEFT JOIN queries with GROUP BY aggregation deliver sub-200ms page loads even with 10,000+ files, 7 search indexes enable sub-500ms search across all data sources
 
 ### Running the Application
@@ -121,7 +125,15 @@ python run.py
 ## Known Issues
 - **Amazon Rekognition Person Tracking**: Returns AccessDeniedException despite correct IAM permissions. This appears to be an AWS account-level restriction requiring AWS Support enablement. All other video analysis types (labels, faces, celebrities, moderation, text, segments, face search) work correctly.
 
-## Recent Bug Fixes (2025-12-17)
+## Recent Bug Fixes
+
+**2025-12-21**:
+- **Nova Sonic Response Parsing**: Fixed transcription failures by implementing comprehensive Bedrock API response parsing supporting both streaming and non-streaming formats with multiple content structures. Added debug logging via NOVA_SONIC_DEBUG environment variable.
+- **FFmpeg Proxy Audio Handling**: Fixed proxy creation errors for videos without audio or with multiple audio streams. Now intelligently selects best audio stream (highest channel count) and gracefully handles audio-less videos.
+- **Batch Operations Scope**: Fixed batch operations only processing currently visible page. Now fetches ALL filtered files across all pages (500 files per paginated request) for proxy, transcription, Nova, and Rekognition batch operations.
+- **Date Filter Clarity**: Split confusing from_date/to_date parameters into upload_from_date/upload_to_date (S3 upload) and created_from_date/created_to_date (file creation metadata) for clearer filtering.
+
+**2025-12-17**:
 - **Segment Detection VideoMetadata Bug**: Fixed critical bug where Amazon Rekognition returns VideoMetadata as a list for segment detection (instead of dict like other analysis types). Added type checking to handle both formats safely.
 - **Collections Page JavaScript Error**: Fixed undefined collections.length error by properly extracting data.collections array from API response wrapper.
 - **History Auto-Refresh**: Added automatic 15-second polling for running jobs (IN_PROGRESS/SUBMITTED status) with automatic start/stop based on job states.
@@ -231,7 +243,25 @@ All transcriptions now automatically extract and store video metadata:
 - **Migration**: One-time migration completed for 3,154 existing transcripts (100% success)
 - **Usage**: Powers file management summary statistics (total duration, etc.)
 
-### Troubleshooting
+### Nova Sonic Transcription (AWS Bedrock)
+
+**Overview**: Cloud-based transcription using AWS Bedrock Nova Sonic 2 Online model. Alternative to local Whisper transcription with faster processing and no local GPU requirements.
+
+**Key Features**:
+- Streaming and non-streaming Bedrock API support with automatic fallback
+- Multi-format response parsing (handles various Bedrock response structures)
+- Debug logging with S3 URI redaction via NOVA_SONIC_DEBUG environment variable
+- Provider normalization: accepts 'nova', 'sonic', 'nova_sonic', 'sonic2', 'sonic_2', 'sonic_2_online', 'nova2_sonic', 'nova_2_sonic'
+- Automatic S3 audio upload and cleanup
+- Same API endpoints as Whisper transcription (transparent provider switching)
+
+**Troubleshooting**:
+- **Enable debug logging**: Set NOVA_SONIC_DEBUG=1 in .env file to log request/response payloads
+- **Response parsing errors**: Debug logs show actual Bedrock response format for troubleshooting
+- **S3 upload failures**: Verify AWS credentials and S3 bucket permissions
+- **Empty transcripts**: Check debug logs for Bedrock response structure, may indicate unsupported audio format
+
+### Troubleshooting (Whisper)
 - **FFmpeg not found**: Install FFmpeg and add to PATH, or specify path in system environment
 - **CUDA not available**: Install NVIDIA CUDA Toolkit (11.x or 12.x) for GPU support
 - **Out of memory**: Use smaller model size (medium or small) or CPU device

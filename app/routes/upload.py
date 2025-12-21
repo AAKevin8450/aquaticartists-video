@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import mimetypes
+import json
 from datetime import datetime
 from pathlib import PurePosixPath, Path
 
@@ -68,24 +69,60 @@ def _probe_duration_seconds(file_path: str):
     return None
 
 
+def _select_audio_stream(file_path: str):
+    if not shutil.which('ffprobe'):
+        return None
+    command = [
+        'ffprobe',
+        '-v', 'error',
+        '-select_streams', 'a',
+        '-show_entries', 'stream=index,codec_name,channels',
+        '-of', 'json',
+        file_path
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+    streams = data.get('streams') or []
+    candidates = []
+    for stream in streams:
+        codec_name = (stream.get('codec_name') or '').lower()
+        if not codec_name or codec_name == 'none':
+            continue
+        channels = stream.get('channels')
+        candidates.append((channels or 0, stream.get('index')))
+
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][1]
+
+
 def _create_proxy_video(source_path: str, proxy_path: str):
+    audio_stream_index = _select_audio_stream(source_path)
     command = [
         'ffmpeg',
         '-y',
         '-i', source_path,
         '-vf', 'scale=-2:720,fps=15',
-        '-map', '0:v:0',
-        '-map', '0:a?',
+        '-map', '0:v:0'
+    ]
+    if audio_stream_index is not None:
+        command.extend(['-map', f'0:a:{audio_stream_index}'])
+    command.extend([
         '-c:v', 'libx264',
         '-preset', 'fast',
         '-crf', '28',
-        '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac',
-        '-b:a', '96k',
-        '-ac', '2',
-        '-movflags', '+faststart',
-        proxy_path
-    ]
+        '-pix_fmt', 'yuv420p'
+    ])
+    if audio_stream_index is not None:
+        command.extend(['-c:a', 'aac', '-b:a', '96k', '-ac', '2'])
+    command.extend(['-movflags', '+faststart', proxy_path])
 
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:

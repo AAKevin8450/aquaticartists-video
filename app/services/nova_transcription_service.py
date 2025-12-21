@@ -5,6 +5,8 @@ Handles audio extraction, Bedrock invocation, and batch processing.
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import os
 import tempfile
 import time
@@ -21,6 +23,9 @@ except ImportError:
     ffmpeg = None
 
 from app.services.transcription_service import TranscriptionError, TranscriptionProgress, TranscriptionService
+
+
+logger = logging.getLogger(__name__)
 
 
 class NovaTranscriptionError(TranscriptionError):
@@ -64,6 +69,7 @@ class NovaSonicTranscriptionService:
         self.bucket_name = bucket_name
         self.region = region
         self.config = config
+        self.debug_enabled = os.getenv('NOVA_SONIC_DEBUG', '').lower() in ('1', 'true', 'yes')
         self.client = boto3.client('bedrock-runtime', **session_kwargs)
         self.s3_client = boto3.client('s3', **session_kwargs)
 
@@ -130,15 +136,139 @@ class NovaSonicTranscriptionService:
 
     def _parse_transcription_text(self, response: Dict[str, Any]) -> str:
         """Extract transcript text from Bedrock response."""
-        output = response.get('output', {}).get('message', {}).get('content', [])
-        if isinstance(output, list):
-            parts = [item.get('text', '') for item in output if isinstance(item, dict)]
-            text = ''.join(parts).strip()
+        def _extract_content_text(content: Any) -> str:
+            if isinstance(content, list):
+                parts = [item.get('text', '') for item in content if isinstance(item, dict)]
+                text = ''.join(parts).strip()
+                if text:
+                    return text
+            if isinstance(content, dict) and 'text' in content:
+                return str(content.get('text', '')).strip()
+            if isinstance(content, str):
+                return content.strip()
+            return ''
+
+        output = response.get('output')
+        if isinstance(output, dict):
+            message = output.get('message')
+            if isinstance(message, dict):
+                text = _extract_content_text(message.get('content', []))
+                if text:
+                    return text
+            if 'text' in output:
+                return str(output.get('text', '')).strip()
+
+        message = response.get('message')
+        if isinstance(message, dict):
+            text = _extract_content_text(message.get('content', []))
             if text:
                 return text
+
+        if 'transcript' in response:
+            return str(response.get('transcript', '')).strip()
+        if 'transcription' in response:
+            return str(response.get('transcription', '')).strip()
         if 'text' in response:
             return str(response.get('text', '')).strip()
         return ''
+
+    def _read_invoke_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
+        """Read JSON payload from a non-streaming Bedrock response."""
+        raw_body = response.get('body')
+        if hasattr(raw_body, 'read'):
+            body_str = raw_body.read().decode('utf-8')
+        else:
+            body_str = raw_body
+        if self.debug_enabled:
+            self._log_response_body(body_str, stream=False)
+        try:
+            return json.loads(body_str) if body_str else {}
+        except json.JSONDecodeError as e:
+            raise NovaTranscriptionError(f"Failed to parse Nova Sonic response: {e}")
+
+    def _read_stream_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
+        """Read JSON payload from a streaming Bedrock response."""
+        stream = response.get('body')
+        if stream is None:
+            return {}
+
+        chunks: List[str] = []
+        for event in stream:
+            if 'chunk' in event:
+                chunk_bytes = event['chunk'].get('bytes')
+                if chunk_bytes:
+                    chunks.append(chunk_bytes.decode('utf-8'))
+                continue
+            if 'internalServerException' in event:
+                message = event['internalServerException'].get('message', 'Stream error')
+                raise NovaTranscriptionError(message)
+            if 'modelStreamError' in event:
+                message = event['modelStreamError'].get('message', 'Stream error')
+                raise NovaTranscriptionError(message)
+
+        body_str = ''.join(chunks).strip()
+        if not body_str:
+            return {}
+
+        if self.debug_enabled:
+            self._log_response_body(body_str, stream=True)
+
+        try:
+            return json.loads(body_str)
+        except json.JSONDecodeError:
+            for line in reversed(body_str.splitlines()):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+            raise NovaTranscriptionError("Failed to parse Nova Sonic streaming response.")
+
+    def _invoke_bedrock(self, request_body: Dict[str, Any]) -> Dict[str, Any]:
+        """Invoke Nova Sonic using the most compatible Bedrock API."""
+        payload = json.dumps(request_body).encode('utf-8')
+        if hasattr(self.client, 'invoke_model_with_response_stream'):
+            response = self.client.invoke_model_with_response_stream(
+                modelId=self.config.runtime_model_id,
+                body=payload,
+                accept='application/json',
+                contentType='application/json'
+            )
+            return self._read_stream_response(response)
+
+        response = self.client.invoke_model(
+            modelId=self.config.runtime_model_id,
+            body=payload,
+            accept='application/json',
+            contentType='application/json'
+        )
+        return self._read_invoke_response(response)
+
+    def _log_response_body(self, body_str: str, stream: bool) -> None:
+        """Log Bedrock response payload for debugging."""
+        if not body_str:
+            logger.debug("Nova Sonic response body is empty (stream=%s).", stream)
+            return
+        trimmed = body_str.strip()
+        if len(trimmed) > 4000:
+            trimmed = trimmed[:4000] + '...[truncated]'
+        logger.debug("Nova Sonic response body (stream=%s): %s", stream, trimmed)
+
+    def _log_request_body(self, request_body: Dict[str, Any]) -> None:
+        """Log Bedrock request payload for debugging with redacted S3 URI."""
+        redacted = json.loads(json.dumps(request_body))
+        try:
+            content = redacted.get('messages', [{}])[0].get('content', [])
+            for item in content:
+                if isinstance(item, dict) and 'audio' in item:
+                    source = item.get('audio', {}).get('source', {})
+                    if 's3Location' in source and 'uri' in source['s3Location']:
+                        source['s3Location']['uri'] = 's3://[redacted]'
+        except Exception:
+            pass
+        logger.debug("Nova Sonic request body: %s", json.dumps(redacted, ensure_ascii=True))
 
     def transcribe_file(self, video_path: str, language: Optional[str] = None) -> Dict[str, Any]:
         """Transcribe a single video file using Nova Sonic."""
@@ -159,7 +289,6 @@ class NovaSonicTranscriptionService:
                 prompt = f"Transcribe the provided audio in {language}. Return plain text only."
 
             request_body = {
-                "modelId": self.config.runtime_model_id,
                 "messages": [
                     {
                         "role": "user",
@@ -185,8 +314,12 @@ class NovaSonicTranscriptionService:
                 }
             }
 
-            response = self.client.converse(**request_body)
-            transcript_text = self._parse_transcription_text(response)
+            if self.debug_enabled:
+                logger.debug("Nova Sonic model runtime id: %s", self.config.runtime_model_id)
+                self._log_request_body(request_body)
+
+            payload = self._invoke_bedrock(request_body)
+            transcript_text = self._parse_transcription_text(payload)
             character_count, word_count = TranscriptionService.calculate_text_metrics(transcript_text)
 
             processing_time = time.time() - start_time
