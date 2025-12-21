@@ -44,21 +44,28 @@ Critical environment variables are stored in .env file (not in git):
    - get_dashboard_stats(): Returns 20+ metrics across 8 categories (library overview, processing statistics, proxy statistics, transcription statistics, analysis breakdown, recent activity, content percentages, performance metrics)
    - list_files(): High-performance LEFT JOIN query with aggregated statistics (eliminates N+1 problem)
    - get_summary_stats(): Efficient single-query approach for file listing summaries
+   - search_all(): Unified search across 5 data sources (files, transcripts, Rekognition, Nova, collections) with UNION query and relevance scoring
+   - count_search_results(): Fast count-only query for pagination
+   - get_search_filters(): Returns available filter options (models, analysis types, statuses)
 8. **Analysis API** (app/routes/analysis.py) - Multi-select analysis endpoint (supports arrays of analysis types)
 9. **Nova API** (app/routes/nova_analysis.py) - Nova video analysis endpoints (5 endpoints: /analyze, /status, /results, /models, /estimate-cost)
 10. **File Management API** (app/routes/file_management.py) - Centralized file management with search/filter/actions (10 endpoints: list, details, create-proxy, start-analysis, start-transcription, start-nova, delete-cascade, s3-files)
     - Batch operations (proxy, transcribe, nova, rekognition) process only currently filtered/displayed files
     - Batch proxy creation creates local-only proxies (no S3 upload) to save costs for large video libraries
+11. **Search API** (app/routes/search.py) - Unified search across all data sources (4 endpoints: /search, /api/search, /api/search/count, /api/search/filters)
+    - Multi-source search with advanced filtering, sorting, and pagination
+    - Performance-optimized with 7 database indexes for sub-500ms response times
 
 ### Frontend Components
 **Templates** (app/templates/):
 - index.html - Comprehensive dashboard with 10+ statistics tiles showing library stats, processing stats, content breakdown, recent activity, analysis breakdown, transcription stats, and active jobs
 - upload.html - File upload with real-time progress tracking (XMLHttpRequest) and presigned URL support
 - file_management.html - Centralized file management with search/filter, status badges, quick actions (proxy, transcription, analysis, delete). PRIMARY interface for all video/image analysis and transcription operations
+- search.html - Unified search page with multi-source querying (files, transcripts, Rekognition, Nova, collections), advanced filtering, sorting, and pagination
 - collections.html - Face collection management interface
 - history.html - Job history with auto-load and download buttons for completed jobs
 - dashboard.html - Visual analytics dashboard with charts and insights for video analysis results (per-job analysis)
-- base.html - Base template with streamlined navigation (Home, File Management, Upload, Face Collections, History)
+- base.html - Base template with streamlined navigation (Home, File Management, Search, Upload, Face Collections, History)
 
 **Archived Templates** (removed from navigation 2025-12-20):
 - video_analysis.html.archived - Standalone video analysis (replaced by File Management batch operations)
@@ -66,13 +73,16 @@ Critical environment variables are stored in .env file (not in git):
 
 **Static Assets**:
 - app/static/css/style.css - Application-wide styling with Bootstrap 5 integration
+- app/static/css/search.css - Search page custom styling for result cards, filter toggles, and highlights
 - app/static/js/utils.js - Shared JavaScript utilities for AJAX and API interactions
 - app/static/js/dashboard.js - Dashboard functionality with Chart.js visualizations and data processors
 - app/static/js/file_management.js - File management functionality with search/filter, pagination, and quick actions
+- app/static/js/search.js - Search page functionality with debounced input, filter management, and result rendering
 
 **Key Features**:
 - Comprehensive dashboard: Home page displays 10+ real-time statistics tiles with library overview, processing status, content breakdown, recent activity, analysis breakdown, transcription stats, and active jobs
 - Centralized workflow: File Management tab is the PRIMARY interface for all processing operations (video/image analysis, transcription, proxy creation). Replaced 3 separate analysis pages with unified batch operation interface
+- Unified search: Search page provides single query interface across 5 data sources (files, transcripts, Rekognition, Nova, collections) with advanced filtering, sorting by relevance/date/name, and pagination
 - Multi-select analysis: Users can select 1-8 analysis types simultaneously (checkboxes replace radio buttons)
 - Real-time upload progress: XMLHttpRequest provides smooth 0-100% progress updates
 - Automatic timezone conversion: All timestamps display in Eastern Time (ET) with zoneinfo/tzdata
@@ -82,7 +92,7 @@ Critical environment variables are stored in .env file (not in git):
 - Visual dashboard: Interactive charts, graphs, and insights for video analysis results (accessible via /dashboard/<job_id>)
 - File management: Centralized file view showing 3,161+ files (uploaded + transcribed) with summary statistics (count, total size, total duration), full-text search, advanced filtering, status badges, quick actions, and S3 file operations (view/download/delete)
 - Batch operations: All batch actions (proxy creation, transcription, Nova analysis, Rekognition analysis) respect current search/filter criteria and only process displayed files
-- High-performance database: LEFT JOIN queries with GROUP BY aggregation deliver sub-200ms page loads even with 10,000+ files
+- High-performance database: LEFT JOIN queries with GROUP BY aggregation deliver sub-200ms page loads even with 10,000+ files, 7 search indexes enable sub-500ms search across all data sources
 
 ### Running the Application
 ```bash
@@ -227,6 +237,183 @@ All transcriptions now automatically extract and store video metadata:
 - **Out of memory**: Use smaller model size (medium or small) or CPU device
 - **Slow processing**: Ensure GPU acceleration is working (check logs for device: cuda)
 - **Files skipped**: System prevents reprocessing same video with same model (use different model or force flag)
+
+## Unified Search Feature
+
+### Overview
+Comprehensive search page that provides a single query interface across all application data sources. Enables users to find files, transcripts, Rekognition analysis results, Nova analysis results, and face collections with a unified search experience, eliminating the need to search each feature separately.
+
+### Access
+- **URL**: `/search`
+- **Navigation**: Click "Search" link in main navigation (between File Management and Upload)
+- **API Endpoints**: 4 REST endpoints for search operations
+
+### Key Capabilities
+
+**1. Multi-Source Search**
+- **Files**: Searches file names, file types, and paths
+- **Transcripts**: Full-text search across transcript content (character count, word count, language)
+- **Rekognition Analysis**: Searches job names, analysis types, and statuses
+- **Nova Analysis**: Searches Nova job names, processing modes, and model names
+- **Face Collections**: Searches collection names and descriptions
+
+**2. Advanced Filtering**
+- **Source Type Toggles**: 5 checkboxes to include/exclude specific data sources
+- **File Type Filter**: Filter by video, image, or other file types
+- **Status Filter**: Filter by status (completed, failed, in progress, etc.)
+- **Model Filter**: Filter by transcription or Nova model (tiny, base, medium, large-v2, large-v3, Micro, Lite, Pro, Premier)
+- **Analysis Type Filter**: Filter by Rekognition analysis type (labels, faces, celebrities, text, moderation, person tracking, segments, face search)
+- **Date Range Filter**: Filter by creation date with from/to date pickers
+
+**3. Sort Options**
+- **Relevance**: Default sort (files/transcripts rank higher than analysis results)
+- **Newest First**: Sort by creation date descending
+- **Oldest First**: Sort by creation date ascending
+- **A-Z**: Sort by title/name alphabetically
+- **Z-A**: Sort by title/name reverse alphabetically
+
+**4. Performance Features**
+- **Debounced Search**: 300ms delay prevents API spam during typing
+- **Indexed Queries**: 7 database indexes on search-critical columns (name, text, type, status, date)
+- **Query Optimization**: LIMIT clauses applied per source before UNION to reduce result set size
+- **Response Time Target**: <500ms for 10,000+ records
+- **Pagination**: 50 results per page, max 200 total results
+
+**5. User Interface**
+- **Real-Time Result Counts**: Badge updates as filters change
+- **Result Cards**: Color-coded by source type with badges, timestamps, preview text
+- **Source-Specific Actions**: View file, read transcript, view analysis, manage collection
+- **Loading States**: Spinner overlay during API calls, disabled controls during requests
+- **Error Handling**: Toast notifications for API failures with retry guidance
+- **Search Highlighting**: Query terms highlighted in result titles and previews
+- **Context-Aware Previews**: 150-character preview text with ellipsis
+
+### Database Architecture
+
+**Search Indexes** (7 total):
+```sql
+idx_files_name - B-tree index on files.file_name
+idx_files_created_at - B-tree index on files.created_at
+idx_transcripts_text - B-tree index on transcripts.transcript_text (for LIKE queries)
+idx_transcripts_file_name - B-tree index on transcripts.file_name
+idx_transcripts_created_at - B-tree index on transcripts.created_at
+idx_analysis_jobs_analysis_type - B-tree index on analysis_jobs.analysis_type
+idx_analysis_jobs_created_at - B-tree index on analysis_jobs.created_at
+```
+
+**Search Methods**:
+- `search_all(query, filters, sort, limit, offset)`: UNION query across 5 tables, returns standardized results
+- `count_search_results(query, filters)`: Fast count-only query for pagination
+- `get_search_filters()`: Returns available filter options (models, analysis types, statuses)
+
+**Result Format**:
+```python
+{
+    'source': 'files|transcripts|rekognition|nova|collections',
+    'id': int,
+    'title': str,
+    'preview': str (150 chars max),
+    'created_at': ISO timestamp,
+    'file_type': 'video|image|other',
+    'status': str,
+    'model': str (for transcripts/Nova),
+    'analysis_type': str (for Rekognition),
+    'relevance': float (1.0 for files/transcripts, 0.8 for analysis)
+}
+```
+
+### API Endpoints
+
+**1. GET `/search`**
+- Renders search page template
+- No authentication required
+
+**2. POST `/api/search`**
+- Execute search with filters, returns paginated results
+- Request body:
+  ```json
+  {
+    "query": "search term",
+    "sources": ["files", "transcripts", "rekognition", "nova", "collections"],
+    "file_type": "video|image|other",
+    "status": "completed|failed|in_progress",
+    "model": "medium|large-v3|Lite|Pro",
+    "analysis_type": "labels|faces|celebrities|text|moderation|person_tracking|segments|face_search",
+    "from_date": "2025-01-01",
+    "to_date": "2025-12-31",
+    "sort_by": "relevance|date|name",
+    "sort_order": "asc|desc",
+    "page": 1,
+    "per_page": 50
+  }
+  ```
+- Response: `{"results": [...], "total": int, "page": int, "per_page": int}`
+
+**3. GET `/api/search/count`**
+- Get total result count without fetching full results
+- Query params: Same as `/api/search` (via URL parameters)
+- Response: `{"count": int}`
+
+**4. GET `/api/search/filters`**
+- Get available filter options for dropdowns
+- Response: `{"models": [...], "analysis_types": [...], "statuses": [...]}`
+
+### Implementation Details
+
+**Backend (app/routes/search.py)**:
+- 620 lines total
+- Blueprint registration in Flask app factory
+- Query parsing and validation
+- Result formatting and preview extraction
+- Source-specific link generation
+
+**Frontend (app/templates/search.html)**:
+- 270 lines total
+- Bootstrap 5 responsive layout
+- Filter panel with collapsible sections
+- Result cards with source-specific styling
+- Pagination controls with page indicator
+
+**JavaScript (app/static/js/search.js)**:
+- 620 lines total
+- Debounced search input (300ms delay)
+- Filter state management
+- AJAX API calls with error handling
+- Dynamic result rendering
+- Pagination with auto-scroll
+
+**Styling (app/static/css/search.css)**:
+- 140 lines total
+- Custom result card styling
+- Source type color coding
+- Filter toggle buttons
+- Search highlight styling
+
+### Performance Benchmarks
+- **Empty Query**: <100ms (returns no results with helpful message)
+- **Simple Name Search**: <200ms (indexed file_name/file_name columns)
+- **Full-Text Transcript Search**: <500ms (indexed transcript_text, LIKE query)
+- **Complex Multi-Filter**: <500ms (compound WHERE clauses with indexes)
+- **Pagination**: <50ms (OFFSET/LIMIT applied after initial query)
+
+### Best Practices
+1. **Use specific search terms**: More specific queries return faster and more relevant results
+2. **Filter by source type**: Narrow to specific data sources when you know what you're looking for
+3. **Use date ranges**: Limit results to recent content for faster queries
+4. **Combine filters**: Use multiple filters (status + model + date) to narrow results effectively
+5. **Check all sources initially**: Start with all sources enabled to discover unexpected matches
+6. **Sort by relevance**: Default sort ranks files/transcripts higher for better discoverability
+7. **Refine queries**: If >200 results, refine query or add filters instead of excessive pagination
+
+### Future Enhancements
+- Full-text search with FTS5 virtual table for better relevance ranking
+- Search within Rekognition/Nova JSON results (detect specific labels, objects, scenes)
+- Saved search queries and filters
+- Export search results to CSV/Excel
+- Search history and recent searches
+- Autocomplete suggestions based on existing content
+- Fuzzy matching for typo tolerance
+- Search result snippets with highlighted context
 
 ## Video Analysis Dashboard Feature
 

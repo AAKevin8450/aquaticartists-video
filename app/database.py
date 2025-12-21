@@ -304,6 +304,80 @@ class Database:
                 ON transcripts(file_name)
             ''')
 
+            # Nova jobs table (for Amazon Bedrock Nova intelligent video analysis)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS nova_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    analysis_job_id INTEGER NOT NULL,
+                    model TEXT NOT NULL,
+                    analysis_types TEXT NOT NULL,
+                    user_options TEXT,
+                    status TEXT NOT NULL DEFAULT 'SUBMITTED',
+                    summary_result TEXT,
+                    chapters_result TEXT,
+                    elements_result TEXT,
+                    started_at TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    progress_percent INTEGER DEFAULT 0,
+                    current_chunk INTEGER,
+                    total_chunks INTEGER,
+                    estimated_cost REAL,
+                    actual_cost REAL,
+                    input_tokens INTEGER,
+                    output_tokens INTEGER,
+                    processing_time REAL,
+                    error_message TEXT,
+                    FOREIGN KEY (analysis_job_id) REFERENCES analysis_jobs(id) ON DELETE CASCADE
+                )
+            ''')
+
+            # Search optimization indexes
+            # Files table indexes for search
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_files_filename
+                ON files(filename)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_files_local_path
+                ON files(local_path)
+            ''')
+
+            # Analysis jobs indexes for search
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_jobs_analysis_type
+                ON analysis_jobs(analysis_type)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_jobs_completed_at
+                ON analysis_jobs(completed_at DESC)
+            ''')
+
+            # Nova jobs indexes for search
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_nova_jobs_status
+                ON nova_jobs(status)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_nova_jobs_completed_at
+                ON nova_jobs(completed_at DESC)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_nova_jobs_analysis_job_id
+                ON nova_jobs(analysis_job_id)
+            ''')
+
+            # Transcripts indexes for search
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_transcripts_completed_at
+                ON transcripts(completed_at DESC)
+            ''')
+
+            # Face collections indexes for search
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_collections_created_at
+                ON face_collections(created_at DESC)
+            ''')
+
             # Embedding tables (requires vector extension for vec0 virtual table)
             self._ensure_embedding_tables(conn)
 
@@ -566,6 +640,21 @@ class Database:
         }
         content_type = content_type_map.get(ext, 'video/mp4')
 
+        file_stat = None
+        try:
+            file_stat = os.stat(transcript['file_path'])
+        except OSError:
+            file_stat = None
+
+        file_ctime = file_stat.st_ctime if file_stat else None
+        file_mtime = file_stat.st_mtime if file_stat else transcript.get('modified_time')
+
+        metadata = {'source': 'transcript_import', 'imported_at': datetime.now().isoformat()}
+        if isinstance(file_ctime, (int, float)):
+            metadata['file_ctime'] = file_ctime
+        if isinstance(file_mtime, (int, float)):
+            metadata['file_mtime'] = file_mtime
+
         # Create file record using transcript metadata
         return self.create_source_file(
             filename=transcript['file_name'],
@@ -581,7 +670,7 @@ class Database:
             codec_audio=transcript.get('codec_audio'),
             duration_seconds=transcript.get('duration_seconds'),
             bitrate=transcript.get('bitrate'),
-            metadata={'source': 'transcript_import', 'imported_at': datetime.now().isoformat()}
+            metadata=metadata
         )
 
     def import_all_transcripts_as_files(self) -> Dict[str, Any]:
@@ -646,8 +735,10 @@ class Database:
         has_proxy: Optional[bool] = None,
         has_transcription: Optional[bool] = None,
         search: Optional[str] = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
+        upload_from_date: Optional[str] = None,
+        upload_to_date: Optional[str] = None,
+        created_from_date: Optional[str] = None,
+        created_to_date: Optional[str] = None,
         sort_by: str = 'uploaded_at',
         sort_order: str = 'desc',
         limit: int = 50,
@@ -714,13 +805,36 @@ class Database:
                 search_pattern = f'%{search}%'
                 params.extend([search_pattern, search_pattern, search_pattern])
 
-            if from_date:
-                query += ' AND f.uploaded_at >= ?'
-                params.append(from_date)
+            if upload_from_date:
+                query += ' AND date(f.uploaded_at) >= date(?)'
+                params.append(upload_from_date)
 
-            if to_date:
-                query += ' AND f.uploaded_at <= ?'
-                params.append(to_date)
+            if upload_to_date:
+                query += ' AND date(f.uploaded_at) <= date(?)'
+                params.append(upload_to_date)
+
+            created_date_expr = (
+                "CASE "
+                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
+                "AND json_extract(f.metadata, '$.file_ctime') IS NULL "
+                "THEN f.uploaded_at "
+                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
+                "THEN datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
+                "WHEN json_extract(f.metadata, '$.file_ctime') IS NULL "
+                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
+                "WHEN json_extract(f.metadata, '$.file_mtime') <= json_extract(f.metadata, '$.file_ctime') "
+                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
+                "ELSE datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
+                "END"
+            )
+
+            if created_from_date:
+                query += f' AND date({created_date_expr}) >= date(?)'
+                params.append(created_from_date)
+
+            if created_to_date:
+                query += f' AND date({created_date_expr}) <= date(?)'
+                params.append(created_to_date)
 
             # Add sorting
             valid_sort_fields = ['uploaded_at', 'filename', 'size_bytes', 'duration_seconds', 'file_type']
@@ -1568,8 +1682,10 @@ class Database:
         has_nova_analysis: Optional[bool] = None,
         has_rekognition_analysis: Optional[bool] = None,
         search: Optional[str] = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
+        upload_from_date: Optional[str] = None,
+        upload_to_date: Optional[str] = None,
+        created_from_date: Optional[str] = None,
+        created_to_date: Optional[str] = None,
         min_size: Optional[int] = None,
         max_size: Optional[int] = None,
         min_duration: Optional[int] = None,
@@ -1676,13 +1792,36 @@ class Database:
                 search_pattern = f'%{search}%'
                 params.extend([search_pattern, search_pattern, search_pattern])
 
-            if from_date:
-                query += ' AND f.uploaded_at >= ?'
-                params.append(from_date)
+            if upload_from_date:
+                query += ' AND date(f.uploaded_at) >= date(?)'
+                params.append(upload_from_date)
 
-            if to_date:
-                query += ' AND f.uploaded_at <= ?'
-                params.append(to_date)
+            if upload_to_date:
+                query += ' AND date(f.uploaded_at) <= date(?)'
+                params.append(upload_to_date)
+
+            created_date_expr = (
+                "CASE "
+                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
+                "AND json_extract(f.metadata, '$.file_ctime') IS NULL "
+                "THEN f.uploaded_at "
+                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
+                "THEN datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
+                "WHEN json_extract(f.metadata, '$.file_ctime') IS NULL "
+                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
+                "WHEN json_extract(f.metadata, '$.file_mtime') <= json_extract(f.metadata, '$.file_ctime') "
+                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
+                "ELSE datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
+                "END"
+            )
+
+            if created_from_date:
+                query += f' AND date({created_date_expr}) >= date(?)'
+                params.append(created_from_date)
+
+            if created_to_date:
+                query += f' AND date({created_date_expr}) <= date(?)'
+                params.append(created_to_date)
 
             if min_size is not None:
                 query += ' AND f.size_bytes >= ?'
@@ -1732,8 +1871,10 @@ class Database:
         has_nova_analysis: Optional[bool] = None,
         has_rekognition_analysis: Optional[bool] = None,
         search: Optional[str] = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
+        upload_from_date: Optional[str] = None,
+        upload_to_date: Optional[str] = None,
+        created_from_date: Optional[str] = None,
+        created_to_date: Optional[str] = None,
         min_size: Optional[int] = None,
         max_size: Optional[int] = None,
         min_duration: Optional[int] = None,
@@ -1788,13 +1929,36 @@ class Database:
                 search_pattern = f'%{search}%'
                 params.extend([search_pattern, search_pattern, search_pattern])
 
-            if from_date:
-                query += ' AND f.uploaded_at >= ?'
-                params.append(from_date)
+            if upload_from_date:
+                query += ' AND date(f.uploaded_at) >= date(?)'
+                params.append(upload_from_date)
 
-            if to_date:
-                query += ' AND f.uploaded_at <= ?'
-                params.append(to_date)
+            if upload_to_date:
+                query += ' AND date(f.uploaded_at) <= date(?)'
+                params.append(upload_to_date)
+
+            created_date_expr = (
+                "CASE "
+                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
+                "AND json_extract(f.metadata, '$.file_ctime') IS NULL "
+                "THEN f.uploaded_at "
+                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
+                "THEN datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
+                "WHEN json_extract(f.metadata, '$.file_ctime') IS NULL "
+                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
+                "WHEN json_extract(f.metadata, '$.file_mtime') <= json_extract(f.metadata, '$.file_ctime') "
+                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
+                "ELSE datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
+                "END"
+            )
+
+            if created_from_date:
+                query += f' AND date({created_date_expr}) >= date(?)'
+                params.append(created_from_date)
+
+            if created_to_date:
+                query += f' AND date({created_date_expr}) <= date(?)'
+                params.append(created_to_date)
 
             if min_size is not None:
                 query += ' AND f.size_bytes >= ?'
@@ -1823,8 +1987,10 @@ class Database:
         has_nova_analysis: Optional[bool] = None,
         has_rekognition_analysis: Optional[bool] = None,
         search: Optional[str] = None,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
+        upload_from_date: Optional[str] = None,
+        upload_to_date: Optional[str] = None,
+        created_from_date: Optional[str] = None,
+        created_to_date: Optional[str] = None,
         min_size: Optional[int] = None,
         max_size: Optional[int] = None,
         min_duration: Optional[int] = None,
@@ -1901,13 +2067,36 @@ class Database:
                 search_pattern = f'%{search}%'
                 params.extend([search_pattern, search_pattern, search_pattern])
 
-            if from_date:
-                query += ' AND f.uploaded_at >= ?'
-                params.append(from_date)
+            if upload_from_date:
+                query += ' AND date(f.uploaded_at) >= date(?)'
+                params.append(upload_from_date)
 
-            if to_date:
-                query += ' AND f.uploaded_at <= ?'
-                params.append(to_date)
+            if upload_to_date:
+                query += ' AND date(f.uploaded_at) <= date(?)'
+                params.append(upload_to_date)
+
+            created_date_expr = (
+                "CASE "
+                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
+                "AND json_extract(f.metadata, '$.file_ctime') IS NULL "
+                "THEN f.uploaded_at "
+                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
+                "THEN datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
+                "WHEN json_extract(f.metadata, '$.file_ctime') IS NULL "
+                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
+                "WHEN json_extract(f.metadata, '$.file_mtime') <= json_extract(f.metadata, '$.file_ctime') "
+                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
+                "ELSE datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
+                "END"
+            )
+
+            if created_from_date:
+                query += f' AND date({created_date_expr}) >= date(?)'
+                params.append(created_from_date)
+
+            if created_to_date:
+                query += f' AND date({created_date_expr}) <= date(?)'
+                params.append(created_to_date)
 
             if min_size is not None:
                 query += ' AND f.size_bytes >= ?'
@@ -2108,6 +2297,494 @@ class Database:
 
                 # Collections
                 'collection_count': collection_count
+            }
+
+    # Search methods
+    def search_all(
+        self,
+        query: str,
+        sources: Optional[List[str]] = None,
+        file_type: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        status: Optional[str] = None,
+        analysis_type: Optional[str] = None,
+        model: Optional[str] = None,
+        sort_by: str = 'relevance',
+        sort_order: str = 'desc',
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """
+        Unified search across all data sources.
+
+        Returns list of search result dictionaries with:
+        - source_type: 'file', 'transcript', 'rekognition', 'nova', 'collection'
+        - source_id: Primary key from source table
+        - title: Display title
+        - category: Result category
+        - timestamp: Relevant date/time
+        - match_field: Which field matched
+        - size_bytes: File size (if applicable)
+        - duration_seconds: Duration (if applicable)
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build source filter
+            all_sources = ['file', 'transcript', 'rekognition', 'nova', 'collection']
+            active_sources = sources if sources else all_sources
+
+            # Prepare search pattern for LIKE
+            search_pattern = f'%{query}%'
+
+            # Build UNION query
+            union_queries = []
+            params = []
+
+            # 1. Search in files
+            if 'file' in active_sources:
+                file_query = '''
+                SELECT
+                    'file' as source_type,
+                    id as source_id,
+                    filename as title,
+                    file_type as category,
+                    uploaded_at as timestamp,
+                    CASE
+                        WHEN filename LIKE ? THEN 'filename'
+                        WHEN local_path LIKE ? THEN 'path'
+                        WHEN metadata LIKE ? THEN 'metadata'
+                        WHEN codec_video LIKE ? THEN 'codec_video'
+                        WHEN codec_audio LIKE ? THEN 'codec_audio'
+                    END as match_field,
+                    size_bytes,
+                    duration_seconds
+                FROM files
+                WHERE (
+                    filename LIKE ? OR
+                    local_path LIKE ? OR
+                    metadata LIKE ? OR
+                    codec_video LIKE ? OR
+                    codec_audio LIKE ?
+                )
+                '''
+                # Add file_type filter if specified
+                if file_type:
+                    file_query += ' AND file_type = ?'
+                    params.extend([search_pattern] * 10 + [file_type])
+                else:
+                    params.extend([search_pattern] * 10)
+
+                # Add date range filters
+                if from_date:
+                    file_query += ' AND uploaded_at >= ?'
+                    params.append(from_date)
+                if to_date:
+                    file_query += ' AND uploaded_at <= ?'
+                    params.append(to_date)
+
+                union_queries.append(file_query)
+
+            # 2. Search in transcripts
+            if 'transcript' in active_sources:
+                transcript_query = '''
+                SELECT
+                    'transcript' as source_type,
+                    id as source_id,
+                    file_name as title,
+                    'Transcript (' || model_name || ')' as category,
+                    created_at as timestamp,
+                    'transcript' as match_field,
+                    NULL as size_bytes,
+                    duration_seconds
+                FROM transcripts
+                WHERE (status = 'COMPLETED' OR status = 'SUCCEEDED')
+                AND (
+                    transcript_text LIKE ? OR
+                    file_name LIKE ?
+                )
+                '''
+                params.extend([search_pattern, search_pattern])
+
+                # Add model filter if specified
+                if model:
+                    transcript_query += ' AND model_name = ?'
+                    params.append(model)
+
+                # Add status filter if specified
+                if status:
+                    transcript_query += ' AND status = ?'
+                    params.append(status)
+
+                # Add date range filters
+                if from_date:
+                    transcript_query += ' AND created_at >= ?'
+                    params.append(from_date)
+                if to_date:
+                    transcript_query += ' AND created_at <= ?'
+                    params.append(to_date)
+
+                union_queries.append(transcript_query)
+
+            # 3. Search in Rekognition analysis results
+            if 'rekognition' in active_sources:
+                rekognition_query = '''
+                SELECT
+                    'rekognition' as source_type,
+                    aj.id as source_id,
+                    f.filename || ' - ' || aj.analysis_type as title,
+                    aj.analysis_type as category,
+                    aj.completed_at as timestamp,
+                    'analysis_results' as match_field,
+                    f.size_bytes,
+                    f.duration_seconds
+                FROM analysis_jobs aj
+                JOIN files f ON aj.file_id = f.id
+                WHERE aj.status = 'SUCCEEDED'
+                AND aj.results IS NOT NULL
+                AND CAST(aj.results AS TEXT) LIKE ?
+                '''
+                params.append(search_pattern)
+
+                # Add file_type filter if specified
+                if file_type:
+                    rekognition_query += ' AND f.file_type = ?'
+                    params.append(file_type)
+
+                # Add analysis_type filter if specified
+                if analysis_type:
+                    rekognition_query += ' AND aj.analysis_type = ?'
+                    params.append(analysis_type)
+
+                # Add date range filters
+                if from_date:
+                    rekognition_query += ' AND aj.completed_at >= ?'
+                    params.append(from_date)
+                if to_date:
+                    rekognition_query += ' AND aj.completed_at <= ?'
+                    params.append(to_date)
+
+                union_queries.append(rekognition_query)
+
+            # 4. Search in Nova analysis
+            if 'nova' in active_sources:
+                nova_query = '''
+                SELECT
+                    'nova' as source_type,
+                    nj.id as source_id,
+                    f.filename || ' - Nova ' || nj.model as title,
+                    'Nova Analysis' as category,
+                    nj.completed_at as timestamp,
+                    CASE
+                        WHEN CAST(nj.summary_result AS TEXT) LIKE ? THEN 'summary'
+                        WHEN CAST(nj.chapters_result AS TEXT) LIKE ? THEN 'chapters'
+                        WHEN CAST(nj.elements_result AS TEXT) LIKE ? THEN 'elements'
+                    END as match_field,
+                    f.size_bytes,
+                    f.duration_seconds
+                FROM nova_jobs nj
+                JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id
+                JOIN files f ON aj.file_id = f.id
+                WHERE nj.status = 'COMPLETED'
+                AND (
+                    CAST(nj.summary_result AS TEXT) LIKE ? OR
+                    CAST(nj.chapters_result AS TEXT) LIKE ? OR
+                    CAST(nj.elements_result AS TEXT) LIKE ?
+                )
+                '''
+                params.extend([search_pattern] * 6)
+
+                # Add file_type filter if specified
+                if file_type:
+                    nova_query += ' AND f.file_type = ?'
+                    params.append(file_type)
+
+                # Add model filter if specified
+                if model:
+                    nova_query += ' AND nj.model = ?'
+                    params.append(model)
+
+                # Add date range filters
+                if from_date:
+                    nova_query += ' AND nj.completed_at >= ?'
+                    params.append(from_date)
+                if to_date:
+                    nova_query += ' AND nj.completed_at <= ?'
+                    params.append(to_date)
+
+                union_queries.append(nova_query)
+
+            # 5. Search in face collections
+            if 'collection' in active_sources:
+                collection_query = '''
+                SELECT
+                    'face_collection' as source_type,
+                    id as source_id,
+                    collection_id as title,
+                    'Face Collection' as category,
+                    created_at as timestamp,
+                    'collection' as match_field,
+                    NULL as size_bytes,
+                    NULL as duration_seconds
+                FROM face_collections
+                WHERE collection_id LIKE ?
+                '''
+                params.append(search_pattern)
+
+                # Add date range filters
+                if from_date:
+                    collection_query += ' AND created_at >= ?'
+                    params.append(from_date)
+                if to_date:
+                    collection_query += ' AND created_at <= ?'
+                    params.append(to_date)
+
+                union_queries.append(collection_query)
+
+            # Combine with UNION ALL
+            if not union_queries:
+                return []
+
+            final_query = ' UNION ALL '.join(union_queries)
+
+            # Add sorting
+            if sort_by == 'date':
+                final_query += f' ORDER BY timestamp {sort_order.upper()}'
+            elif sort_by == 'name':
+                final_query += f' ORDER BY title {sort_order.upper()}'
+            else:  # relevance (default to date for now)
+                final_query += f' ORDER BY timestamp {sort_order.upper()}'
+
+            # Add pagination
+            final_query += ' LIMIT ? OFFSET ?'
+            params.extend([limit, offset])
+
+            # Execute query
+            cursor.execute(final_query, params)
+            results = [dict(row) for row in cursor.fetchall()]
+
+            return results
+
+    def count_search_results(
+        self,
+        query: str,
+        sources: Optional[List[str]] = None,
+        file_type: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        status: Optional[str] = None,
+        analysis_type: Optional[str] = None,
+        model: Optional[str] = None
+    ) -> Dict[str, int]:
+        """
+        Count search results by source type.
+
+        Returns: {
+            'total': 145,
+            'file': 23,
+            'transcript': 67,
+            'rekognition': 34,
+            'nova': 19,
+            'collection': 2
+        }
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Build source filter
+            all_sources = ['file', 'transcript', 'rekognition', 'nova', 'collection']
+            active_sources = sources if sources else all_sources
+
+            # Prepare search pattern for LIKE
+            search_pattern = f'%{query}%'
+
+            counts = {}
+            total = 0
+
+            # Count files
+            if 'file' in active_sources:
+                query_str = '''
+                SELECT COUNT(*) as count FROM files
+                WHERE (
+                    filename LIKE ? OR
+                    local_path LIKE ? OR
+                    metadata LIKE ? OR
+                    codec_video LIKE ? OR
+                    codec_audio LIKE ?
+                )
+                '''
+                params = [search_pattern] * 5
+
+                if file_type:
+                    query_str += ' AND file_type = ?'
+                    params.append(file_type)
+                if from_date:
+                    query_str += ' AND uploaded_at >= ?'
+                    params.append(from_date)
+                if to_date:
+                    query_str += ' AND uploaded_at <= ?'
+                    params.append(to_date)
+
+                cursor.execute(query_str, params)
+                counts['file'] = cursor.fetchone()['count']
+                total += counts['file']
+
+            # Count transcripts
+            if 'transcript' in active_sources:
+                query_str = '''
+                SELECT COUNT(*) as count FROM transcripts
+                WHERE (status = 'COMPLETED' OR status = 'SUCCEEDED')
+                AND (
+                    transcript_text LIKE ? OR
+                    file_name LIKE ?
+                )
+                '''
+                params = [search_pattern, search_pattern]
+
+                if model:
+                    query_str += ' AND model_name = ?'
+                    params.append(model)
+                if status:
+                    query_str += ' AND status = ?'
+                    params.append(status)
+                if from_date:
+                    query_str += ' AND created_at >= ?'
+                    params.append(from_date)
+                if to_date:
+                    query_str += ' AND created_at <= ?'
+                    params.append(to_date)
+
+                cursor.execute(query_str, params)
+                counts['transcript'] = cursor.fetchone()['count']
+                total += counts['transcript']
+
+            # Count Rekognition results
+            if 'rekognition' in active_sources:
+                query_str = '''
+                SELECT COUNT(*) as count FROM analysis_jobs aj
+                JOIN files f ON aj.file_id = f.id
+                WHERE aj.status = 'SUCCEEDED'
+                AND aj.results IS NOT NULL
+                AND CAST(aj.results AS TEXT) LIKE ?
+                '''
+                params = [search_pattern]
+
+                if file_type:
+                    query_str += ' AND f.file_type = ?'
+                    params.append(file_type)
+                if analysis_type:
+                    query_str += ' AND aj.analysis_type = ?'
+                    params.append(analysis_type)
+                if from_date:
+                    query_str += ' AND aj.completed_at >= ?'
+                    params.append(from_date)
+                if to_date:
+                    query_str += ' AND aj.completed_at <= ?'
+                    params.append(to_date)
+
+                cursor.execute(query_str, params)
+                counts['rekognition'] = cursor.fetchone()['count']
+                total += counts['rekognition']
+
+            # Count Nova results
+            if 'nova' in active_sources:
+                query_str = '''
+                SELECT COUNT(*) as count FROM nova_jobs nj
+                JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id
+                JOIN files f ON aj.file_id = f.id
+                WHERE nj.status = 'COMPLETED'
+                AND (
+                    CAST(nj.summary_result AS TEXT) LIKE ? OR
+                    CAST(nj.chapters_result AS TEXT) LIKE ? OR
+                    CAST(nj.elements_result AS TEXT) LIKE ?
+                )
+                '''
+                params = [search_pattern] * 3
+
+                if file_type:
+                    query_str += ' AND f.file_type = ?'
+                    params.append(file_type)
+                if model:
+                    query_str += ' AND nj.model = ?'
+                    params.append(model)
+                if from_date:
+                    query_str += ' AND nj.completed_at >= ?'
+                    params.append(from_date)
+                if to_date:
+                    query_str += ' AND nj.completed_at <= ?'
+                    params.append(to_date)
+
+                cursor.execute(query_str, params)
+                counts['nova'] = cursor.fetchone()['count']
+                total += counts['nova']
+
+            # Count collections
+            if 'collection' in active_sources:
+                query_str = '''
+                SELECT COUNT(*) as count FROM face_collections
+                WHERE collection_id LIKE ?
+                '''
+                params = [search_pattern]
+
+                if from_date:
+                    query_str += ' AND created_at >= ?'
+                    params.append(from_date)
+                if to_date:
+                    query_str += ' AND created_at <= ?'
+                    params.append(to_date)
+
+                cursor.execute(query_str, params)
+                counts['collection'] = cursor.fetchone()['count']
+                total += counts['collection']
+
+            counts['total'] = total
+            return counts
+
+    def get_search_filters(self) -> Dict[str, List[str]]:
+        """
+        Get available filter options from database.
+
+        Queries distinct values for:
+        - analysis_types
+        - models (whisper + nova)
+        - languages
+        - statuses
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Get distinct analysis types
+            cursor.execute('SELECT DISTINCT analysis_type FROM analysis_jobs ORDER BY analysis_type')
+            analysis_types = [row['analysis_type'] for row in cursor.fetchall()]
+
+            # Get distinct Whisper models
+            cursor.execute('SELECT DISTINCT model_name FROM transcripts WHERE model_name IS NOT NULL ORDER BY model_name')
+            whisper_models = [row['model_name'] for row in cursor.fetchall()]
+
+            # Get distinct Nova models
+            cursor.execute('SELECT DISTINCT model FROM nova_jobs WHERE model IS NOT NULL ORDER BY model')
+            nova_models = [row['model'] for row in cursor.fetchall()]
+
+            # Get distinct languages
+            cursor.execute('SELECT DISTINCT language FROM transcripts WHERE language IS NOT NULL ORDER BY language')
+            languages = [row['language'] for row in cursor.fetchall()]
+
+            # Statuses (hardcoded common ones)
+            statuses = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'SUBMITTED', 'SUCCEEDED']
+
+            # File types (hardcoded)
+            file_types = ['video', 'image']
+
+            return {
+                'analysis_types': analysis_types,
+                'models': {
+                    'whisper': whisper_models,
+                    'nova': nova_models
+                },
+                'languages': languages,
+                'statuses': statuses,
+                'file_types': file_types
             }
 
     # Helper methods for analysis_jobs integration
