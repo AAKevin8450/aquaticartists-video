@@ -43,11 +43,20 @@ class BatchJob:
         self.start_time = time.time()
         self.end_time = None
         self.results = []  # List of result dicts for each file
+        self.total_batch_size = 0  # Total size of all files in batch (bytes)
+        self.processed_files_sizes = []  # Sizes of processed files (bytes)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON response."""
         elapsed = (self.end_time or time.time()) - self.start_time
         progress = (self.completed_files + self.failed_files) / self.total_files * 100 if self.total_files > 0 else 0
+
+        # Calculate average sizes
+        avg_video_size_total = self.total_batch_size / self.total_files if self.total_files > 0 else None
+        avg_video_size_processed = (
+            sum(self.processed_files_sizes) / len(self.processed_files_sizes)
+            if len(self.processed_files_sizes) > 0 else None
+        )
 
         return {
             'job_id': self.job_id,
@@ -59,6 +68,8 @@ class BatchJob:
             'current_file': self.current_file,
             'progress_percent': round(progress, 1),
             'elapsed_seconds': round(elapsed, 1),
+            'avg_video_size_total': avg_video_size_total,
+            'avg_video_size_processed': avg_video_size_processed,
             'errors': self.errors,
             'results': self.results
         }
@@ -1758,6 +1769,18 @@ def _run_batch_transcribe(app, job: BatchJob):
         else:
             service = create_transcription_service(model_name, device, compute_type)
 
+        # Calculate total batch size
+        db = get_db()
+        for file_id in job.file_ids:
+            try:
+                file = db.get_file(file_id)
+                if file and file.get('local_path'):
+                    local_path = file['local_path']
+                    if Path(local_path).exists():
+                        job.total_batch_size += Path(local_path).stat().st_size
+            except Exception:
+                pass  # Skip files that can't be accessed
+
         for file_id in job.file_ids:
             if job.status == 'CANCELLED':
                 break
@@ -1781,6 +1804,7 @@ def _run_batch_transcribe(app, job: BatchJob):
                 )
                 if existing and existing['status'] == TranscriptStatus.COMPLETED and not force:
                     job.completed_files += 1
+                    job.processed_files_sizes.append(file_size)
                     job.results.append({
                         'file_id': file_id,
                         'filename': file['filename'],
@@ -1839,6 +1863,7 @@ def _run_batch_transcribe(app, job: BatchJob):
                 )
 
                 job.completed_files += 1
+                job.processed_files_sizes.append(file_size)
                 job.results.append({
                     'file_id': file_id,
                     'filename': file['filename'],
@@ -1855,6 +1880,12 @@ def _run_batch_transcribe(app, job: BatchJob):
                     'filename': file.get('filename', f'File {file_id}'),
                     'error': error_msg
                 })
+                # Track failed file size too if available
+                try:
+                    if 'file_size' in locals():
+                        job.processed_files_sizes.append(file_size)
+                except Exception:
+                    pass
                 current_app.logger.error(f"Batch transcribe error for file {file_id}: {e}")
 
         # Mark job as complete

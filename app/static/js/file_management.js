@@ -1772,6 +1772,11 @@ function formatDurationUI(seconds) {
     return `${secs}s`;
 }
 
+// Alias for compatibility (used in batch progress)
+function formatDuration(seconds) {
+    return formatDurationUI(seconds);
+}
+
 function formatTranscriptDate(isoDate) {
     if (!isoDate) return 'N/A';
     const date = new Date(isoDate);
@@ -2490,7 +2495,7 @@ function updateBatchProgress(data) {
         document.getElementById('batchTotal').textContent = data.total_files;
         document.getElementById('batchCompleted').textContent = data.completed_files;
         document.getElementById('batchFailed').textContent = data.failed_files;
-        document.getElementById('batchElapsed').textContent = `${data.elapsed_seconds.toFixed(1)}s`;
+        document.getElementById('batchElapsed').textContent = formatDuration(data.elapsed_seconds);
     }
 
     // Detailed statistics (for transcription jobs)

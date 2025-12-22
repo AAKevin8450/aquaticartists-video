@@ -42,13 +42,18 @@ Critical environment variables are stored in .env file (not in git):
 6. **Nova Service** (app/services/nova_service.py) - AWS Bedrock Nova intelligent video analysis (summary, chapters, elements)
    - Supported models: Lite, Pro, Premier (preview models pro_2_preview and omni_2_preview removed 2025-12-21)
    - Nova Sonic transcription via app/services/nova_transcription_service.py with enhanced Bedrock API compatibility
+   - Nova Embeddings via app/services/nova_embeddings_service.py for semantic search (amazon.nova-2-multimodal-embeddings-v1:0, 1024 dimensions)
+   - Embedding Manager via app/services/embedding_manager.py for text chunking and data ingestion
 7. **Database Layer** (app/database.py) - SQLite operations with optimized queries
    - get_dashboard_stats(): Returns 20+ metrics across 8 categories (library overview, processing statistics, proxy statistics, transcription statistics, analysis breakdown, recent activity, content percentages, performance metrics)
    - list_files(): High-performance LEFT JOIN query with aggregated statistics (eliminates N+1 problem)
    - get_summary_stats(): Efficient single-query approach for file listing summaries
-   - search_all(): Unified search across 5 data sources (files, transcripts, Rekognition, Nova, collections) with UNION query and relevance scoring
+   - search_all(): Unified keyword search across 5 data sources (files, transcripts, Rekognition, Nova, collections) with UNION query and relevance scoring
+   - search_embeddings(): Vector KNN search using sqlite-vec for semantic search with similarity scoring
+   - get_content_for_embedding_results(): Enriches vector search results with actual content from source tables
    - count_search_results(): Fast count-only query for pagination
    - get_search_filters(): Returns available filter options (models, analysis types, statuses)
+   - get_embedding_stats(): Returns embedding statistics for monitoring (total count, by source/model breakdown)
 8. **Analysis API** (app/routes/analysis.py) - Multi-select analysis endpoint (supports arrays of analysis types)
 9. **Nova API** (app/routes/nova_analysis.py) - Nova video analysis endpoints (5 endpoints: /analyze, /status, /results, /models, /estimate-cost)
 10. **File Management API** (app/routes/file_management.py) - Centralized file management with search/filter/actions (10 endpoints: list, details, create-proxy, start-analysis, start-transcription, start-nova, delete-cascade, s3-files)
@@ -57,8 +62,9 @@ Critical environment variables are stored in .env file (not in git):
     - Date filtering: upload_from_date/upload_to_date (S3 upload time), created_from_date/created_to_date (file metadata creation time)
     - Nova batch mode requires minimum 100 files (enforced in UI with dynamic availability checks)
 11. **Search API** (app/routes/search.py) - Unified search across all data sources (4 endpoints: /search, /api/search, /api/search/count, /api/search/filters)
-    - Multi-source search with advanced filtering, sorting, and pagination
-    - Performance-optimized with 7 database indexes for sub-500ms response times
+    - Keyword search: Multi-source search with advanced filtering, sorting, and pagination
+    - Semantic search: AI-powered natural language search using Nova Embeddings (opt-in via semantic=true parameter)
+    - Performance-optimized with 7 database indexes for sub-500ms response times (keyword), sub-500ms vector KNN queries (semantic)
 
 ### Frontend Components
 **Templates** (app/templates/):
@@ -86,7 +92,7 @@ Critical environment variables are stored in .env file (not in git):
 **Key Features**:
 - Comprehensive dashboard: Home page displays 10+ real-time statistics tiles with library overview, processing status, content breakdown, recent activity, analysis breakdown, transcription stats, and active jobs
 - Centralized workflow: File Management tab is the PRIMARY interface for all processing operations (video/image analysis, transcription, proxy creation). Replaced 3 separate analysis pages with unified batch operation interface
-- Unified search: Search page provides single query interface across 5 data sources (files, transcripts, Rekognition, Nova, collections) with advanced filtering, sorting by relevance/date/name, and pagination
+- Unified search: Search page provides single query interface across 5 data sources (files, transcripts, Rekognition, Nova, collections) with advanced filtering, sorting by relevance/date/name, and pagination. Optional AI semantic search toggle for natural language queries
 - Multi-select analysis: Users can select 1-8 analysis types simultaneously (checkboxes replace radio buttons)
 - Real-time upload progress: XMLHttpRequest provides smooth 0-100% progress updates
 - Automatic timezone conversion: All timestamps display in Eastern Time (ET) with zoneinfo/tzdata
@@ -96,7 +102,8 @@ Critical environment variables are stored in .env file (not in git):
 - Visual dashboard: Interactive charts, graphs, and insights for video analysis results (accessible via /dashboard/<job_id>)
 - File management: Centralized file view showing 3,161+ files (uploaded + transcribed) with summary statistics (count, total size, total duration), full-text search, advanced filtering, status badges, quick actions, and S3 file operations (view/download/delete)
 - Batch operations: All batch actions (proxy creation, transcription, Nova analysis, Rekognition analysis) respect current search/filter criteria and fetch ALL filtered files across pages (not just displayed page)
-- High-performance database: LEFT JOIN queries with GROUP BY aggregation deliver sub-200ms page loads even with 10,000+ files, 7 search indexes enable sub-500ms search across all data sources
+- High-performance database: LEFT JOIN queries with GROUP BY aggregation deliver sub-200ms page loads even with 10,000+ files, 7 search indexes enable sub-500ms keyword search, sqlite-vec enables sub-500ms semantic vector search
+- Semantic search: AI-powered natural language search using AWS Nova Embeddings (1024 dimensions) with smart text chunking, hash-based idempotency, and similarity scoring. UI toggle preserves existing keyword search by default
 
 ### Running the Application
 ```bash
@@ -445,6 +452,54 @@ idx_analysis_jobs_created_at - B-tree index on analysis_jobs.created_at
 - ✅ **Template Block Mismatch**: search.html used incorrect block names (extra_js, extra_css) instead of (extra_scripts, extra_head) matching base.html - JavaScript and CSS never loaded
 - ✅ **Navigation on Click**: Search results navigated to File Management page - now open modals directly on search page for better UX
 
+### Semantic Search (AI-Powered) - NEW 2025-12-21
+
+**Overview**: Optional AI-powered semantic search using AWS Nova Multimodal Embeddings for natural language queries. Enables users to search using conversational phrases like "pool maintenance tips" instead of exact keywords.
+
+**Key Features**:
+- **UI Toggle**: Bootstrap 5 form-switch toggle labeled "AI Semantic Search" on /search page
+- **Default Behavior**: Disabled by default (preserves existing keyword search)
+- **Supported Sources**: Transcripts and Nova analysis results only (files, Rekognition, collections use keyword search)
+- **Vector Storage**: sqlite-vec extension with 1024-dimension embeddings (4KB per vector)
+- **Similarity Scoring**: Results ranked by cosine similarity (0.0-1.0) with L2 distance conversion
+
+**Technical Implementation**:
+- **Model**: amazon.nova-2-multimodal-embeddings-v1:0 (us-east-1)
+- **API**: GET /api/search?semantic=true&q=query
+- **Response Format**: Includes metadata.similarity and metadata.distance fields
+- **Performance**: Sub-500ms KNN vector queries using sqlite-vec MATCH operator
+- **Text Chunking**: 4000 char chunks with 200 char overlap, sentence boundary detection
+- **Idempotency**: SHA-256 content hashing prevents duplicate embeddings
+
+**Database Tables**:
+- `nova_embeddings` (vec0 virtual table): Vector storage with rowid and embedding FLOAT[1024]
+- `nova_embedding_metadata`: Metadata with source_type, source_id, file_id, model_name, content_hash, created_at
+
+**Backfill Process**:
+- **Script**: `python -m scripts.backfill_embeddings`
+- **Options**: --force, --limit, --transcripts-only, --nova-only
+- **Estimated Cost**: ~$0.09 for 3,154 transcripts (avg 2,000 chars × $0.00009/1K chars)
+- **Progress Tracking**: tqdm progress bars with error reporting
+
+**Prerequisites**:
+1. Download sqlite-vec extension (vec0.dll) from https://github.com/asg017/sqlite-vec/releases
+2. Set SQLITE_VEC_PATH=C:\path\to\vec0.dll in .env
+3. Verify IAM permissions include bedrock:InvokeModel
+4. Enable amazon.nova-2-multimodal-embeddings-v1:0 in Bedrock console (us-east-1)
+5. Add env vars: NOVA_EMBED_MODEL_ID, NOVA_EMBED_DIMENSION=1024
+
+**Usage Example**:
+1. Navigate to /search
+2. Toggle "AI Semantic Search" to ON
+3. Enter natural language query: "pool maintenance tips"
+4. Results ranked by semantic similarity with scores displayed
+
+**Best Practices**:
+- Use semantic search for conceptual queries ("how to fix leaks")
+- Use keyword search for exact matches (file names, specific terms)
+- Semantic search works best with full sentences or phrases
+- Review similarity scores to assess relevance (>0.7 is strong match)
+
 ### Future Enhancements
 - Full-text search with FTS5 virtual table for better relevance ranking
 - Search within Rekognition/Nova JSON results (detect specific labels, objects, scenes)
@@ -454,6 +509,7 @@ idx_analysis_jobs_created_at - B-tree index on analysis_jobs.created_at
 - Autocomplete suggestions based on existing content
 - Fuzzy matching for typo tolerance
 - Search result snippets with highlighted context
+- Hybrid search (combine keyword + semantic scores)
 
 ## Video Analysis Dashboard Feature
 
