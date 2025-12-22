@@ -43,10 +43,40 @@ def format_timestamp(timestamp: Optional[str], timezone: str = 'America/New_York
                 # Fallback if timezone not found
                 pass
 
-        # Fallback: Manual EST offset (UTC-5)
-        # Note: This doesn't handle DST automatically
-        dt_et = dt - timedelta(hours=5)
-        return dt_et.strftime('%Y-%m-%d %H:%M:%S ET')
+        # Fallback: Manual EST/EDT offset with DST handling
+        # Determine if DST is in effect (EDT: UTC-4, EST: UTC-5)
+        # DST typically runs from 2nd Sunday in March to 1st Sunday in November
+        month = dt.month
+        day = dt.day
+
+        # Simple DST check: March-November is typically EDT (UTC-4)
+        # More precise: 2nd Sunday March through 1st Sunday November
+        if month > 3 and month < 11:
+            # Definitely EDT
+            offset_hours = 4
+        elif month == 3:
+            # Check if after 2nd Sunday in March
+            # DST starts at 2 AM on 2nd Sunday
+            second_sunday = (14 - (5 * 1 - day - 1) % 7)
+            if day >= second_sunday:
+                offset_hours = 4
+            else:
+                offset_hours = 5
+        elif month == 11:
+            # Check if before 1st Sunday in November
+            # DST ends at 2 AM on 1st Sunday
+            first_sunday = (7 - (5 * 1 - day - 1) % 7)
+            if day < first_sunday:
+                offset_hours = 4
+            else:
+                offset_hours = 5
+        else:
+            # December, January, February - EST
+            offset_hours = 5
+
+        dt_et = dt - timedelta(hours=offset_hours)
+        tz_label = 'EDT' if offset_hours == 4 else 'EST'
+        return dt_et.strftime(f'%Y-%m-%d %H:%M:%S {tz_label}')
 
     except (ValueError, AttributeError) as e:
         # If parsing fails, return original

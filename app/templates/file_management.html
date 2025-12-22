@@ -840,6 +840,34 @@
                     </div>
                 </div>
 
+                <!-- Detailed Statistics (for transcription) -->
+                <div class="row text-center mb-3" id="batchDetailedStats" style="display: none;">
+                    <div class="col-3">
+                        <div class="d-flex flex-column">
+                            <small class="text-muted" title="Average size of all files in batch">Avg Size (All)</small>
+                            <h6 class="mb-0" id="batchAvgSizeTotal">-</h6>
+                        </div>
+                    </div>
+                    <div class="col-3">
+                        <div class="d-flex flex-column">
+                            <small class="text-muted" title="Average size of processed files">Avg Size (Proc)</small>
+                            <h6 class="mb-0" id="batchAvgSizeProcessed">-</h6>
+                        </div>
+                    </div>
+                    <div class="col-3">
+                        <div class="d-flex flex-column">
+                            <small class="text-muted" title="Average processing time per file">Avg Time</small>
+                            <h6 class="mb-0" id="batchAvgTime">-</h6>
+                        </div>
+                    </div>
+                    <div class="col-3">
+                        <div class="d-flex flex-column">
+                            <small class="text-muted" title="Estimated time remaining">ETA</small>
+                            <h6 class="mb-0" id="batchETA">-</h6>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Error List (collapsible) -->
                 <div id="batchErrorsSection" style="display: none;">
                     <hr>

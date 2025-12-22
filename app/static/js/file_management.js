@@ -34,6 +34,7 @@ let currentTranscriptId = null;
 let s3FilesLoaded = false;
 let importBrowsingPath = '';
 let importBrowserParentPath = null;
+let currentBatchActionType = null;  // Track current batch action type
 
 // ============================================================================
 // INITIALIZATION
@@ -44,6 +45,9 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!restoreFileManagementState()) {
         loadFiles();
     }
+
+    // Check URL parameters for auto-opening modals
+    setTimeout(() => handleURLParameters(), 500);  // Delay to ensure files are loaded
 });
 
 // ============================================================================
@@ -1930,6 +1934,7 @@ async function startBatchAction(actionType) {
 
         const data = await response.json();
         currentBatchJob = data.job_id;
+        currentBatchActionType = actionType;  // Store action type
 
         // Show progress modal
         showBatchProgressModal(actionType, data.total_files);
@@ -2488,6 +2493,44 @@ function updateBatchProgress(data) {
         document.getElementById('batchElapsed').textContent = `${data.elapsed_seconds.toFixed(1)}s`;
     }
 
+    // Detailed statistics (for transcription jobs)
+    const detailedStatsDiv = document.getElementById('batchDetailedStats');
+    if (currentBatchActionType === 'transcribe' && (data.status === 'RUNNING' || data.status === 'COMPLETED')) {
+        // Show detailed stats
+        detailedStatsDiv.style.display = 'flex';
+
+        // Average size (all files)
+        if (data.avg_video_size_total !== undefined && data.avg_video_size_total !== null) {
+            document.getElementById('batchAvgSizeTotal').textContent = formatFileSize(data.avg_video_size_total);
+        }
+
+        // Average size (processed files)
+        if (data.avg_video_size_processed !== undefined && data.avg_video_size_processed !== null) {
+            document.getElementById('batchAvgSizeProcessed').textContent = formatFileSize(data.avg_video_size_processed);
+        }
+
+        // Calculate average time per file
+        if (data.completed_files > 0 && data.elapsed_seconds) {
+            const avgTime = data.elapsed_seconds / data.completed_files;
+            document.getElementById('batchAvgTime').textContent = `${avgTime.toFixed(1)}s`;
+
+            // Calculate ETA
+            const remainingFiles = data.total_files - data.completed_files - data.failed_files;
+            if (remainingFiles > 0 && data.status === 'RUNNING') {
+                const eta = avgTime * remainingFiles;
+                document.getElementById('batchETA').textContent = formatDuration(eta);
+            } else {
+                document.getElementById('batchETA').textContent = '-';
+            }
+        } else {
+            document.getElementById('batchAvgTime').textContent = '-';
+            document.getElementById('batchETA').textContent = '-';
+        }
+    } else {
+        // Hide detailed stats for non-transcription jobs
+        detailedStatsDiv.style.display = 'none';
+    }
+
     // Errors
     if (data.errors && data.errors.length > 0) {
         document.getElementById('batchErrorsSection').style.display = 'block';
@@ -2552,6 +2595,7 @@ function stopBatchProgressPolling() {
         clearInterval(batchStatusInterval);
         batchStatusInterval = null;
     }
+    currentBatchActionType = null;  // Reset action type
 }
 
 async function cancelBatchJob() {
@@ -2576,5 +2620,99 @@ async function cancelBatchJob() {
     } catch (error) {
         console.error('Cancel batch error:', error);
         showAlert(`Failed to cancel batch job: ${error.message}`, 'danger');
+    }
+}
+
+// ============================================================================
+// URL PARAMETER HANDLING (for search result navigation)
+// ============================================================================
+
+function handleURLParameters() {
+    const params = new URLSearchParams(window.location.search);
+
+    // Check for file ID parameter
+    const fileId = params.get('id');
+    if (fileId) {
+        console.log('Auto-opening file details for ID:', fileId);
+        viewFileDetails(parseInt(fileId));
+        return;
+    }
+
+    // Check for transcript highlight parameter (format: transcript_123)
+    const highlight = params.get('highlight');
+    if (highlight && highlight.startsWith('transcript_')) {
+        const transcriptId = parseInt(highlight.replace('transcript_', ''));
+        console.log('Auto-opening transcript details for ID:', transcriptId);
+        openTranscriptDetails(transcriptId);
+        return;
+    }
+
+    // Check for job_id parameter (Rekognition analysis)
+    const jobId = params.get('job_id');
+    if (jobId) {
+        console.log('Auto-opening Rekognition job details for ID:', jobId);
+        // For Rekognition jobs, we need to find the file that has this job
+        // and show the file details which includes analysis jobs
+        findAndShowFileByJobId(parseInt(jobId));
+        return;
+    }
+
+    // Check for nova_id parameter (Nova analysis)
+    const novaId = params.get('nova_id');
+    if (novaId) {
+        console.log('Auto-opening Nova analysis details for ID:', novaId);
+        // Similar to Rekognition, find the file with this Nova job
+        findAndShowFileByNovaId(parseInt(novaId));
+        return;
+    }
+}
+
+async function findAndShowFileByJobId(jobId) {
+    try {
+        // Get job details to find the file_id
+        const response = await fetch(`/api/history/${jobId}`);
+        if (!response.ok) {
+            throw new Error('Failed to load job details');
+        }
+
+        const job = await response.json();
+        if (job.file_id) {
+            viewFileDetails(job.file_id);
+        } else {
+            showAlert('Could not find file for this analysis job', 'warning');
+        }
+    } catch (error) {
+        console.error('Failed to find file by job ID:', error);
+        showAlert(`Failed to open analysis: ${error.message}`, 'danger');
+    }
+}
+
+async function findAndShowFileByNovaId(novaId) {
+    try {
+        // Get Nova job details to find the file_id
+        const response = await fetch(`/api/nova/results/${novaId}`);
+        if (!response.ok) {
+            throw new Error('Failed to load Nova job details');
+        }
+
+        const novaJob = await response.json();
+        // Nova jobs link to analysis_job_id, need to get that first
+        if (novaJob.analysis_job_id) {
+            const jobResponse = await fetch(`/api/history/${novaJob.analysis_job_id}`);
+            if (!jobResponse.ok) {
+                throw new Error('Failed to load analysis job details');
+            }
+            const job = await jobResponse.json();
+            if (job.file_id) {
+                viewFileDetails(job.file_id);
+            } else {
+                showAlert('Could not find file for this Nova analysis', 'warning');
+            }
+        } else {
+            showAlert('Could not find file for this Nova analysis', 'warning');
+        }
+    } catch (error) {
+        console.error('Failed to find file by Nova ID:', error);
+        showAlert(`Failed to open Nova analysis: ${error.message}`, 'danger');
     }
 }

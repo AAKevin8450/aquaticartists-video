@@ -1,3 +1,59 @@
+2025-12-21 19:15:59 - Updated by Claude Code
+
+[Category: Bug Fix]
+Fix unified search page functionality and implement modal-based result viewing to improve user experience.
+
+[Purpose]
+Resolve critical search page issues preventing JavaScript execution and improve UX by keeping users on search results page with modal popups instead of navigation.
+
+[Impact]
+- Search page now fully functional with JavaScript loading correctly
+- Users stay on search results page when viewing details (modals instead of navigation)
+- File, transcript, and analysis details open in comprehensive modals
+- Improved search workflow: query once, review multiple results without re-searching
+- Fixed template block name mismatches (extra_js → extra_scripts, extra_css → extra_head)
+- Fixed search result URLs (file-management → /files)
+- Added File Details and Transcript Details modals to search page
+- Title and button clicks open modals directly on search page
+
+[Files Modified]
+- app/templates/search.html (+40 lines): Fixed template blocks (extra_js→extra_scripts, extra_css→extra_head), added File Details and Transcript Details modals
+- app/static/js/search.js (+362 lines): Added viewFileDetails(), openTranscriptDetails(), viewAnalysisResult(), renderFileDetails(), getTitleOnClick() functions, comprehensive modal rendering with file info/transcripts/analysis jobs, debugging console logs
+- app/routes/search.py (+8 lines): Fixed action link URLs (/file-management → /files, /transcription → /transcriptions)
+- app/static/js/file_management.js (+138 lines): Added handleURLParameters(), findAndShowFileByJobId(), findAndShowFileByNovaId() for auto-opening modals from URL parameters (not used in final solution, kept for future file management direct links)
+- app/templates/file_management.html (+28 lines): Added note about auto-open modal functionality (preparation for future enhancements)
+
+[Technical Details]
+**Search Page Template Block Fix**:
+- Root cause: base.html defines {% block extra_scripts %} and {% block extra_head %}
+- search.html incorrectly used {% block extra_js %} and {% block extra_css %}
+- Result: search.js and search.css never loaded, JavaScript never executed
+- Fix: Renamed blocks to match base.html convention
+
+**Modal Implementation**:
+- File Details Modal: Shows file metadata (size, duration, resolution, codecs), proxy status, all transcripts with "View" buttons, all analysis jobs with "Dashboard" links
+- Transcript Details Modal: Full transcript text display, download options (TXT, SRT), metadata (model, language, word count)
+- viewAnalysisResult(): Fetches Rekognition/Nova job details to find associated file_id, then opens File Details modal
+- Result titles and "View" buttons both trigger modals via onclick handlers
+- No page navigation required - all interactions via Bootstrap modals
+
+**Search Result Action Changes**:
+- File results: viewFileDetails(fileId) opens modal
+- Transcript results: openTranscriptDetails(transcriptId) opens modal with full text
+- Rekognition results: viewAnalysisResult(jobId, 'rekognition') fetches file and opens modal
+- Nova results: viewAnalysisResult(jobId, 'nova') fetches file and opens modal
+- Collections: Navigate to /collections page (external link)
+- Dashboard links: Open in new tab (target="_blank")
+
+**Code Organization**:
+- search.js now 960+ lines (from ~680 lines)
+- Added 280+ lines of modal functionality
+- Reused file_management.js rendering patterns for consistency
+- Global window functions: viewFileDetails, openTranscriptDetails, viewAnalysisResult
+
+[Removed/Deprecated]
+- N/A (no functionality removed)
+
 2025-12-21 16:47:17 - Updated by Claude Code
 
 [Category: Bug Fix/Enhancement/Infrastructure]
