@@ -113,11 +113,11 @@ def _create_proxy_video(source_path: str, proxy_path: str):
         '-map', '0:v:0'
     ]
     if audio_stream_index is not None:
-        command.extend(['-map', f'0:a:{audio_stream_index}'])
+        command.extend(['-map', f'0:{audio_stream_index}'])
     command.extend([
-        '-c:v', 'libx264',
-        '-preset', 'fast',
-        '-crf', '28',
+        '-c:v', 'h264_nvenc',
+        '-preset', 'p4',
+        '-cq', '28',
         '-pix_fmt', 'yuv420p'
     ])
     if audio_stream_index is not None:

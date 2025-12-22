@@ -58,7 +58,8 @@ Critical environment variables are stored in .env file (not in git):
 9. **Nova API** (app/routes/nova_analysis.py) - Nova video analysis endpoints (5 endpoints: /analyze, /status, /results, /models, /estimate-cost)
 10. **File Management API** (app/routes/file_management.py) - Centralized file management with search/filter/actions (10 endpoints: list, details, create-proxy, start-analysis, start-transcription, start-nova, delete-cascade, s3-files)
     - Batch operations (proxy, transcribe, nova, rekognition) fetch ALL filtered files across all pages (500 files per paginated request)
-    - Batch proxy creation creates local-only proxies (no S3 upload) to save costs for large video libraries
+    - Batch proxy creation creates local-only proxies (no S3 upload) to save costs for large video libraries, uses NVENC GPU acceleration (h264_nvenc) for 3-5x faster encoding
+    - Batch progress metrics: Real-time tracking of total batch size, processed size, generated proxy size, processing time, and ETA for proxy/transcription jobs
     - Date filtering: upload_from_date/upload_to_date (S3 upload time), created_from_date/created_to_date (file metadata creation time)
     - Nova batch mode requires minimum 100 files (enforced in UI with dynamic availability checks)
 11. **Search API** (app/routes/search.py) - Unified search across all data sources (4 endpoints: /search, /api/search, /api/search/count, /api/search/filters)
@@ -101,7 +102,7 @@ Critical environment variables are stored in .env file (not in git):
 - Excel export: Professional formatted Excel files with Summary and Data sheets using openpyxl
 - Visual dashboard: Interactive charts, graphs, and insights for video analysis results (accessible via /dashboard/<job_id>)
 - File management: Centralized file view showing 3,161+ files (uploaded + transcribed) with summary statistics (count, total size, total duration), full-text search, advanced filtering, status badges, quick actions, and S3 file operations (view/download/delete)
-- Batch operations: All batch actions (proxy creation, transcription, Nova analysis, Rekognition analysis) respect current search/filter criteria and fetch ALL filtered files across pages (not just displayed page)
+- Batch operations: All batch actions (proxy creation, transcription, Nova analysis, Rekognition analysis) respect current search/filter criteria and fetch ALL filtered files across pages (not just displayed page). Proxy and transcription jobs display detailed real-time progress metrics (total/processed sizes, generated proxy size, ETA)
 - High-performance database: LEFT JOIN queries with GROUP BY aggregation deliver sub-200ms page loads even with 10,000+ files, 7 search indexes enable sub-500ms keyword search, sqlite-vec enables sub-500ms semantic vector search
 - Semantic search: AI-powered natural language search using AWS Nova Embeddings (1024 dimensions) with smart text chunking, hash-based idempotency, and similarity scoring. UI toggle preserves existing keyword search by default
 
@@ -137,6 +138,9 @@ python run.py
 **2025-12-21**:
 - **Nova Sonic Response Parsing**: Fixed transcription failures by implementing comprehensive Bedrock API response parsing supporting both streaming and non-streaming formats with multiple content structures. Added debug logging via NOVA_SONIC_DEBUG environment variable.
 - **FFmpeg Proxy Audio Handling**: Fixed proxy creation errors for videos without audio or with multiple audio streams. Now intelligently selects best audio stream (highest channel count) and gracefully handles audio-less videos.
+- **FFmpeg Audio Stream Mapping Bug**: Fixed critical bug where FFmpeg used relative audio stream indexing (0:a:N) instead of absolute stream indexing (0:N), causing proxy creation failures for videos with multiple audio streams. Changed mapping from '0:a:{index}' to '0:{index}' to correctly reference streams by absolute position in file.
+- **NVENC GPU Encoding**: Enabled NVIDIA NVENC hardware acceleration for proxy creation, replacing software encoding (libx264) with GPU encoding (h264_nvenc). Provides ~3-5x faster proxy generation on RTX 5070 Ti. Uses preset p4 (medium quality) and constant quality mode (CQ 28).
+- **Batch Progress Metrics**: Added comprehensive real-time statistics for batch proxy and transcription operations. Proxy jobs now track total source size, processed size, generated proxy size, and ETA. Transcription jobs show average file sizes, processing time, and ETA. Frontend dynamically updates metric labels based on operation type.
 - **Batch Operations Scope**: Fixed batch operations only processing currently visible page. Now fetches ALL filtered files across all pages (500 files per paginated request) for proxy, transcription, Nova, and Rekognition batch operations.
 - **Date Filter Clarity**: Split confusing from_date/to_date parameters into upload_from_date/upload_to_date (S3 upload) and created_from_date/created_to_date (file creation metadata) for clearer filtering.
 
@@ -152,9 +156,12 @@ python run.py
 Completely local video transcription system using faster-whisper (CTranslate2-based Whisper implementation). No data is sent to cloud services. Designed for processing large video libraries (~10TB+) with efficient batch processing and deduplication.
 
 ### System Requirements
-- **FFmpeg**: Must be installed and accessible in PATH (required for audio extraction)
+- **FFmpeg**: Must be installed and accessible in PATH (required for audio extraction and proxy creation)
+  - For GPU-accelerated proxy creation: FFmpeg must be compiled with NVENC support (--enable-nvenc)
+  - NVIDIA GPU with NVENC hardware encoder (GTX 600 series or newer, RTX series recommended)
+  - CUDA drivers installed for NVENC functionality
 - **Python Dependencies**: faster-whisper>=1.0.0, ffmpeg-python>=0.2.0
-- **Optional**: CUDA-capable GPU for 4x faster processing (auto-detected)
+- **Optional**: CUDA-capable GPU for 4x faster transcription processing (auto-detected)
 
 ### Key Features
 1. **Directory Scanning**: Recursively scan directories for video files with deduplication
