@@ -2514,41 +2514,90 @@ function updateBatchProgress(data) {
         document.getElementById('batchElapsed').textContent = formatDuration(data.elapsed_seconds);
     }
 
-    // Detailed statistics (for transcription jobs)
+    // Detailed statistics (for transcription and proxy jobs)
     const detailedStatsDiv = document.getElementById('batchDetailedStats');
-    if (currentBatchActionType === 'transcribe' && (data.status === 'RUNNING' || data.status === 'COMPLETED')) {
+    if ((currentBatchActionType === 'transcribe' || currentBatchActionType === 'proxy') &&
+        (data.status === 'RUNNING' || data.status === 'COMPLETED')) {
         // Show detailed stats
         detailedStatsDiv.style.display = 'flex';
 
-        // Average size (all files)
-        if (data.avg_video_size_total !== undefined && data.avg_video_size_total !== null) {
-            document.getElementById('batchAvgSizeTotal').textContent = formatFileSize(data.avg_video_size_total);
-        }
+        if (currentBatchActionType === 'proxy') {
+            // Proxy-specific statistics
+            // Update labels
+            document.getElementById('batchLabel1').textContent = 'Total Size';
+            document.getElementById('batchLabel1').title = 'Total size of all source files in batch';
+            document.getElementById('batchLabel2').textContent = 'Processed Size';
+            document.getElementById('batchLabel2').title = 'Total size of files processed so far';
+            document.getElementById('batchLabel3').textContent = 'Proxy Size';
+            document.getElementById('batchLabel3').title = 'Total size of all generated proxy files';
+            document.getElementById('batchLabel4').textContent = 'ETA';
+            document.getElementById('batchLabel4').title = 'Estimated time remaining';
 
-        // Average size (processed files)
-        if (data.avg_video_size_processed !== undefined && data.avg_video_size_processed !== null) {
-            document.getElementById('batchAvgSizeProcessed').textContent = formatFileSize(data.avg_video_size_processed);
-        }
+            // Total batch size
+            if (data.total_batch_size !== undefined && data.total_batch_size !== null) {
+                document.getElementById('batchAvgSizeTotal').textContent = formatFileSize(data.total_batch_size);
+            }
 
-        // Calculate average time per file
-        if (data.completed_files > 0 && data.elapsed_seconds) {
-            const avgTime = data.elapsed_seconds / data.completed_files;
-            document.getElementById('batchAvgTime').textContent = `${avgTime.toFixed(1)}s`;
+            // Total processed size
+            if (data.total_processed_size !== undefined && data.total_processed_size !== null) {
+                document.getElementById('batchAvgSizeProcessed').textContent = formatFileSize(data.total_processed_size);
+            }
 
-            // Calculate ETA
-            const remainingFiles = data.total_files - data.completed_files - data.failed_files;
-            if (remainingFiles > 0 && data.status === 'RUNNING') {
-                const eta = avgTime * remainingFiles;
-                document.getElementById('batchETA').textContent = formatDuration(eta);
+            // Total proxy size
+            if (data.total_proxy_size !== undefined && data.total_proxy_size !== null) {
+                document.getElementById('batchAvgTime').textContent = formatFileSize(data.total_proxy_size);
+            } else {
+                document.getElementById('batchAvgTime').textContent = '-';
+            }
+
+            // Time remaining (from backend)
+            if (data.time_remaining_seconds !== undefined && data.time_remaining_seconds !== null && data.status === 'RUNNING') {
+                document.getElementById('batchETA').textContent = formatDuration(data.time_remaining_seconds);
             } else {
                 document.getElementById('batchETA').textContent = '-';
             }
         } else {
-            document.getElementById('batchAvgTime').textContent = '-';
-            document.getElementById('batchETA').textContent = '-';
+            // Transcription statistics
+            // Update labels
+            document.getElementById('batchLabel1').textContent = 'Avg Size (All)';
+            document.getElementById('batchLabel1').title = 'Average size of all files in batch';
+            document.getElementById('batchLabel2').textContent = 'Avg Size (Proc)';
+            document.getElementById('batchLabel2').title = 'Average size of processed files';
+            document.getElementById('batchLabel3').textContent = 'Avg Time';
+            document.getElementById('batchLabel3').title = 'Average processing time per file';
+            document.getElementById('batchLabel4').textContent = 'ETA';
+            document.getElementById('batchLabel4').title = 'Estimated time remaining';
+
+            // Average size (all files)
+            if (data.avg_video_size_total !== undefined && data.avg_video_size_total !== null) {
+                document.getElementById('batchAvgSizeTotal').textContent = formatFileSize(data.avg_video_size_total);
+            }
+
+            // Average size (processed files)
+            if (data.avg_video_size_processed !== undefined && data.avg_video_size_processed !== null) {
+                document.getElementById('batchAvgSizeProcessed').textContent = formatFileSize(data.avg_video_size_processed);
+            }
+
+            // Calculate average time per file
+            if (data.completed_files > 0 && data.elapsed_seconds) {
+                const avgTime = data.elapsed_seconds / data.completed_files;
+                document.getElementById('batchAvgTime').textContent = `${avgTime.toFixed(1)}s`;
+
+                // Calculate ETA
+                const remainingFiles = data.total_files - data.completed_files - data.failed_files;
+                if (remainingFiles > 0 && data.status === 'RUNNING') {
+                    const eta = avgTime * remainingFiles;
+                    document.getElementById('batchETA').textContent = formatDuration(eta);
+                } else {
+                    document.getElementById('batchETA').textContent = '-';
+                }
+            } else {
+                document.getElementById('batchAvgTime').textContent = '-';
+                document.getElementById('batchETA').textContent = '-';
+            }
         }
     } else {
-        // Hide detailed stats for non-transcription jobs
+        // Hide detailed stats for other job types
         detailedStatsDiv.style.display = 'none';
     }
 

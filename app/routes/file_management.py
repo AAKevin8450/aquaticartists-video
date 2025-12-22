@@ -45,11 +45,13 @@ class BatchJob:
         self.results = []  # List of result dicts for each file
         self.total_batch_size = 0  # Total size of all files in batch (bytes)
         self.processed_files_sizes = []  # Sizes of processed files (bytes)
+        self.total_proxy_size = 0  # Total size of all generated proxy files (bytes) - for proxy action only
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON response."""
         elapsed = (self.end_time or time.time()) - self.start_time
-        progress = (self.completed_files + self.failed_files) / self.total_files * 100 if self.total_files > 0 else 0
+        processed_count = self.completed_files + self.failed_files
+        progress = processed_count / self.total_files * 100 if self.total_files > 0 else 0
 
         # Calculate average sizes
         avg_video_size_total = self.total_batch_size / self.total_files if self.total_files > 0 else None
@@ -57,6 +59,16 @@ class BatchJob:
             sum(self.processed_files_sizes) / len(self.processed_files_sizes)
             if len(self.processed_files_sizes) > 0 else None
         )
+
+        # Calculate total processed size
+        total_processed_size = sum(self.processed_files_sizes) if len(self.processed_files_sizes) > 0 else 0
+
+        # Calculate time remaining estimate
+        time_remaining = None
+        if processed_count > 0 and self.total_files > processed_count and elapsed > 0:
+            avg_time_per_file = elapsed / processed_count
+            remaining_files = self.total_files - processed_count
+            time_remaining = avg_time_per_file * remaining_files
 
         return {
             'job_id': self.job_id,
@@ -68,6 +80,10 @@ class BatchJob:
             'current_file': self.current_file,
             'progress_percent': round(progress, 1),
             'elapsed_seconds': round(elapsed, 1),
+            'total_batch_size': self.total_batch_size,
+            'total_processed_size': total_processed_size,
+            'total_proxy_size': self.total_proxy_size,
+            'time_remaining_seconds': round(time_remaining, 1) if time_remaining is not None else None,
             'avg_video_size_total': avg_video_size_total,
             'avg_video_size_processed': avg_video_size_processed,
             'errors': self.errors,
@@ -1762,12 +1778,25 @@ def _run_batch_proxy(app, job: BatchJob):
     """Background worker for batch proxy creation."""
     with app.app_context():
         from app.routes.upload import create_proxy_internal
+        from pathlib import Path
         import traceback
         import logging
 
         logger = logging.getLogger('app')
         logger.info(f"Batch proxy worker started for job {job.job_id} with {len(job.file_ids)} files")
         print(f"[BATCH PROXY] Worker started for job {job.job_id} with {len(job.file_ids)} files", flush=True)
+
+        # Calculate total batch size before processing
+        db = get_db()
+        for file_id in job.file_ids:
+            try:
+                file = db.get_file(file_id)
+                if file and file.get('local_path'):
+                    local_path = file['local_path']
+                    if Path(local_path).exists():
+                        job.total_batch_size += Path(local_path).stat().st_size
+            except Exception:
+                pass  # Skip files that can't be accessed
 
         for file_id in job.file_ids:
             if job.status == 'CANCELLED':
@@ -1786,8 +1815,20 @@ def _run_batch_proxy(app, job: BatchJob):
                 logger.info(f"Processing file {file_id}: {file['filename']}")
                 print(f"[BATCH PROXY] Processing file {file_id}: {file['filename']}", flush=True)
 
+                # Get source file size for tracking
+                source_file_size = 0
+                if file.get('local_path') and Path(file['local_path']).exists():
+                    source_file_size = Path(file['local_path']).stat().st_size
+
                 # Create proxy (local only, no S3 upload)
                 result = create_proxy_internal(file_id, upload_to_s3=False)
+
+                # Track processed source file size
+                job.processed_files_sizes.append(source_file_size)
+
+                # Track generated proxy size
+                if result.get('size_bytes'):
+                    job.total_proxy_size += result['size_bytes']
 
                 job.completed_files += 1
                 job.results.append({
@@ -1808,6 +1849,14 @@ def _run_batch_proxy(app, job: BatchJob):
                     'filename': file.get('filename', f'File {file_id}') if file else f'File {file_id}',
                     'error': error_msg
                 })
+
+                # Track failed file size too if available
+                try:
+                    if 'source_file_size' in locals():
+                        job.processed_files_sizes.append(source_file_size)
+                except Exception:
+                    pass
+
                 logger.error(f"Batch proxy error for file {file_id}: {e}", exc_info=True)
                 print(f"[BATCH PROXY ERROR] File {file_id}: {e}", flush=True)
                 print(f"[BATCH PROXY ERROR] Full traceback:\n{tb}", flush=True)
