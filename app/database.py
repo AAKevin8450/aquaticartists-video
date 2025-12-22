@@ -83,6 +83,10 @@ class Database:
                 created_at TEXT NOT NULL
             )
         ''')
+        try:
+            cursor.execute('ALTER TABLE nova_embedding_metadata ADD COLUMN file_id INTEGER')
+        except sqlite3.OperationalError:
+            pass
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_nova_embedding_source
             ON nova_embedding_metadata(source_type, source_id)
@@ -1389,6 +1393,29 @@ class Database:
             cursor.execute('DELETE FROM transcripts WHERE id = ?', (transcript_id,))
             return cursor.rowcount > 0
 
+    def get_transcripts_by_file(self, file_id: int) -> List[Dict[str, Any]]:
+        """Get all transcripts for a specific file."""
+        file = self.get_file(file_id)
+        if not file:
+            return []
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM transcripts
+                WHERE file_id = ? OR file_path = ?
+                ORDER BY created_at DESC
+            ''', (file_id, file.get('local_path')))
+
+            transcripts = []
+            for row in cursor.fetchall():
+                transcript = dict(row)
+                for field in ['segments', 'word_timestamps']:
+                    if transcript.get(field):
+                        transcript[field] = json.loads(transcript[field])
+                transcripts.append(transcript)
+            return transcripts
+
     def count_transcripts(self, status: Optional[str] = None, model: Optional[str] = None,
                          language: Optional[str] = None, search: Optional[str] = None,
                          from_date: Optional[str] = None, to_date: Optional[str] = None) -> int:
@@ -1527,7 +1554,8 @@ class Database:
             query_blob = self._serialize_embedding(query_vector)
             cursor = conn.cursor()
 
-            # Build query with optional source_type filter
+            # Build query with optional source_type filter.
+            # vec0 requires a k/limit constraint on the vector table itself.
             sql = '''
                 SELECT
                     e.rowid,
@@ -1538,18 +1566,21 @@ class Database:
                     m.model_name,
                     m.content_hash,
                     m.created_at
-                FROM nova_embeddings e
+                FROM (
+                    SELECT rowid, distance
+                    FROM nova_embeddings
+                    WHERE embedding MATCH ? AND k = ?
+                ) e
                 JOIN nova_embedding_metadata m ON e.rowid = m.rowid
-                WHERE e.embedding MATCH ?
             '''
-            params = [query_blob]
+            params = [query_blob, max(1, int(limit))]
 
             if source_types:
                 placeholders = ','.join('?' * len(source_types))
                 sql += f' AND m.source_type IN ({placeholders})'
                 params.extend(source_types)
 
-            sql += f' ORDER BY e.distance LIMIT {limit}'
+            sql += ' ORDER BY e.distance'
 
             cursor.execute(sql, params)
             results = [dict(row) for row in cursor.fetchall()]
@@ -1600,7 +1631,7 @@ class Database:
             if nova_ids:
                 placeholders = ','.join('?' * len(nova_ids))
                 cursor.execute(f'''
-                    SELECT id, file_id, model_name, analysis_types, summary_result, chapters_result, elements_result
+                    SELECT id, model, analysis_types, summary_result, chapters_result, elements_result
                     FROM nova_jobs WHERE id IN ({placeholders})
                 ''', nova_ids)
                 nova_jobs = {row['id']: dict(row) for row in cursor.fetchall()}
@@ -1884,6 +1915,35 @@ class Database:
             cursor.execute('DELETE FROM nova_jobs WHERE id = ?', (nova_job_id,))
             return cursor.rowcount > 0
 
+    def get_nova_jobs_by_file(self, file_id: int) -> List[Dict[str, Any]]:
+        """Get all Nova jobs for a specific file."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT nj.*
+                FROM nova_jobs nj
+                JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id
+                WHERE aj.file_id = ?
+                ORDER BY nj.created_at DESC
+            ''', (file_id,))
+
+            jobs = []
+            for row in cursor.fetchall():
+                job = dict(row)
+                # Parse JSON fields
+                if job.get('analysis_types'):
+                    job['analysis_types'] = json.loads(job['analysis_types'])
+                if job.get('user_options'):
+                    job['user_options'] = json.loads(job['user_options'])
+                if job.get('summary_result'):
+                    job['summary_result'] = json.loads(job['summary_result'])
+                if job.get('chapters_result'):
+                    job['chapters_result'] = json.loads(job['chapters_result'])
+                if job.get('elements_result'):
+                    job['elements_result'] = json.loads(job['elements_result'])
+                jobs.append(job)
+            return jobs
+
     def list_all_files_with_stats(
         self,
         file_type: Optional[str] = None,
@@ -1891,6 +1951,7 @@ class Database:
         has_transcription: Optional[bool] = None,
         has_nova_analysis: Optional[bool] = None,
         has_rekognition_analysis: Optional[bool] = None,
+        has_nova_embeddings: Optional[bool] = None,
         search: Optional[str] = None,
         upload_from_date: Optional[str] = None,
         upload_to_date: Optional[str] = None,
@@ -1989,6 +2050,12 @@ class Database:
                 else:
                     query += ' AND NOT EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
 
+            if has_nova_embeddings is not None:
+                if has_nova_embeddings:
+                    query += ' AND EXISTS (SELECT 1 FROM nova_embedding_metadata nem WHERE nem.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_embedding_metadata nem WHERE nem.file_id = f.id)'
+
             if search:
                 query += ''' AND (
                     f.filename LIKE ?
@@ -2080,6 +2147,7 @@ class Database:
         has_transcription: Optional[bool] = None,
         has_nova_analysis: Optional[bool] = None,
         has_rekognition_analysis: Optional[bool] = None,
+        has_nova_embeddings: Optional[bool] = None,
         search: Optional[str] = None,
         upload_from_date: Optional[str] = None,
         upload_to_date: Optional[str] = None,
@@ -2125,6 +2193,12 @@ class Database:
                     query += ' AND EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
                 else:
                     query += ' AND NOT EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
+
+            if has_nova_embeddings is not None:
+                if has_nova_embeddings:
+                    query += ' AND EXISTS (SELECT 1 FROM nova_embedding_metadata nem WHERE nem.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_embedding_metadata nem WHERE nem.file_id = f.id)'
 
             if search:
                 query += ''' AND (
@@ -2196,6 +2270,7 @@ class Database:
         has_transcription: Optional[bool] = None,
         has_nova_analysis: Optional[bool] = None,
         has_rekognition_analysis: Optional[bool] = None,
+        has_nova_embeddings: Optional[bool] = None,
         search: Optional[str] = None,
         upload_from_date: Optional[str] = None,
         upload_to_date: Optional[str] = None,
@@ -2263,6 +2338,12 @@ class Database:
                     query += ' AND EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
                 else:
                     query += ' AND NOT EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
+
+            if has_nova_embeddings is not None:
+                if has_nova_embeddings:
+                    query += ' AND EXISTS (SELECT 1 FROM nova_embedding_metadata nem WHERE nem.file_id = f.id)'
+                else:
+                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_embedding_metadata nem WHERE nem.file_id = f.id)'
 
             if search:
                 query += ''' AND (

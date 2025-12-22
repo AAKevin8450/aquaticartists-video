@@ -9,6 +9,16 @@ from app.utils.excel_exporter import export_to_excel
 bp = Blueprint('history', __name__, url_prefix='/api/history')
 
 
+def _resolve_job(db, job_id: str):
+    """Resolve job by external job_id or numeric database id."""
+    job = db.get_job(job_id)
+    if job:
+        return job
+    if job_id.isdigit():
+        return db.get_analysis_job(int(job_id))
+    return None
+
+
 @bp.route('/', methods=['GET'])
 def list_jobs():
     """
@@ -94,7 +104,7 @@ def get_job_details(job_id):
     """
     try:
         db = get_db()
-        job = db.get_job(job_id)
+        job = _resolve_job(db, job_id)
 
         if not job:
             return jsonify({'error': 'Job not found'}), 404
@@ -144,7 +154,12 @@ def delete_job(job_id):
     """
     try:
         db = get_db()
-        success = db.delete_job(job_id)
+        job = _resolve_job(db, job_id)
+
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        success = db.delete_job(job['job_id'])
 
         if not success:
             return jsonify({'error': 'Job not found'}), 404
@@ -171,7 +186,7 @@ def download_job_results(job_id):
         format_type = request.args.get('format', 'json').lower()
 
         db = get_db()
-        job = db.get_job(job_id)
+        job = _resolve_job(db, job_id)
 
         if not job:
             return jsonify({'error': 'Job not found'}), 404
