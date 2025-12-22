@@ -139,6 +139,7 @@ def list_files():
         has_transcription_str = request.args.get('has_transcription')
         has_nova_analysis_str = request.args.get('has_nova_analysis')
         has_rekognition_analysis_str = request.args.get('has_rekognition_analysis')
+        has_nova_embeddings_str = request.args.get('has_nova_embeddings')
         search = request.args.get('search', '').strip()
 
         # Upload date filters
@@ -175,6 +176,10 @@ def list_files():
         if has_rekognition_analysis_str:
             has_rekognition_analysis = has_rekognition_analysis_str.lower() in ('true', '1', 'yes')
 
+        has_nova_embeddings = None
+        if has_nova_embeddings_str:
+            has_nova_embeddings = has_nova_embeddings_str.lower() in ('true', '1', 'yes')
+
         # Convert size and duration to integers
         min_size = int(min_size) if min_size else None
         max_size = int(max_size) if max_size else None
@@ -192,6 +197,7 @@ def list_files():
             has_transcription=has_transcription,
             has_nova_analysis=has_nova_analysis,
             has_rekognition_analysis=has_rekognition_analysis,
+            has_nova_embeddings=has_nova_embeddings,
             search=search or None,
             upload_from_date=upload_from_date,
             upload_to_date=upload_to_date,
@@ -214,6 +220,7 @@ def list_files():
             has_transcription=has_transcription,
             has_nova_analysis=has_nova_analysis,
             has_rekognition_analysis=has_rekognition_analysis,
+            has_nova_embeddings=has_nova_embeddings,
             search=search or None,
             upload_from_date=upload_from_date,
             upload_to_date=upload_to_date,
@@ -232,6 +239,7 @@ def list_files():
             has_transcription=has_transcription,
             has_nova_analysis=has_nova_analysis,
             has_rekognition_analysis=has_rekognition_analysis,
+            has_nova_embeddings=has_nova_embeddings,
             search=search or None,
             upload_from_date=upload_from_date,
             upload_to_date=upload_to_date,
@@ -1601,6 +1609,88 @@ def batch_rekognition():
         return jsonify({'error': f'Batch Rekognition error: {str(e)}'}), 500
 
 
+@bp.route('/api/batch/embeddings', methods=['POST'])
+def batch_embeddings():
+    """
+    Generate Nova Embeddings for specified files (from currently filtered view).
+
+    Request body:
+        {
+            "file_ids": [1, 2, 3, ...],
+            "force": false  # Re-embed even if already exists
+        }
+
+    Returns:
+        {
+            "job_id": "batch-xxx",
+            "total_files": 10,
+            "message": "Batch embeddings generation started"
+        }
+    """
+    try:
+        data = request.get_json() or {}
+
+        # Get file IDs from request
+        file_ids = data.get('file_ids', [])
+
+        if not file_ids:
+            return jsonify({'error': 'No file IDs provided'}), 400
+
+        # Embeddings options
+        force = data.get('force', False)
+
+        # Validate files exist and have transcripts or Nova analysis
+        db = get_db()
+        eligible_file_ids = []
+
+        for file_id in file_ids:
+            file = db.get_file(file_id)
+            if not file:
+                current_app.logger.warning(f"File {file_id} not found, skipping")
+                continue
+
+            # Check if file has transcripts or Nova analysis
+            transcripts = db.get_transcripts_by_file(file_id)
+            nova_jobs = db.get_nova_jobs_by_file(file_id)
+
+            if not transcripts and not nova_jobs:
+                current_app.logger.warning(f"File {file_id} has no transcripts or Nova analysis, skipping")
+                continue
+
+            eligible_file_ids.append(file_id)
+
+        if not eligible_file_ids:
+            return jsonify({
+                'error': 'No eligible files for embeddings (need files with transcripts or Nova analysis)'
+            }), 404
+
+        # Create batch job
+        job_id = f"batch-embeddings-{uuid.uuid4().hex[:8]}"
+        job = BatchJob(job_id, 'embeddings', len(eligible_file_ids), eligible_file_ids)
+        job.options = {'force': force}
+
+        with _batch_jobs_lock:
+            _batch_jobs[job_id] = job
+
+        # Start background thread
+        app = current_app._get_current_object()
+        thread = threading.Thread(target=_run_batch_embeddings, args=(app, job))
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'job_id': job_id,
+            'total_files': len(eligible_file_ids),
+            'message': f'Batch embeddings generation started for {len(eligible_file_ids)} file(s)'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Batch embeddings error: {e}", exc_info=True)
+        import traceback
+        current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
+        return jsonify({'error': f'Batch embeddings error: {str(e)}'}), 500
+
+
 @bp.route('/api/batch/<job_id>/status', methods=['GET'])
 def get_batch_status(job_id: str):
     """
@@ -2027,6 +2117,98 @@ def _run_batch_rekognition(app, job: BatchJob):
                     'error': error_msg
                 })
                 current_app.logger.error(f"Batch Rekognition error for file {file_id}: {e}")
+
+        # Mark job as complete
+        job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+        job.end_time = time.time()
+        job.current_file = None
+
+
+def _run_batch_embeddings(app, job: BatchJob):
+    """Background worker for batch embeddings generation."""
+    with app.app_context():
+        from app.services.embedding_manager import EmbeddingManager
+
+        options = job.options or {}
+        force = bool(options.get('force', False))
+
+        # Create embedding manager
+        db = get_db()
+        embedding_manager = EmbeddingManager(db)
+
+        for file_id in job.file_ids:
+            if job.status == 'CANCELLED':
+                break
+
+            try:
+                # Get file
+                file = db.get_file(file_id)
+                if not file:
+                    raise Exception(f'File {file_id} not found')
+
+                job.current_file = file['filename']
+
+                # Process transcripts for this file
+                transcripts = db.get_transcripts_by_file(file_id)
+                nova_jobs = db.get_nova_jobs_by_file(file_id)
+
+                embedded_count = 0
+                skipped_count = 0
+                failed_count = 0
+
+                # Process each transcript
+                for transcript in transcripts:
+                    if transcript.get('status') == 'COMPLETED':
+                        try:
+                            stats = embedding_manager.process_transcript(
+                                transcript_id=transcript['id'],
+                                force=force
+                            )
+                            embedded_count += stats.get('embedded', 0)
+                            skipped_count += stats.get('skipped', 0)
+                            failed_count += stats.get('failed', 0)
+                        except Exception as e:
+                            current_app.logger.error(
+                                f"Failed to process transcript {transcript['id']}: {e}"
+                            )
+                            failed_count += 1
+
+                # Process each Nova job
+                for nova_job in nova_jobs:
+                    if nova_job.get('status') == 'COMPLETED':
+                        try:
+                            stats = embedding_manager.process_nova_job(
+                                nova_job_id=nova_job['id'],
+                                force=force
+                            )
+                            embedded_count += stats.get('embedded', 0)
+                            skipped_count += stats.get('skipped', 0)
+                            failed_count += stats.get('failed', 0)
+                        except Exception as e:
+                            current_app.logger.error(
+                                f"Failed to process Nova job {nova_job['id']}: {e}"
+                            )
+                            failed_count += 1
+
+                job.completed_files += 1
+                job.results.append({
+                    'file_id': file_id,
+                    'filename': file['filename'],
+                    'success': True,
+                    'embedded': embedded_count,
+                    'skipped': skipped_count,
+                    'failed': failed_count
+                })
+
+            except Exception as e:
+                job.failed_files += 1
+                error_msg = str(e)
+                job.errors.append({
+                    'file_id': file_id,
+                    'filename': file.get('filename', f'File {file_id}'),
+                    'error': error_msg
+                })
+                current_app.logger.error(f"Batch embeddings error for file {file_id}: {e}")
 
         # Mark job as complete
         job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'

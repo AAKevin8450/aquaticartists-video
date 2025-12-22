@@ -123,6 +123,16 @@
                 </select>
             </div>
 
+            <!-- Nova Embeddings Filter -->
+            <div class="col-md-2">
+                <label class="form-label">Nova Embeddings</label>
+                <select class="form-select" id="embeddingsFilter">
+                    <option value="">All Files</option>
+                    <option value="true">Has Embeddings</option>
+                    <option value="false">No Embeddings</option>
+                </select>
+            </div>
+
             <!-- Upload Date Filters (Always Visible) -->
             <div class="col-md-2">
                 <label class="form-label small">Upload From</label>
@@ -222,6 +232,9 @@
             </button>
             <button class="btn btn-success" id="batchRekognitionBtn">
                 <i class="bi bi-eye"></i> Rekognition Analysis
+            </button>
+            <button class="btn btn-secondary" id="batchEmbeddingsBtn">
+                <i class="bi bi-vector-pen"></i> Generate Embeddings
             </button>
         </div>
     </div>
@@ -760,6 +773,37 @@
                                     <label class="form-check-label" for="batchRekognitionUseProxy">
                                         Use proxy files when available
                                     </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="batch-options-group" data-action="embeddings" style="display: none;">
+                        <div class="row g-3">
+                            <div class="col-12">
+                                <div class="border rounded p-3 bg-light">
+                                    <h6 class="mb-2">Embeddings Generation</h6>
+                                    <p class="mb-2 text-muted small">
+                                        Generate Nova Embeddings for transcripts and Nova analysis results.
+                                        This enables AI-powered semantic search across your video content.
+                                    </p>
+                                    <ul class="mb-0 text-muted small">
+                                        <li>Uses AWS Nova Multimodal Embeddings (1024 dimensions)</li>
+                                        <li>Automatically chunks long transcripts into 4000-character segments</li>
+                                        <li>Skips content that's already been embedded (idempotent)</li>
+                                        <li>Only processes files with completed transcripts or Nova analysis</li>
+                                    </ul>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="batchEmbeddingsForce">
+                                    <label class="form-check-label" for="batchEmbeddingsForce">
+                                        Force re-embed existing content
+                                    </label>
+                                    <small class="text-muted d-block">
+                                        If checked, re-generates embeddings even if they already exist. Use with caution (incurs API costs).
+                                    </small>
                                 </div>
                             </div>
                         </div>

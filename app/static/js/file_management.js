@@ -11,6 +11,7 @@ let currentFilters = {
     has_transcription: null,
     has_nova_analysis: null,
     has_rekognition_analysis: null,
+    has_nova_embeddings: null,
     upload_from_date: '',
     upload_to_date: '',
     created_from_date: '',
@@ -87,6 +88,7 @@ function initializeEventListeners() {
     document.getElementById('batchTranscribeBtn').addEventListener('click', () => startBatchAction('transcribe'));
     document.getElementById('batchNovaBtn').addEventListener('click', () => startBatchAction('nova'));
     document.getElementById('batchRekognitionBtn').addEventListener('click', () => startBatchAction('rekognition'));
+    document.getElementById('batchEmbeddingsBtn').addEventListener('click', () => startBatchAction('embeddings'));
 
     // S3 files section (lazy load)
     const s3FilesCollapse = document.getElementById('s3FilesCollapse');
@@ -184,6 +186,9 @@ function applyFilters() {
     const rekognitionFilter = document.getElementById('rekognitionFilter').value;
     currentFilters.has_rekognition_analysis = rekognitionFilter === '' ? null : rekognitionFilter === 'true';
 
+    const embeddingsFilter = document.getElementById('embeddingsFilter').value;
+    currentFilters.has_nova_embeddings = embeddingsFilter === '' ? null : embeddingsFilter === 'true';
+
     // Upload date filters
     currentFilters.upload_from_date = document.getElementById('uploadFromDate').value;
     currentFilters.upload_to_date = document.getElementById('uploadToDate').value;
@@ -214,6 +219,7 @@ function resetFilters() {
     document.getElementById('transcriptionFilter').value = '';
     document.getElementById('novaFilter').value = '';
     document.getElementById('rekognitionFilter').value = '';
+    document.getElementById('embeddingsFilter').value = '';
     document.getElementById('uploadFromDate').value = '';
     document.getElementById('uploadToDate').value = '';
     document.getElementById('createdFromDate').value = '';
@@ -231,6 +237,7 @@ function resetFilters() {
         has_transcription: null,
         has_nova_analysis: null,
         has_rekognition_analysis: null,
+        has_nova_embeddings: null,
         upload_from_date: '',
         upload_to_date: '',
         created_from_date: '',
@@ -293,6 +300,7 @@ function applyFiltersToInputs() {
     document.getElementById('transcriptionFilter').value = normalizeTriState(currentFilters.has_transcription);
     document.getElementById('novaFilter').value = normalizeTriState(currentFilters.has_nova_analysis);
     document.getElementById('rekognitionFilter').value = normalizeTriState(currentFilters.has_rekognition_analysis);
+    document.getElementById('embeddingsFilter').value = normalizeTriState(currentFilters.has_nova_embeddings);
     document.getElementById('uploadFromDate').value = currentFilters.upload_from_date || '';
     document.getElementById('uploadToDate').value = currentFilters.upload_to_date || '';
     document.getElementById('createdFromDate').value = currentFilters.created_from_date || '';
@@ -1984,7 +1992,8 @@ async function getBatchOptions(actionType) {
             proxy: 'Generate 720p/15fps proxies for all eligible videos in the current view.',
             transcribe: 'Configure Whisper transcription settings for the current file set.',
             nova: 'Choose Nova model and analysis types for proxy-backed videos.',
-            rekognition: 'Select Rekognition analysis types and target files.'
+            rekognition: 'Select Rekognition analysis types and target files.',
+            embeddings: 'Generate Nova Embeddings for transcripts and analysis results.'
         };
         if (description) {
             description.textContent = descriptions[actionType] || 'Configure batch settings.';
@@ -2006,7 +2015,8 @@ async function getBatchOptions(actionType) {
                 proxy: 'Start Proxy Batch',
                 transcribe: 'Start Transcription Batch',
                 nova: 'Start Nova Batch',
-                rekognition: 'Start Rekognition Batch'
+                rekognition: 'Start Rekognition Batch',
+                embeddings: 'Start Embeddings Batch'
             };
             confirmBtn.textContent = labels[actionType] || 'Start Batch';
         }
@@ -2130,6 +2140,12 @@ function buildBatchOptions(actionType) {
             return {
                 analysis_types: analysisTypes,
                 use_proxy: useProxy
+            };
+        }
+        case 'embeddings': {
+            const force = !!document.getElementById('batchEmbeddingsForce')?.checked;
+            return {
+                force: force
             };
         }
         default:

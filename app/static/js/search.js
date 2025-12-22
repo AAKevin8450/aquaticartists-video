@@ -685,7 +685,39 @@ function formatAnalysisType(type) {
 }
 
 function formatTimestamp(timestamp) {
-    const date = new Date(timestamp);
+    if (!timestamp) return 'N/A';
+
+    if (typeof timestamp === 'number') {
+        const ms = timestamp > 1e12 ? timestamp : timestamp * 1000;
+        const date = new Date(ms);
+        if (!Number.isNaN(date.getTime())) {
+            return date.toLocaleString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: 'numeric',
+                minute: '2-digit'
+            });
+        }
+    }
+
+    const raw = String(timestamp).trim();
+    if (!raw) return 'N/A';
+
+    if (/\\b(ET|EST|EDT|UTC|GMT)\\b/.test(raw)) {
+        return raw;
+    }
+
+    let parsed = Date.parse(raw);
+    if (Number.isNaN(parsed)) {
+        parsed = Date.parse(raw.replace(' ', 'T'));
+    }
+
+    if (Number.isNaN(parsed)) {
+        return raw;
+    }
+
+    const date = new Date(parsed);
     return date.toLocaleString('en-US', {
         month: 'short',
         day: 'numeric',
@@ -762,6 +794,7 @@ async function viewFileDetails(fileId) {
 
 function renderFileDetails(data, container) {
     const { file, proxy, analysis_jobs, transcripts } = data;
+    const media = file.media_metadata || {};
 
     let html = `
         <div class="row g-3">
@@ -771,18 +804,18 @@ function renderFileDetails(data, container) {
                     <tr><th>Filename:</th><td>${escapeHtml(file.filename || 'N/A')}</td></tr>
                     <tr><th>Type:</th><td>${escapeHtml(file.file_type || 'N/A')}</td></tr>
                     <tr><th>Size:</th><td>${formatFileSize(file.size_bytes || 0)}</td></tr>
-                    <tr><th>Duration:</th><td>${formatDuration(file.duration_seconds || 0)}</td></tr>
+                    <tr><th>Duration:</th><td>${formatDuration(media.duration_seconds || 0)}</td></tr>
                     <tr><th>Uploaded:</th><td>${formatTimestamp(file.uploaded_at)}</td></tr>
                 </table>
             </div>
             <div class="col-md-6">
                 <h6><i class="bi bi-gear"></i> Technical Details</h6>
                 <table class="table table-sm">
-                    <tr><th>Resolution:</th><td>${file.resolution_width || 'N/A'} × ${file.resolution_height || 'N/A'}</td></tr>
-                    <tr><th>Frame Rate:</th><td>${file.frame_rate || 'N/A'} fps</td></tr>
-                    <tr><th>Video Codec:</th><td>${escapeHtml(file.codec_video || 'N/A')}</td></tr>
-                    <tr><th>Audio Codec:</th><td>${escapeHtml(file.codec_audio || 'N/A')}</td></tr>
-                    <tr><th>Bitrate:</th><td>${file.bitrate ? (file.bitrate / 1000).toFixed(0) + ' kbps' : 'N/A'}</td></tr>
+                    <tr><th>Resolution:</th><td>${media.resolution_width || 'N/A'} × ${media.resolution_height || 'N/A'}</td></tr>
+                    <tr><th>Frame Rate:</th><td>${media.frame_rate || 'N/A'} fps</td></tr>
+                    <tr><th>Video Codec:</th><td>${escapeHtml(media.codec_video || 'N/A')}</td></tr>
+                    <tr><th>Audio Codec:</th><td>${escapeHtml(media.codec_audio || 'N/A')}</td></tr>
+                    <tr><th>Bitrate:</th><td>${media.bitrate ? (media.bitrate / 1000).toFixed(0) + ' kbps' : 'N/A'}</td></tr>
                 </table>
             </div>
         </div>
@@ -794,9 +827,9 @@ function renderFileDetails(data, container) {
             <div class="mt-3">
                 <h6><i class="bi bi-film"></i> Proxy File</h6>
                 <table class="table table-sm">
-                    <tr><th>Filename:</th><td>${escapeHtml(proxy.proxy_filename || 'N/A')}</td></tr>
-                    <tr><th>Size:</th><td>${formatFileSize(proxy.proxy_size || 0)}</td></tr>
-                    <tr><th>Created:</th><td>${formatTimestamp(proxy.created_at)}</td></tr>
+                    <tr><th>Filename:</th><td>${escapeHtml(proxy.filename || 'N/A')}</td></tr>
+                    <tr><th>Size:</th><td>${formatFileSize(proxy.size_bytes || 0)}</td></tr>
+                    <tr><th>Created:</th><td>${formatTimestamp(proxy.uploaded_at)}</td></tr>
                 </table>
             </div>
         `;
@@ -846,7 +879,7 @@ function renderFileDetails(data, container) {
                             <strong>${escapeHtml(job.analysis_type || 'N/A')}</strong>
                             <span class="badge bg-${statusBadge} ms-2">${job.status}</span>
                             <br>
-                            <small class="text-muted">${formatTimestamp(job.created_at)}</small>
+                            <small class="text-muted">${formatTimestamp(job.started_at || job.completed_at)}</small>
                         </div>
                         ${job.status === 'SUCCEEDED' ? `
                             <a href="/dashboard/${job.id}" class="btn btn-sm btn-primary" target="_blank">

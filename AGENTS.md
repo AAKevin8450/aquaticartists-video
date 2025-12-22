@@ -1,6 +1,6 @@
 # AGENTS
 
-Last Updated: 2025-12-20 14:46:19
+Last Updated: 2025-12-21 22:41:51
 
 Nova batch processing
 - Enable async batch mode by setting `BEDROCK_BATCH_ROLE_ARN`, `NOVA_BATCH_INPUT_PREFIX`, `NOVA_BATCH_OUTPUT_PREFIX` in `.env`.
@@ -13,6 +13,8 @@ Nova transcription & embeddings
 - Configure Nova Sonic with `NOVA_SONIC_MODEL_ID`, `NOVA_SONIC_RUNTIME_ID`, and `NOVA_SONIC_MAX_TOKENS`.
 - Embeddings are generated via `/api/nova/embeddings/generate` and stored in sqlite-vec tables.
 - Configure embeddings with `NOVA_EMBED_MODEL_ID`, `NOVA_EMBED_DIMENSION`, `NOVA_EMBED_REQUEST_FORMAT`, and optional `SQLITE_VEC_PATH`; run `migrations/006_add_nova_embeddings.sql`.
+- File Management batch embeddings run via `/api/batch/embeddings` with optional force re-embed.
+- File Management filters include a Nova embeddings presence toggle.
 
 Nova model keys
 - Preview models are exposed as `pro_2_preview` (Nova 2 Pro) and `omni_2_preview` (Nova 2 Omni).

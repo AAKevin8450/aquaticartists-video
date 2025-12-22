@@ -1,3 +1,153 @@
+2025-12-21 22:41:51 - Updated by Codex
+
+[Category: Feature]
+Add batch Nova embeddings generation and filtering in File Management.
+
+[Purpose]
+Enable bulk embeddings creation and filtering so large libraries can be prepared for semantic search without per-file actions.
+
+[Impact]
+- Adds a batch embeddings action with force re-embed option and UI guidance.
+- Adds a Nova embeddings filter to the File Management list view.
+- Exposes a dedicated batch embeddings API endpoint and background worker.
+
+[Category: Bug Fix]
+Stabilize semantic search and analysis result navigation while normalizing timestamp rendering in search modals.
+
+[Purpose]
+Prevent sqlite-vec query errors, fix history lookups by numeric IDs, and ensure search detail modals show consistent metadata and dates.
+
+[Impact]
+- vec0 KNN queries now include required k constraints and correct column references.
+- History endpoints resolve analysis jobs by job_id or numeric id.
+- Search modals display media metadata and timestamps consistently.
+
+[Files Modified]
+- app/routes/file_management.py: Added Nova embeddings batch endpoint, eligibility checks, and background worker; list_files accepts has_nova_embeddings filter.
+- app/static/js/file_management.js: Added embeddings filter state and batch embeddings UI handling.
+- app/templates/file_management.html: Added embeddings filter control and batch embeddings option panel/button.
+- app/database.py: Adjusted embedding search queries, ensured embedding metadata schema compatibility, and fixed Nova enrichment field selection.
+- app/routes/history.py: Allow history lookups by numeric analysis job id.
+- app/static/js/search.js: Normalized timestamp parsing and fixed file/proxy metadata rendering in search modals.
+- changelog.txt: Added this entry.
+
+[Technical Details]
+- /api/batch/embeddings validates transcript or Nova analysis eligibility before spawning background embedding jobs.
+- Embedding KNN query uses vec0 k constraint with a subquery and joins metadata afterward.
+- History lookups fall back to analysis_jobs.id when job_id strings are unavailable.
+
+2025-12-21 21:45:00 - Updated by Claude Code
+
+[Category: Feature]
+Add batch Nova Embeddings generation feature to File Management page for bulk semantic search enablement.
+
+[Purpose]
+Enable users to generate Nova Embeddings for transcripts and Nova analysis results in bulk from the File Management page. This feature allows processing hundreds or thousands of files efficiently, generating vector embeddings that power the AI-powered semantic search capability. Users can now prepare their entire video library for semantic search without manual per-file processing.
+
+[Impact]
+- "Generate Embeddings" batch operation button added to File Management page alongside existing batch operations (Proxy, Transcribe, Nova, Rekognition)
+- Processes all files matching current search/filter criteria across all pages (not just visible page)
+- Only processes files with completed transcripts or Nova analysis results (automatic eligibility filtering)
+- Integrates with existing EmbeddingManager service for smart chunking and hash-based idempotency
+- Follows established batch operation patterns (background worker, progress tracking, cancellable, error handling)
+- Supports force re-embed option via checkbox for regenerating existing embeddings
+- Progress tracking shows embedded/skipped/failed counts per file in batch status results
+- Enables bulk preparation of video libraries for semantic search (estimated $0.09 for 3,154 transcripts)
+
+[Files Modified]
+- app/routes/file_management.py (+174 lines): Added POST /api/batch/embeddings endpoint (lines 1604-1688) with file eligibility validation (checks for transcripts/Nova jobs), batch job creation with force option, background thread spawning. Added _run_batch_embeddings() background worker function (lines 2119-2208) with EmbeddingManager integration, dual processing loop (transcripts + Nova jobs), per-source statistics tracking (embedded/skipped/failed counts), comprehensive error handling with detailed results
+- app/database.py (+52 lines): Added get_transcripts_by_file() helper method (lines 1392-1413) for retrieving all transcripts for a file by file_id or file_path with JSON field parsing. Added get_nova_jobs_by_file() helper method (lines 1910-1936) for retrieving Nova jobs via analysis_jobs JOIN with JSON field parsing (analysis_types, user_options, summary/chapters/elements results)
+- app/templates/file_management.html (+34 lines): Added "Generate Embeddings" button with vector icon to batch actions toolbar (line 226-228), added embeddings batch options panel (lines 770-799) with feature description, AWS model info, chunking details, idempotency note, force re-embed checkbox with warning about API costs
+- app/static/js/file_management.js (+11 lines): Added batchEmbeddingsBtn click handler in initializeEventListeners() (line 90), added 'embeddings' case to getBatchOptions() descriptions and button labels (lines 1988, 2011), added 'embeddings' case to buildBatchOptions() for force flag extraction (lines 2138-2142)
+
+[Technical Details]
+**API Endpoint** (POST /api/batch/embeddings):
+- Request body: {"file_ids": [1,2,3], "force": false}
+- Response: {"job_id": "batch-embeddings-xxx", "total_files": 10, "message": "..."}
+- File eligibility check: Validates each file has transcripts OR Nova analysis via get_transcripts_by_file() and get_nova_jobs_by_file()
+- Skips files with no embeddable content (logs warning, not counted as error)
+- Returns 404 if zero eligible files found
+
+**Background Worker** (_run_batch_embeddings):
+- Creates EmbeddingManager instance within Flask app context
+- Dual processing loop: Iterates transcripts then Nova jobs per file
+- Only processes COMPLETED status transcripts/jobs (skips in-progress/failed)
+- Calls embedding_manager.process_transcript(transcript_id, force) and process_nova_job(nova_job_id, force)
+- Aggregates statistics: embedded_count (new embeddings created), skipped_count (already exists), failed_count (errors during embedding)
+- Result format per file: {"file_id": 1, "filename": "video.mp4", "success": true, "embedded": 5, "skipped": 2, "failed": 0}
+- Error handling: Catches per-transcript/job exceptions, logs errors, increments failed_count, continues processing remaining items
+- Respects job cancellation: Breaks loop if job.status == 'CANCELLED'
+
+**Database Helper Methods**:
+- get_transcripts_by_file(file_id): Queries by file_id OR file_path (handles both local transcription and S3 file associations), returns list of transcript dicts with parsed JSON fields (segments, word_timestamps)
+- get_nova_jobs_by_file(file_id): JOINs nova_jobs with analysis_jobs on analysis_job_id, filters by file_id, returns list of Nova job dicts with 5 parsed JSON fields (analysis_types, user_options, summary_result, chapters_result, elements_result)
+- Both methods ordered by created_at DESC for most recent first
+
+**UI Integration**:
+- Button placement: Between "Rekognition Analysis" and batch progress section for logical workflow (Transcribe → Nova → Rekognition → Embeddings)
+- Icon: bi-vector-pen (Bootstrap Icons vector/embedding icon)
+- Modal panel: Displays when embeddings batch action selected, shows AWS model info (Nova Multimodal, 1024 dimensions), chunking strategy (4000 chars, overlap), idempotency guarantee
+- Force checkbox: Warns about API cost implications, disabled by default
+- Batch count validation: Shows "X file(s)" in confirmation message, prevents empty batches
+
+**Batch Operation Consistency**:
+- Follows same pattern as proxy/transcribe/nova/rekognition batch operations
+- Uses BatchJob class with job_id, action_type='embeddings', total_files, file_ids, options={'force': bool}
+- Background thread execution with _batch_jobs_lock for thread-safe job tracking
+- Progress monitoring via GET /api/batch/<job_id>/status (existing endpoint)
+- Cancellable via POST /api/batch/<job_id>/cancel (existing endpoint)
+- Results accessible via job.results list with per-file statistics
+
+**EmbeddingManager Integration**:
+- Leverages existing app/services/embedding_manager.py service (added in previous commit)
+- smart_chunk_text(): Splits long transcripts into 4000-char chunks with 200-char overlap
+- process_transcript(): Generates embeddings for transcript text, stores in nova_embeddings/nova_embedding_metadata
+- process_nova_job(): Extracts summary/chapters/elements from Nova results, generates separate embeddings per section
+- compute_content_hash(): SHA-256 hash prevents duplicate embeddings unless force=true
+- Returns statistics dict: {'embedded': int, 'skipped': int, 'failed': int}
+
+**Cost Estimation**:
+- Nova Embeddings pricing: $0.00009 per 1K input characters
+- Average transcript: ~2,000 characters = $0.00018 per transcript
+- 3,154 transcripts: ~$0.57 total (assuming all unique content)
+- Idempotency reduces actual cost: Only new/changed content incurs charges
+- Force re-embed: Full cost on re-processing (use sparingly)
+
+**User Workflow**:
+1. Navigate to File Management page
+2. Apply search/filters to narrow file set (optional)
+3. Click "Generate Embeddings" button
+4. Review batch options modal (shows file count, AWS model info)
+5. Optionally check "Force re-embed" if regenerating existing embeddings
+6. Click "Start Embeddings Batch"
+7. Monitor progress in batch progress section (shows embedded/skipped/failed counts per file)
+8. After completion, semantic search toggle on /search page will use generated embeddings
+
+**Prerequisites**:
+- Requires sqlite-vec extension (SQLITE_VEC_PATH environment variable set)
+- Requires AWS Bedrock IAM permissions for bedrock:InvokeModel
+- Requires amazon.nova-2-multimodal-embeddings-v1:0 enabled in Bedrock console (us-east-1)
+- Requires NOVA_EMBED_MODEL_ID and NOVA_EMBED_DIMENSION=1024 in .env
+
+**Future Enhancements**:
+- Auto-embed on transcription/Nova completion (real-time embedding generation)
+- Batch statistics summary: Total embeddings generated, total cost, average chunks per file
+- Selective embedding: Checkbox to choose transcripts vs Nova results only
+- Progress percentage indicator for current file (show chunk X of Y)
+
+[Breaking Changes]
+None. Feature is additive and optional.
+
+[Dependencies]
+- Existing: app/services/embedding_manager.py (added in previous commit)
+- Existing: app/services/nova_embeddings_service.py (added in previous commit)
+- Existing: sqlite-vec extension (external DLL dependency)
+
+[Removed/Deprecated]
+None.
+
+---
+
 2025-12-21 20:21:00 - Updated by Claude Code
 
 [Category: Feature]
