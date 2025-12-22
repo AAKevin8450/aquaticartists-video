@@ -7,6 +7,7 @@ console.log('search.js loaded');
 // Global state
 let currentQuery = '';
 let currentPage = 1;
+let semanticEnabled = false;  // AI semantic search toggle
 let currentFilters = {
     sources: ['file', 'transcript', 'rekognition', 'nova', 'collection'],
     file_type: '',
@@ -26,6 +27,7 @@ const searchInput = document.getElementById('searchInput');
 const searchBtn = document.getElementById('searchBtn');
 const clearSearchBtn = document.getElementById('clearSearchBtn');
 const resetFiltersBtn = document.getElementById('resetFiltersBtn');
+const semanticToggle = document.getElementById('semanticToggle');
 const resultsSection = document.getElementById('resultsSection');
 const resultsContainer = document.getElementById('resultsContainer');
 const resultsCount = document.getElementById('resultsCount');
@@ -151,6 +153,18 @@ function setupEventListeners() {
         hideResults();
         showEmptyState();
     });
+
+    // Semantic search toggle
+    if (semanticToggle) {
+        semanticToggle.addEventListener('change', (e) => {
+            semanticEnabled = e.target.checked;
+            console.log('Semantic search toggled:', semanticEnabled);
+            // Re-run search if there's an active query
+            if (currentQuery) {
+                performSearch();
+            }
+        });
+    }
 
     // Show/hide clear button based on input
     searchInput.addEventListener('input', (e) => {
@@ -309,6 +323,7 @@ async function performSearch(page = 1) {
     params.append('q', query);
     params.append('page', page);
     params.append('per_page', 50);
+    params.append('semantic', semanticEnabled ? 'true' : 'false');
 
     // Add filters
     if (currentFilters.sources && currentFilters.sources.length > 0) {

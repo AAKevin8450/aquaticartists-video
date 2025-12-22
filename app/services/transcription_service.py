@@ -3,6 +3,7 @@ Local video transcription service using faster-whisper.
 Handles audio extraction, speech-to-text conversion, and batch processing.
 """
 import os
+import sys
 import hashlib
 import time
 import tempfile
@@ -11,6 +12,16 @@ from typing import Optional, List, Dict, Any, Callable, Tuple
 from dataclasses import dataclass, field
 import threading
 import queue
+
+# Add PyTorch lib directory to DLL search path for cuDNN 9 DLLs
+# Required for CTranslate2 4.6.2+ CUDA support on Windows
+try:
+    torch_lib = os.path.join(sys.prefix, 'Lib', 'site-packages', 'torch', 'lib')
+    if os.path.exists(torch_lib):
+        os.add_dll_directory(torch_lib)
+except (AttributeError, OSError):
+    # os.add_dll_directory not available (Python < 3.8) or directory doesn't exist
+    pass
 
 try:
     from faster_whisper import WhisperModel
@@ -169,11 +180,47 @@ class TranscriptionService:
         if self._model is None:
             with self._model_lock:
                 if self._model is None:  # Double-check pattern
-                    self._model = WhisperModel(
-                        self.model_size,
-                        device=self.device,
-                        compute_type=self.compute_type
-                    )
+                    try:
+                        self._model = WhisperModel(
+                            self.model_size,
+                            device=self.device,
+                            compute_type=self.compute_type
+                        )
+                    except Exception as e:
+                        error_msg = str(e)
+
+                        # Check for cuDNN-related errors
+                        if 'cudnn' in error_msg.lower() or 'cudnn_ops' in error_msg.lower():
+                            if self.device == 'cuda':
+                                # Try to fall back to CPU
+                                import logging
+                                logging.warning(
+                                    f"CUDA device requested but cuDNN library not found. "
+                                    f"Falling back to CPU mode. Error: {error_msg}"
+                                )
+                                self.device = 'cpu'
+                                self.compute_type = 'int8'
+
+                                # Retry with CPU
+                                try:
+                                    self._model = WhisperModel(
+                                        self.model_size,
+                                        device='cpu',
+                                        compute_type='int8'
+                                    )
+                                    return self._model
+                                except Exception as cpu_error:
+                                    raise TranscriptionError(
+                                        f"Failed to load model on CPU after CUDA failure: {str(cpu_error)}"
+                                    )
+                            else:
+                                raise TranscriptionError(
+                                    f"cuDNN library error: {error_msg}. "
+                                    f"Please install cuDNN or use CPU mode."
+                                )
+                        else:
+                            # Re-raise other errors
+                            raise TranscriptionError(f"Failed to load Whisper model: {error_msg}")
         return self._model
 
     def set_model_size(self, model_size: str):

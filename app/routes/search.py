@@ -7,6 +7,12 @@ from typing import Optional, List, Dict, Any
 import time
 import json
 import re
+import logging
+
+# Import for semantic search
+from app.services.embedding_manager import EmbeddingManager
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint('search', __name__, url_prefix='/search')
 
@@ -292,6 +298,7 @@ def search():
 
     # Get query parameters
     query = request.args.get('q', '').strip()
+    semantic = request.args.get('semantic', 'false').lower() == 'true'
     sources_str = request.args.get('sources', '')
     file_type = request.args.get('file_type')
     from_date = request.args.get('from_date')
@@ -343,7 +350,17 @@ def search():
     # Calculate offset
     offset = (page - 1) * per_page
 
-    # Execute search
+    # Route to semantic search if enabled
+    if semantic and query:
+        return semantic_search(
+            query=query,
+            sources=sources,
+            page=page,
+            per_page=per_page,
+            start_time=start_time
+        )
+
+    # Execute search (keyword search)
     try:
         db = get_db()
 
@@ -512,3 +529,129 @@ def get_suggestions():
         'query': query,
         'suggestions': matching_suggestions[:10]
     })
+
+
+def semantic_search(
+    query: str,
+    sources: Optional[List[str]],
+    page: int,
+    per_page: int,
+    start_time: float
+) -> Any:
+    """
+    Perform semantic vector search using Nova embeddings.
+
+    Args:
+        query: Search query text
+        sources: List of source types to search (file, transcript, rekognition, nova, collection)
+        page: Page number
+        per_page: Results per page
+        start_time: Request start time for performance tracking
+
+    Returns:
+        JSON response with semantic search results
+    """
+    try:
+        db = get_db()
+        manager = EmbeddingManager(db)
+
+        # Generate query embedding (optimized for retrieval)
+        query_embedding = manager.embeddings_service.embed_query(query)
+
+        # Map source names to source_types for embedding search
+        # Only transcript and nova_analysis have embeddings
+        source_type_map = {
+            'transcript': 'transcript',
+            'nova': 'nova_analysis'
+        }
+
+        # Filter sources to only those that support semantic search
+        if sources:
+            filtered_sources = []
+            for s in sources:
+                if s in source_type_map:
+                    filtered_sources.append(source_type_map[s])
+            source_types = filtered_sources if filtered_sources else None
+        else:
+            # Default to both transcript and nova_analysis
+            source_types = ['transcript', 'nova_analysis']
+
+        # Vector search (fetch enough for pagination)
+        results = db.search_embeddings(
+            query_vector=query_embedding,
+            limit=per_page * page,  # Fetch enough for current page
+            source_types=source_types if source_types else None,
+            min_similarity=0.0  # No minimum threshold by default
+        )
+
+        # Paginate results
+        start = (page - 1) * per_page
+        paginated = results[start:start + per_page]
+
+        # Enrich with actual content
+        enriched = db.get_content_for_embedding_results(paginated)
+
+        # Format response to match existing search API
+        response_results = []
+        for r in enriched:
+            # Map source_type back to frontend naming
+            source_display = 'transcript' if r['source_type'] == 'transcript' else 'nova'
+
+            response_results.append({
+                'id': f"{source_display}_{r['source_id']}",
+                'source_type': source_display,
+                'source_id': r['source_id'],
+                'title': r.get('title', 'Unknown'),
+                'category': source_display.capitalize(),
+                'timestamp': r.get('created_at', ''),
+                'match_field': 'semantic',
+                'preview': r.get('preview', ''),
+                'metadata': {
+                    'source_id': r['source_id'],
+                    'similarity': round(r.get('similarity', 0), 3),
+                    'distance': round(r.get('distance', 0), 3)
+                },
+                'actions': build_action_links(source_display, r)
+            })
+
+        # Calculate pagination
+        total_results = len(results)
+        total_pages = (total_results + per_page - 1) // per_page
+
+        # Calculate search time
+        search_time_ms = int((time.time() - start_time) * 1000)
+
+        # Count results by source
+        source_counts = {'transcript': 0, 'nova': 0, 'file': 0, 'rekognition': 0, 'collection': 0}
+        for r in results:
+            if r['source_type'] == 'transcript':
+                source_counts['transcript'] += 1
+            elif r['source_type'] == 'nova_analysis':
+                source_counts['nova'] += 1
+
+        return jsonify({
+            'query': query,
+            'total_results': total_results,
+            'results_by_source': source_counts,
+            'results': response_results,
+            'pagination': {
+                'page': page,
+                'per_page': per_page,
+                'total': total_results,
+                'pages': total_pages
+            },
+            'filters_applied': {
+                'sources': sources,
+                'semantic': True
+            },
+            'search_time_ms': search_time_ms,
+            'semantic': True
+        })
+
+    except Exception as e:
+        logger.error(f"Semantic search error: {e}")
+        return jsonify({
+            'error': 'Semantic search failed',
+            'details': str(e),
+            'fallback': 'Try disabling semantic search or check that embeddings have been generated'
+        }), 500
