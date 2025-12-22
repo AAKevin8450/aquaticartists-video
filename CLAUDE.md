@@ -312,7 +312,9 @@ Comprehensive search page that provides a single query interface across all appl
 **5. User Interface**
 - **Real-Time Result Counts**: Badge updates as filters change
 - **Result Cards**: Color-coded by source type with badges, timestamps, preview text
-- **Source-Specific Actions**: View file, read transcript, view analysis, manage collection
+- **Modal-Based Viewing**: File Details and Transcript Details modals open directly on search page (no navigation)
+- **Source-Specific Actions**: View file details, read full transcript, view analysis, manage collection
+- **Stay on Search Page**: Users can review multiple results without re-running search
 - **Loading States**: Spinner overlay during API calls, disabled controls during requests
 - **Error Handling**: Toast notifications for API failures with retry guidance
 - **Search Highlighting**: Query terms highlighted in result titles and previews
@@ -405,12 +407,15 @@ idx_analysis_jobs_created_at - B-tree index on analysis_jobs.created_at
 - Pagination controls with page indicator
 
 **JavaScript (app/static/js/search.js)**:
-- 620 lines total
+- 960+ lines total
 - Debounced search input (300ms delay)
 - Filter state management
 - AJAX API calls with error handling
 - Dynamic result rendering
 - Pagination with auto-scroll
+- Modal functions: viewFileDetails(), openTranscriptDetails(), viewAnalysisResult()
+- Comprehensive file details rendering (metadata, transcripts, analysis jobs)
+- Transcript modal with full text display and download options
 
 **Styling (app/static/css/search.css)**:
 - 140 lines total
@@ -434,6 +439,11 @@ idx_analysis_jobs_created_at - B-tree index on analysis_jobs.created_at
 5. **Check all sources initially**: Start with all sources enabled to discover unexpected matches
 6. **Sort by relevance**: Default sort ranks files/transcripts higher for better discoverability
 7. **Refine queries**: If >200 results, refine query or add filters instead of excessive pagination
+8. **Click titles to view details**: Result titles and "View" buttons open modals - stay on search page to review multiple results efficiently
+
+### Known Issues (Fixed 2025-12-21)
+- ✅ **Template Block Mismatch**: search.html used incorrect block names (extra_js, extra_css) instead of (extra_scripts, extra_head) matching base.html - JavaScript and CSS never loaded
+- ✅ **Navigation on Click**: Search results navigated to File Management page - now open modals directly on search page for better UX
 
 ### Future Enhancements
 - Full-text search with FTS5 virtual table for better relevance ranking

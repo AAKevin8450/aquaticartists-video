@@ -2,6 +2,8 @@
  * Unified Search Page JavaScript
  */
 
+console.log('search.js loaded');
+
 // Global state
 let currentQuery = '';
 let currentPage = 1;
@@ -47,6 +49,10 @@ const sourceIcons = {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
+    console.log('DOMContentLoaded fired');
+    console.log('searchInput element:', searchInput);
+    console.log('searchBtn element:', searchBtn);
+
     initializeFilters();
     setupEventListeners();
     setupKeyboardShortcuts();
@@ -121,14 +127,18 @@ function initializeFilters() {
  * Setup event listeners
  */
 function setupEventListeners() {
+    console.log('setupEventListeners called');
+
     // Search button
     searchBtn.addEventListener('click', () => {
+        console.log('Search button clicked');
         performSearch();
     });
 
     // Search input - trigger on Enter key
     searchInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
+            console.log('Enter key pressed in search input');
             performSearch();
         }
     });
@@ -274,12 +284,16 @@ async function loadFilterOptions() {
 async function performSearch(page = 1) {
     const query = searchInput.value.trim();
 
+    console.log('performSearch called with query:', query);
+
     if (!query) {
+        console.log('Empty query, showing empty state');
         showEmptyState();
         return;
     }
 
     if (query.length < 2) {
+        console.log('Query too short:', query);
         showError('Search query must be at least 2 characters');
         return;
     }
@@ -309,15 +323,21 @@ async function performSearch(page = 1) {
     if (currentFilters.sort_by) params.append('sort_by', currentFilters.sort_by);
     if (currentFilters.sort_order) params.append('sort_order', currentFilters.sort_order);
 
+    const url = `/search/api/search?${params.toString()}`;
+    console.log('Fetching search results from:', url);
+
     try {
-        const response = await fetch(`/search/api/search?${params.toString()}`);
+        const response = await fetch(url);
+        console.log('Response status:', response.status, response.statusText);
 
         if (!response.ok) {
             const error = await response.json();
+            console.error('Server error response:', error);
             throw new Error(error.details || 'Search failed');
         }
 
         const data = await response.json();
+        console.log('Search results:', data);
         lastSearchResults = data;
 
         // Display results
@@ -375,6 +395,27 @@ function displayResults(data) {
 }
 
 /**
+ * Get onclick handler for result title
+ */
+function getTitleOnClick(result) {
+    const sourceType = result.source_type;
+    const sourceId = result.source_id;
+
+    if (sourceType === 'file') {
+        return `viewFileDetails(${sourceId})`;
+    } else if (sourceType === 'transcript') {
+        return `openTranscriptDetails(${sourceId})`;
+    } else if (sourceType === 'rekognition') {
+        return `viewAnalysisResult(${sourceId}, 'rekognition')`;
+    } else if (sourceType === 'nova') {
+        return `viewAnalysisResult(${sourceId}, 'nova')`;
+    } else if (sourceType === 'face_collection') {
+        return `window.location.href='/collections?id=${sourceId}'`;
+    }
+    return '';
+}
+
+/**
  * Render a single search result
  */
 function renderResult(result, query) {
@@ -390,6 +431,9 @@ function renderResult(result, query) {
     // Metadata badges
     const metadata = buildMetadataBadges(result);
 
+    // Generate onclick handler for title
+    const titleOnClick = getTitleOnClick(result);
+
     return `
         <div class="card mb-3 result-card">
             <div class="card-body">
@@ -399,7 +443,7 @@ function renderResult(result, query) {
                     </div>
                     <div class="flex-grow-1">
                         <h5 class="card-title mb-1">
-                            <a href="${result.actions.view || '#'}" class="text-decoration-none">
+                            <a href="#" class="text-decoration-none" onclick="${titleOnClick}; return false;" style="cursor: pointer;">
                                 ${escapeHtml(result.title)}
                             </a>
                         </h5>
@@ -424,31 +468,42 @@ function renderResult(result, query) {
  */
 function buildActionButtons(result) {
     const buttons = [];
+    const sourceType = result.source_type;
+    const sourceId = result.source_id;
 
-    if (result.actions.view) {
-        buttons.push(`<a href="${result.actions.view}" class="btn btn-outline-primary">
-            <i class="bi bi-eye"></i> View
+    // Main "View" button - opens modal on search page
+    if (sourceType === 'file') {
+        buttons.push(`<button class="btn btn-outline-primary" onclick="viewFileDetails(${sourceId})">
+            <i class="bi bi-eye"></i> View Details
+        </button>`);
+    } else if (sourceType === 'transcript') {
+        buttons.push(`<button class="btn btn-outline-primary" onclick="openTranscriptDetails(${sourceId})">
+            <i class="bi bi-eye"></i> View Transcript
+        </button>`);
+    } else if (sourceType === 'rekognition') {
+        // For Rekognition, we need to get the file_id first
+        buttons.push(`<button class="btn btn-outline-primary" onclick="viewAnalysisResult(${sourceId}, 'rekognition')">
+            <i class="bi bi-eye"></i> View Analysis
+        </button>`);
+    } else if (sourceType === 'nova') {
+        buttons.push(`<button class="btn btn-outline-primary" onclick="viewAnalysisResult(${sourceId}, 'nova')">
+            <i class="bi bi-stars"></i> View Analysis
+        </button>`);
+    } else if (sourceType === 'face_collection') {
+        // Collections navigate to collections page (external)
+        buttons.push(`<a href="/collections?id=${sourceId}" class="btn btn-outline-primary">
+            <i class="bi bi-people"></i> View Collection
         </a>`);
     }
 
-    if (result.actions.view_transcript) {
-        buttons.push(`<a href="${result.actions.view_transcript}" class="btn btn-outline-secondary">
-            <i class="bi bi-card-text"></i> Transcript
-        </a>`);
-    }
-
+    // Dashboard link (opens in new tab for Rekognition results)
     if (result.actions.view_dashboard) {
-        buttons.push(`<a href="${result.actions.view_dashboard}" class="btn btn-outline-secondary">
+        buttons.push(`<a href="${result.actions.view_dashboard}" class="btn btn-outline-secondary" target="_blank">
             <i class="bi bi-bar-chart"></i> Dashboard
         </a>`);
     }
 
-    if (result.actions.view_results) {
-        buttons.push(`<a href="${result.actions.view_results}" class="btn btn-outline-secondary">
-            <i class="bi bi-file-text"></i> Results
-        </a>`);
-    }
-
+    // Download button
     if (result.actions.download) {
         buttons.push(`<a href="${result.actions.download}" class="btn btn-outline-success">
             <i class="bi bi-download"></i> Download
@@ -658,3 +713,272 @@ function escapeRegex(string) {
 
 // Make performSearch available globally for pagination
 window.performSearch = performSearch;
+
+// ============================================================================
+// MODAL FUNCTIONS
+// ============================================================================
+
+async function viewFileDetails(fileId) {
+    const modal = new bootstrap.Modal(document.getElementById('fileDetailsModal'));
+    const modalBody = document.getElementById('fileDetailsBody');
+
+    modalBody.innerHTML = '<div class="text-center"><div class="spinner-border"></div></div>';
+    modal.show();
+
+    try {
+        const response = await fetch(`/api/files/${fileId}`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to load file details');
+        }
+
+        const data = await response.json();
+        renderFileDetails(data, modalBody);
+
+    } catch (error) {
+        console.error('Failed to load file details:', error);
+        modalBody.innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> Failed to load file details: ${error.message}
+            </div>
+        `;
+    }
+}
+
+function renderFileDetails(data, container) {
+    const { file, proxy, analysis_jobs, transcripts } = data;
+
+    let html = `
+        <div class="row g-3">
+            <div class="col-md-6">
+                <h6><i class="bi bi-file-earmark"></i> File Information</h6>
+                <table class="table table-sm">
+                    <tr><th>Filename:</th><td>${escapeHtml(file.filename || 'N/A')}</td></tr>
+                    <tr><th>Type:</th><td>${escapeHtml(file.file_type || 'N/A')}</td></tr>
+                    <tr><th>Size:</th><td>${formatFileSize(file.size_bytes || 0)}</td></tr>
+                    <tr><th>Duration:</th><td>${formatDuration(file.duration_seconds || 0)}</td></tr>
+                    <tr><th>Uploaded:</th><td>${formatTimestamp(file.uploaded_at)}</td></tr>
+                </table>
+            </div>
+            <div class="col-md-6">
+                <h6><i class="bi bi-gear"></i> Technical Details</h6>
+                <table class="table table-sm">
+                    <tr><th>Resolution:</th><td>${file.resolution_width || 'N/A'} × ${file.resolution_height || 'N/A'}</td></tr>
+                    <tr><th>Frame Rate:</th><td>${file.frame_rate || 'N/A'} fps</td></tr>
+                    <tr><th>Video Codec:</th><td>${escapeHtml(file.codec_video || 'N/A')}</td></tr>
+                    <tr><th>Audio Codec:</th><td>${escapeHtml(file.codec_audio || 'N/A')}</td></tr>
+                    <tr><th>Bitrate:</th><td>${file.bitrate ? (file.bitrate / 1000).toFixed(0) + ' kbps' : 'N/A'}</td></tr>
+                </table>
+            </div>
+        </div>
+    `;
+
+    // Proxy information
+    if (proxy) {
+        html += `
+            <div class="mt-3">
+                <h6><i class="bi bi-film"></i> Proxy File</h6>
+                <table class="table table-sm">
+                    <tr><th>Filename:</th><td>${escapeHtml(proxy.proxy_filename || 'N/A')}</td></tr>
+                    <tr><th>Size:</th><td>${formatFileSize(proxy.proxy_size || 0)}</td></tr>
+                    <tr><th>Created:</th><td>${formatTimestamp(proxy.created_at)}</td></tr>
+                </table>
+            </div>
+        `;
+    }
+
+    // Transcripts
+    if (transcripts && transcripts.length > 0) {
+        html += `
+            <div class="mt-3">
+                <h6><i class="bi bi-card-text"></i> Transcripts (${transcripts.length})</h6>
+                <div class="list-group">
+        `;
+        transcripts.forEach(t => {
+            const statusBadge = getStatusBadgeClass(t.status);
+            html += `
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>${escapeHtml(t.model_name || 'N/A')}</strong>
+                            <span class="badge bg-${statusBadge} ms-2">${t.status}</span>
+                            <br>
+                            <small class="text-muted">${formatTimestamp(t.created_at)}</small>
+                        </div>
+                        <button class="btn btn-sm btn-primary" onclick="openTranscriptDetails(${t.id})">
+                            <i class="bi bi-eye"></i> View
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+        html += `</div></div>`;
+    }
+
+    // Analysis jobs
+    if (analysis_jobs && analysis_jobs.length > 0) {
+        html += `
+            <div class="mt-3">
+                <h6><i class="bi bi-eye"></i> Analysis Jobs (${analysis_jobs.length})</h6>
+                <div class="list-group">
+        `;
+        analysis_jobs.forEach(job => {
+            const statusBadge = getStatusBadgeClass(job.status);
+            html += `
+                <div class="list-group-item">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>${escapeHtml(job.analysis_type || 'N/A')}</strong>
+                            <span class="badge bg-${statusBadge} ms-2">${job.status}</span>
+                            <br>
+                            <small class="text-muted">${formatTimestamp(job.created_at)}</small>
+                        </div>
+                        ${job.status === 'SUCCEEDED' ? `
+                            <a href="/dashboard/${job.id}" class="btn btn-sm btn-primary" target="_blank">
+                                <i class="bi bi-bar-chart"></i> Dashboard
+                            </a>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+        });
+        html += `</div></div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+async function openTranscriptDetails(transcriptId) {
+    const modalEl = document.getElementById('transcriptDetailsModal');
+    const modalBody = document.getElementById('transcriptDetailsBody');
+    if (!modalEl || !modalBody) {
+        showError('Transcript details modal not available.');
+        return;
+    }
+
+    const modal = new bootstrap.Modal(modalEl);
+    modalBody.innerHTML = '<div class="text-center"><div class="spinner-border"></div></div>';
+    modal.show();
+
+    try {
+        const response = await fetch(`/transcriptions/api/transcript/${transcriptId}`);
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to load transcript');
+        }
+
+        const transcript = await response.json();
+        const statusClass = `bg-${getStatusBadgeClass(transcript.status)}`;
+        const transcriptText = transcript.transcript_text ? escapeHtml(transcript.transcript_text) : '';
+
+        modalBody.innerHTML = `
+            <div class="mb-3">
+                <h6 class="mb-1"><i class="bi bi-file-earmark-play"></i> ${escapeHtml(transcript.file_name || 'Unknown file')}</h6>
+                <p class="text-muted small mb-2">${escapeHtml(transcript.file_path || 'N/A')}</p>
+                <div class="row g-2">
+                    <div class="col-md-3">
+                        <strong>Status:</strong> <span class="badge ${statusClass}">${transcript.status || 'N/A'}</span>
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Model:</strong> ${escapeHtml(transcript.model_name || 'N/A')}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Language:</strong> ${escapeHtml(transcript.language || 'N/A')}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Duration:</strong> ${formatDuration(transcript.duration_seconds || 0)}
+                    </div>
+                </div>
+                <div class="row g-2 mt-2">
+                    <div class="col-md-3">
+                        <strong>Words:</strong> ${(transcript.word_count || 0).toLocaleString()}
+                    </div>
+                    <div class="col-md-3">
+                        <strong>Created:</strong> ${formatTimestamp(transcript.created_at)}
+                    </div>
+                    <div class="col-md-6">
+                        <a href="/transcriptions/api/transcript/${transcriptId}/download?format=txt" class="btn btn-sm btn-success">
+                            <i class="bi bi-download"></i> Download TXT
+                        </a>
+                        <a href="/transcriptions/api/transcript/${transcriptId}/download?format=srt" class="btn btn-sm btn-success">
+                            <i class="bi bi-download"></i> Download SRT
+                        </a>
+                    </div>
+                </div>
+            </div>
+            <div class="mt-3">
+                <h6>Transcript Text</h6>
+                <div class="border rounded p-3" style="max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-family: monospace; background-color: #f8f9fa;">
+${transcriptText || 'No transcript text available'}
+                </div>
+            </div>
+        `;
+
+    } catch (error) {
+        console.error('Failed to load transcript:', error);
+        modalBody.innerHTML = `
+            <div class="alert alert-danger">
+                <i class="bi bi-exclamation-triangle"></i> Failed to load transcript: ${error.message}
+            </div>
+        `;
+    }
+}
+
+function getStatusBadgeClass(status) {
+    const statusMap = {
+        'SUCCEEDED': 'success',
+        'COMPLETED': 'success',
+        'FAILED': 'danger',
+        'IN_PROGRESS': 'warning',
+        'SUBMITTED': 'info',
+        'PENDING': 'secondary'
+    };
+    return statusMap[status] || 'secondary';
+}
+
+async function viewAnalysisResult(jobId, type) {
+    try {
+        if (type === 'rekognition') {
+            // Get job details to find the file_id
+            const response = await fetch(`/api/history/${jobId}`);
+            if (!response.ok) {
+                throw new Error('Failed to load job details');
+            }
+            const job = await response.json();
+            if (job.file_id) {
+                viewFileDetails(job.file_id);
+            } else {
+                showError('Could not find file for this analysis job');
+            }
+        } else if (type === 'nova') {
+            // Get Nova job details to find the file_id
+            const response = await fetch(`/api/nova/results/${jobId}`);
+            if (!response.ok) {
+                throw new Error('Failed to load Nova job details');
+            }
+            const novaJob = await response.json();
+            if (novaJob.analysis_job_id) {
+                const jobResponse = await fetch(`/api/history/${novaJob.analysis_job_id}`);
+                if (!jobResponse.ok) {
+                    throw new Error('Failed to load analysis job details');
+                }
+                const job = await jobResponse.json();
+                if (job.file_id) {
+                    viewFileDetails(job.file_id);
+                } else {
+                    showError('Could not find file for this Nova analysis');
+                }
+            } else {
+                showError('Could not find file for this Nova analysis');
+            }
+        }
+    } catch (error) {
+        console.error('Failed to view analysis:', error);
+        showError(`Failed to open analysis: ${error.message}`);
+    }
+}
+
+// Make modal functions available globally
+window.viewFileDetails = viewFileDetails;
+window.openTranscriptDetails = openTranscriptDetails;
+window.viewAnalysisResult = viewAnalysisResult;

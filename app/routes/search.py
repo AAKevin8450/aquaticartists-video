@@ -236,22 +236,22 @@ def build_action_links(source_type: str, row: Dict[str, Any]) -> Dict[str, str]:
     source_id = row.get('source_id')
 
     if source_type == 'file':
-        actions['view'] = f'/file-management?id={source_id}'
+        actions['view'] = f'/files?id={source_id}'
         actions['download'] = f'/api/files/{source_id}/download'
 
     elif source_type == 'transcript':
-        actions['view'] = f'/file-management?highlight=transcript_{source_id}'
+        actions['view'] = f'/files?highlight=transcript_{source_id}'
         actions['view_transcript'] = f'/transcriptions?id={source_id}'
         actions['download'] = f'/transcriptions/api/transcript/{source_id}/download?format=txt'
 
     elif source_type == 'rekognition':
         # Get the job details to find the dashboard link
-        actions['view'] = f'/file-management?job_id={source_id}'
+        actions['view'] = f'/files?job_id={source_id}'
         actions['view_dashboard'] = f'/dashboard/{source_id}'
         actions['download_json'] = f'/api/history/{source_id}?format=json'
 
     elif source_type == 'nova':
-        actions['view'] = f'/file-management?nova_id={source_id}'
+        actions['view'] = f'/files?nova_id={source_id}'
         actions['view_results'] = f'/api/nova/results/{source_id}'
 
     elif source_type == 'face_collection':

@@ -1,0 +1,3 @@
+The search function is not working. Fix the search function so that the user can search across the database.
+Improve the transcription time display on the File Management page. Show transcription information the same way it was shown on the Transcriptions page.
+Check the time calculations to make sure that Eastern time is properly calculated and that timestamps aren't actually UTC time with an ET indicator.
