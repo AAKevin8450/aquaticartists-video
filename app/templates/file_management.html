@@ -53,157 +53,148 @@
 
 <!-- Search and Filters Card -->
 <div class="card mb-4">
-    <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-funnel"></i> Search & Filters</h5>
+    <div class="card-header py-2">
+        <h6 class="mb-0"><i class="bi bi-funnel"></i> Search & Filters</h6>
     </div>
-    <div class="card-body">
-        <div class="row g-3">
+    <div class="card-body py-2">
+        <div class="row g-1">
+            <!-- Row 1 -->
             <!-- Search bar -->
-            <div class="col-md-6">
-                <div class="input-group">
-                    <span class="input-group-text">
+            <div class="col-lg-3 col-md-4 col-sm-6">
+                <label for="searchInput" class="form-label mb-0" style="font-size: 0.75rem;">Search</label>
+                <div class="input-group input-group-sm">
+                    <span class="input-group-text p-1">
                         <i class="bi bi-search"></i>
                     </span>
-                    <input type="text" class="form-control" id="searchInput"
-                           placeholder="Search filenames, metadata, transcripts...">
-                    <button class="btn btn-outline-secondary" id="clearSearchBtn">
+                    <input type="text" class="form-control form-control-sm" id="searchInput"
+                           placeholder="Search...">
+                    <button class="btn btn-outline-secondary btn-sm p-1" id="clearSearchBtn">
                         <i class="bi bi-x"></i>
                     </button>
                 </div>
-                <small class="text-muted">Full-text search across filenames, metadata, and transcription content</small>
             </div>
 
             <!-- File Type Filter -->
-            <div class="col-md-2">
-                <label class="form-label">File Type</label>
-                <select class="form-select" id="fileTypeFilter">
-                    <option value="">All Types</option>
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="fileTypeFilter" class="form-label mb-0" style="font-size: 0.75rem;">Type</label>
+                <select class="form-select form-select-sm" id="fileTypeFilter">
+                    <option value="">All</option>
                     <option value="video">Video</option>
                     <option value="image">Image</option>
                 </select>
             </div>
 
             <!-- Has Proxy Filter -->
-            <div class="col-md-2">
-                <label class="form-label">Proxy Status</label>
-                <select class="form-select" id="proxyFilter">
-                    <option value="">All Files</option>
-                    <option value="true">Has Proxy</option>
-                    <option value="false">No Proxy</option>
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="proxyFilter" class="form-label mb-0" style="font-size: 0.75rem;">Proxy</label>
+                <select class="form-select form-select-sm" id="proxyFilter">
+                    <option value="">All</option>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
                 </select>
             </div>
 
             <!-- Has Transcription Filter -->
-            <div class="col-md-2">
-                <label class="form-label">Transcription</label>
-                <select class="form-select" id="transcriptionFilter">
-                    <option value="">All Files</option>
-                    <option value="true">Has Transcription</option>
-                    <option value="false">No Transcription</option>
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="transcriptionFilter" class="form-label mb-0" style="font-size: 0.75rem;">Transcript</label>
+                <select class="form-select form-select-sm" id="transcriptionFilter">
+                    <option value="">All</option>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
                 </select>
             </div>
 
             <!-- Nova Analysis Filter -->
-            <div class="col-md-2">
-                <label class="form-label">Nova Analysis</label>
-                <select class="form-select" id="novaFilter">
-                    <option value="">All Files</option>
-                    <option value="true">Has Nova</option>
-                    <option value="false">No Nova</option>
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="novaFilter" class="form-label mb-0" style="font-size: 0.75rem;">Nova</label>
+                <select class="form-select form-select-sm" id="novaFilter">
+                    <option value="">All</option>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
                 </select>
             </div>
 
             <!-- Rekognition Analysis Filter -->
-            <div class="col-md-2">
-                <label class="form-label">Rekognition</label>
-                <select class="form-select" id="rekognitionFilter">
-                    <option value="">All Files</option>
-                    <option value="true">Has Rekognition</option>
-                    <option value="false">No Rekognition</option>
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="rekognitionFilter" class="form-label mb-0" style="font-size: 0.75rem;">Rekog</label>
+                <select class="form-select form-select-sm" id="rekognitionFilter">
+                    <option value="">All</option>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
                 </select>
             </div>
 
             <!-- Nova Embeddings Filter -->
-            <div class="col-md-2">
-                <label class="form-label">Nova Embeddings</label>
-                <select class="form-select" id="embeddingsFilter">
-                    <option value="">All Files</option>
-                    <option value="true">Has Embeddings</option>
-                    <option value="false">No Embeddings</option>
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="embeddingsFilter" class="form-label mb-0" style="font-size: 0.75rem;">Embed</label>
+                <select class="form-select form-select-sm" id="embeddingsFilter">
+                    <option value="">All</option>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
                 </select>
             </div>
 
-            <!-- Upload Date Filters (Always Visible) -->
-            <div class="col-md-2">
-                <label class="form-label small">Upload From</label>
-                <input type="date" class="form-control" id="uploadFromDate">
+            <!-- Upload From -->
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="uploadFromDate" class="form-label mb-0" style="font-size: 0.75rem;">Upl From</label>
+                <input type="date" class="form-control form-control-sm" id="uploadFromDate">
             </div>
 
-            <div class="col-md-2">
-                <label class="form-label small">Upload To</label>
-                <input type="date" class="form-control" id="uploadToDate">
+            <!-- Upload To -->
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="uploadToDate" class="form-label mb-0" style="font-size: 0.75rem;">Upl To</label>
+                <input type="date" class="form-control form-control-sm" id="uploadToDate">
             </div>
 
-            <!-- File Created Date Filters -->
-            <div class="col-md-2">
-                <label class="form-label small">Created From</label>
-                <input type="date" class="form-control" id="createdFromDate">
+            <!-- Created From -->
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="createdFromDate" class="form-label mb-0" style="font-size: 0.75rem;">Cre From</label>
+                <input type="date" class="form-control form-control-sm" id="createdFromDate">
             </div>
 
-            <div class="col-md-2">
-                <label class="form-label small">Created To</label>
-                <input type="date" class="form-control" id="createdToDate">
+            <!-- Row 2 -->
+            <!-- Created To -->
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="createdToDate" class="form-label mb-0" style="font-size: 0.75rem;">Cre To</label>
+                <input type="date" class="form-control form-control-sm" id="createdToDate">
             </div>
 
-            <!-- Advanced Filters (Collapsible) -->
-            <div class="col-12">
-                <button class="btn btn-sm btn-outline-secondary"
-                        data-bs-toggle="collapse" data-bs-target="#advancedFiltersCollapse">
-                    <i class="bi bi-sliders"></i> Size & Duration Filters
-                </button>
+            <!-- Min Size -->
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="minSize" class="form-label mb-0" style="font-size: 0.75rem;">Min MB</label>
+                <input type="number" class="form-control form-control-sm" id="minSize" placeholder="0" min="0" step="1">
             </div>
 
-            <div class="collapse col-12" id="advancedFiltersCollapse">
-                <div class="card mt-2">
-                    <div class="card-body">
-                        <div class="row g-2 mb-0">
+            <!-- Max Size -->
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="maxSize" class="form-label mb-0" style="font-size: 0.75rem;">Max MB</label>
+                <input type="number" class="form-control form-control-sm" id="maxSize" placeholder="∞" min="0" step="1">
+            </div>
 
-                            <!-- File Size Range -->
-                            <div class="col-12 mb-2">
-                                <h6 class="text-muted small mb-2"><i class="bi bi-hdd"></i> File Size (MB)</h6>
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label small">Min Size</label>
-                                <input type="number" class="form-control" id="minSize" placeholder="0" min="0" step="1">
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label small">Max Size</label>
-                                <input type="number" class="form-control" id="maxSize" placeholder="Unlimited" min="0" step="1">
-                            </div>
+            <!-- Min Duration -->
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="minDuration" class="form-label mb-0" style="font-size: 0.75rem;">Min Sec</label>
+                <input type="number" class="form-control form-control-sm" id="minDuration" placeholder="0" min="0" step="1">
+            </div>
 
-                            <!-- Duration Range -->
-                            <div class="col-12 mt-3 mb-2">
-                                <h6 class="text-muted small mb-2"><i class="bi bi-clock"></i> Duration (seconds)</h6>
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label small">Min Duration</label>
-                                <input type="number" class="form-control" id="minDuration" placeholder="0" min="0" step="1">
-                            </div>
-                            <div class="col-md-6">
-                                <label class="form-label small">Max Duration</label>
-                                <input type="number" class="form-control" id="maxDuration" placeholder="Unlimited" min="0" step="1">
-                            </div>
-                        </div>
-                    </div>
-                </div>
+            <!-- Max Duration -->
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="maxDuration" class="form-label mb-0" style="font-size: 0.75rem;">Max Sec</label>
+                <input type="number" class="form-control form-control-sm" id="maxDuration" placeholder="∞" min="0" step="1">
+            </div>
+
+            <!-- Min Transcript Chars -->
+            <div class="col-lg-1 col-md-2 col-sm-3">
+                <label for="minTranscriptChars" class="form-label mb-0" style="font-size: 0.75rem;">Min Chars</label>
+                <input type="number" class="form-control form-control-sm" id="minTranscriptChars" placeholder="0" min="0" step="1">
             </div>
 
             <!-- Action Buttons -->
-            <div class="col-12">
-                <button class="btn btn-primary" id="applyFiltersBtn">
-                    <i class="bi bi-funnel"></i> Apply Filters
+            <div class="col-lg-6 col-md-12 d-flex align-items-end">
+                <button class="btn btn-primary btn-sm me-1" id="applyFiltersBtn">
+                    <i class="bi bi-funnel"></i> Apply
                 </button>
-                <button class="btn btn-secondary" id="resetFiltersBtn">
+                <button class="btn btn-secondary btn-sm" id="resetFiltersBtn">
                     <i class="bi bi-arrow-counterclockwise"></i> Reset
                 </button>
             </div>

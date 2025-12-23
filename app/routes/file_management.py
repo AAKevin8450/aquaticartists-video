@@ -188,6 +188,7 @@ def list_files():
         max_size = request.args.get('max_size')
         min_duration = request.args.get('min_duration')
         max_duration = request.args.get('max_duration')
+        min_transcript_chars = request.args.get('min_transcript_chars')
         sort_by = request.args.get('sort_by', 'uploaded_at')
         sort_order = request.args.get('sort_order', 'desc')
         page = int(request.args.get('page', 1))
@@ -219,6 +220,7 @@ def list_files():
         max_size = int(max_size) if max_size else None
         min_duration = int(min_duration) if min_duration else None
         max_duration = int(max_duration) if max_duration else None
+        min_transcript_chars = int(min_transcript_chars) if min_transcript_chars else None
 
         # Calculate pagination
         offset = (page - 1) * per_page
@@ -241,6 +243,7 @@ def list_files():
             max_size=max_size,
             min_duration=min_duration,
             max_duration=max_duration,
+            min_transcript_chars=min_transcript_chars,
             sort_by=sort_by,
             sort_order=sort_order,
             limit=per_page,
@@ -263,7 +266,8 @@ def list_files():
             min_size=min_size,
             max_size=max_size,
             min_duration=min_duration,
-            max_duration=max_duration
+            max_duration=max_duration,
+            min_transcript_chars=min_transcript_chars
         )
 
         # Get summary statistics
@@ -282,7 +286,8 @@ def list_files():
             min_size=min_size,
             max_size=max_size,
             min_duration=min_duration,
-            max_duration=max_duration
+            max_duration=max_duration,
+            min_transcript_chars=min_transcript_chars
         )
 
         # Format files for display

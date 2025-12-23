@@ -54,9 +54,10 @@ NOVA_SONIC_DEBUG=1  # Debug transcription
 | Transcription | app/routes/transcription.py | /api/scan, /api/start-batch, /api/batch-status |
 
 ### Frontend
-**Primary UI**: File Management (`file_management.html`) - Unified interface for all processing
+**Primary UI**: File Management (`file_management.html`) - Unified interface with compact 2-row filter section
 **Templates**: index.html (dashboard), search.html, upload.html, history.html, dashboard.html (charts), collections.html
 **JavaScript**: utils.js, dashboard.js (Chart.js), file_management.js, search.js
+**UI Features**: File paths visible with right-justified truncation, transcript character counts in badges, timezone-neutral timestamps
 
 ## Key Features
 
@@ -71,6 +72,7 @@ NOVA_SONIC_DEBUG=1  # Debug transcription
 ### Search System
 - **Keyword**: UNION query across 5 sources (files, transcripts, Rekognition, Nova, collections)
 - **Semantic**: Nova Embeddings with sqlite-vec KNN (sub-500ms)
+- **Filters**: 16 total filters including minimum transcript character count
 - 7 database indexes for performance
 
 ### Transcription
@@ -90,6 +92,7 @@ NOVA_SONIC_DEBUG=1  # Debug transcription
 - Chart.js visualizations at /dashboard/<job_id>
 - Analysis-type-specific processors (9 total)
 - Excel/JSON export
+- File path displayed in dashboard subtitle
 
 ## Database Schema
 

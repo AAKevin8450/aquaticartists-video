@@ -1,3 +1,54 @@
+2025-12-23 17:29:05 - Updated by Claude Code
+
+[Category: UI Enhancement]
+Redesign File Management filters for compact 2-row layout with file path display and transcript character count filtering.
+
+[Purpose]
+Improve File Management page usability by significantly reducing filter section vertical space while adding new filtering capabilities and better file path visibility.
+
+[Impact]
+- Filter section reduced from ~6 rows to 2 rows on large screens (60% space reduction)
+- File paths now visible in file listing with right-justified truncation showing end of path (most important part)
+- New minimum transcript character count filter enables filtering by transcript size
+- Transcript character counts displayed inline with transcript badges
+- Removed "Uploaded" column and ET/EDT/EST timezone indicators for cleaner display
+- Tighter table spacing with Bootstrap table-sm class
+
+[Technical Details]
+- Database layer: Added min_transcript_chars parameter to list_all_files_with_stats(), count_all_files(), get_all_files_summary()
+- Filter implementation uses HAVING clause for aggregated transcript character counts
+- File path display uses CSS direction:rtl for right-justified truncation
+- Filter inputs reorganized: Search (3 cols), 9x status filters (1 col each), 6x range filters (1 col each), buttons (6 cols)
+- Grid gap reduced from g-2 to g-1, input padding reduced with p-1 class
+- Labels shortened: "Rekognition" → "Rekog", "Embeddings" → "Embed", "Upload From/To" → "Upl From/To"
+
+[Files Modified]
+- app/database.py:1965-1987 (add min_transcript_chars parameter to list_all_files_with_stats)
+- app/database.py:2138-2148 (add HAVING clause for transcript char filtering)
+- app/database.py:2171-2189 (add min_transcript_chars to count_all_files)
+- app/database.py:2292-2299 (add transcript char filter to count query)
+- app/database.py:2304-2322 (add min_transcript_chars to get_all_files_summary)
+- app/database.py:2447-2454 (add transcript char filter to summary query)
+- app/routes/file_management.py:191,223,246,270,290 (add min_transcript_chars parameter handling)
+- app/static/js/file_management.js:7-28 (add min_transcript_chars to filter state)
+- app/static/js/file_management.js:212-213,235,254,318 (add filter field updates)
+- app/static/js/file_management.js:535-560 (update table headers - remove Uploaded column, rename to Created)
+- app/static/js/file_management.js:602-612 (add character count to transcript badges)
+- app/static/js/file_management.js:632 (add right-justified file path with direction:rtl)
+- app/static/js/dashboard.js:35-39 (add file path to dashboard subtitle)
+- app/templates/file_management.html:60-201 (redesign filter section - 2 row compact layout with labels)
+- app/utils/formatters.py:41,78 (remove ET/EDT/EST timezone indicators from timestamps)
+
+[UI Changes]
+- Filter labels: 0.75rem font size, mb-0 spacing for compactness
+- Filter columns: col-lg-1 for most filters (1/12 width), col-lg-3 for search (3/12 width)
+- Select options shortened: "Has Proxy" → "Yes", "All Types" → "All", etc.
+- Number input placeholders: "0" for minimums, "∞" for maximums
+- File path displays with folder icon, right-aligned with RTL text direction
+- Transcript badge shows character count: "1 (5,234 chars)"
+
+---
+
 2025-12-23 21:30:00 - Updated by Claude Code
 
 [Category: Enhancement]

@@ -32,8 +32,11 @@ export async function initDashboard(jobId) {
         }
 
         // Update header subtitle
-        document.getElementById('dashboardSubtitle').textContent =
-            `${jobData.analysis_type_display} - ${jobData.file_name}`;
+        const subtitleParts = [`${jobData.analysis_type_display} - ${jobData.file_name}`];
+        if (jobData.local_path) {
+            subtitleParts.push(`Path: ${jobData.local_path}`);
+        }
+        document.getElementById('dashboardSubtitle').textContent = subtitleParts.join(' | ');
 
         // Process data based on analysis type
         processedData = processJobData(jobData);

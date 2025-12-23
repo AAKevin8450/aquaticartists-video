@@ -20,6 +20,7 @@ let currentFilters = {
     max_size: '',
     min_duration: '',
     max_duration: '',
+    min_transcript_chars: '',
     sort_by: 'uploaded_at',
     sort_order: 'desc',
     page: 1,
@@ -207,6 +208,9 @@ function applyFilters() {
     currentFilters.min_duration = document.getElementById('minDuration').value;
     currentFilters.max_duration = document.getElementById('maxDuration').value;
 
+    // Transcript character count filter
+    currentFilters.min_transcript_chars = document.getElementById('minTranscriptChars').value;
+
     currentFilters.page = 1;
     loadFiles();
 }
@@ -228,6 +232,7 @@ function resetFilters() {
     document.getElementById('maxSize').value = '';
     document.getElementById('minDuration').value = '';
     document.getElementById('maxDuration').value = '';
+    document.getElementById('minTranscriptChars').value = '';
 
     // Reset state
     currentFilters = {
@@ -246,6 +251,7 @@ function resetFilters() {
         max_size: '',
         min_duration: '',
         max_duration: '',
+        min_transcript_chars: '',
         sort_by: 'uploaded_at',
         sort_order: 'desc',
         page: 1,
@@ -309,14 +315,7 @@ function applyFiltersToInputs() {
     document.getElementById('maxSize').value = toMegabytes(currentFilters.max_size);
     document.getElementById('minDuration').value = currentFilters.min_duration || '';
     document.getElementById('maxDuration').value = currentFilters.max_duration || '';
-
-    const hasAdvancedFilters = currentFilters.min_size || currentFilters.max_size ||
-        currentFilters.min_duration || currentFilters.max_duration;
-    const advancedFiltersCollapse = document.getElementById('advancedFiltersCollapse');
-    if (hasAdvancedFilters && advancedFiltersCollapse) {
-        const collapse = new bootstrap.Collapse(advancedFiltersCollapse, { toggle: false });
-        collapse.show();
-    }
+    document.getElementById('minTranscriptChars').value = currentFilters.min_transcript_chars || '';
 }
 
 function normalizeTriState(value) {
@@ -534,29 +533,28 @@ function renderFiles(files) {
 
     const table = `
         <div class="table-responsive">
-            <table class="table table-hover">
+            <table class="table table-hover table-sm">
                 <thead>
                     <tr>
-                        <th style="width: 30%; cursor: pointer;" class="sortable" data-sort="filename">
+                        <th style="width: 35%; cursor: pointer;" class="sortable" data-sort="filename">
                             File ${getSortIcon('filename')}
                         </th>
-                        <th style="width: 8%; cursor: pointer;" class="sortable" data-sort="file_type">
+                        <th style="width: 7%; cursor: pointer;" class="sortable" data-sort="file_type">
                             Type ${getSortIcon('file_type')}
                         </th>
-                        <th style="width: 9%; cursor: pointer;" class="sortable" data-sort="size_bytes">
+                        <th style="width: 8%; cursor: pointer;" class="sortable" data-sort="size_bytes">
                             Size ${getSortIcon('size_bytes')}
                         </th>
-                        <th style="width: 7%">Proxy Size</th>
-                        <th style="width: 8%; cursor: pointer;" class="sortable" data-sort="duration_seconds">
+                        <th style="width: 7%">Proxy</th>
+                        <th style="width: 7%; cursor: pointer;" class="sortable" data-sort="duration_seconds">
                             Duration ${getSortIcon('duration_seconds')}
                         </th>
-                        <th style="width: 9%">Resolution</th>
-                        <th style="width: 13%">Status</th>
-                        <th style="width: 9%">Created</th>
+                        <th style="width: 8%">Resolution</th>
+                        <th style="width: 14%">Status</th>
                         <th style="width: 9%; cursor: pointer;" class="sortable" data-sort="uploaded_at">
-                            Uploaded ${getSortIcon('uploaded_at')}
+                            Created ${getSortIcon('uploaded_at')}
                         </th>
-                        <th style="width: 11%">Actions</th>
+                        <th style="width: 9%">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -600,12 +598,15 @@ function renderFileRow(file) {
             file.max_completed_transcript_chars !== undefined &&
             file.max_completed_transcript_chars < 20;
         const transcriptBadgeClass = shortTranscript ? 'bg-warning' : 'bg-info';
+        const charCountDisplay = file.max_completed_transcript_chars !== null && file.max_completed_transcript_chars !== undefined
+            ? ` (${file.max_completed_transcript_chars.toLocaleString()} chars)`
+            : '';
         const transcriptTitle = shortTranscript
-            ? `${file.completed_transcripts} completed transcripts (short transcript)`
-            : `${file.completed_transcripts} completed transcripts`;
+            ? `${file.completed_transcripts} completed transcripts (short transcript)${charCountDisplay}`
+            : `${file.completed_transcripts} completed transcripts${charCountDisplay}`;
         statusBadges.push(
             `<a href="#" class="badge ${transcriptBadgeClass} text-decoration-none action-view-transcript" data-file-id="${file.id}" title="${transcriptTitle}">
-                <i class="bi bi-mic"></i> ${file.completed_transcripts}
+                <i class="bi bi-mic"></i> ${file.completed_transcripts}${charCountDisplay}
             </a>`
         );
     }
@@ -625,9 +626,10 @@ function renderFileRow(file) {
                 <div class="d-flex align-items-start gap-2">
                     <i class="bi bi-${fileIcon} fs-4 text-${typeBadgeColor}"></i>
                     <div class="flex-grow-1" style="min-width: 0;">
-                        <div class="fw-semibold text-truncate" style="max-width: 300px;" title="${escapeHtml(file.filename)}">
+                        <div class="fw-semibold text-truncate" style="max-width: 400px;" title="${escapeHtml(file.filename)}">
                             ${escapeHtml(file.filename)}
                         </div>
+                        ${file.local_path ? `<small class="text-muted text-truncate d-block" style="max-width: 400px; direction: rtl; text-align: right;" title="${escapeHtml(file.local_path)}"><i class="bi bi-folder" style="direction: ltr;"></i> ${escapeHtml(file.local_path)}</small>` : ''}
                         ${codecInfo ? `<small class="text-muted">${codecInfo}</small>` : ''}
                     </div>
                 </div>
@@ -648,7 +650,6 @@ function renderFileRow(file) {
                 </div>
             </td>
             <td>${file.created_at || 'N/A'}</td>
-            <td>${file.uploaded_at}</td>
             <td>
                 ${renderActionsDropdown(file)}
             </td>
