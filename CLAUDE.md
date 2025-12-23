@@ -1,653 +1,141 @@
 # Project-Specific Instructions for Claude Code
 
 ## Project Overview
-AWS Video & Image Analysis Application - Flask-based web application for analyzing videos and images using Amazon Rekognition and Amazon Bedrock Nova. Supports 8 Rekognition video analysis types, 8 image analysis types, 3 Nova intelligent analysis types (summary, chapters, elements), face collection management, local video transcription, comprehensive file management with search/filter, and file upload/history tracking.
+AWS Video & Image Analysis Application - Flask-based web app using Amazon Rekognition (8 video + 8 image analysis types), Amazon Bedrock Nova (summary, chapters, elements), face collections, local transcription (faster-whisper), and semantic search (Nova Embeddings).
 
-## AWS Configuration
-
-### Current Setup
-- **S3 Bucket**: video-analysis-app-676206912644 (us-east-1)
-- **IAM Policy**: VideoAnalysisAppPolicy (v3 - Rekognition + Bedrock Nova permissions)
-- **CORS**: Configured for localhost:5700 browser uploads
-- **Services**: S3, Amazon Rekognition, Amazon Bedrock (Nova models)
-
-### Environment Variables (.env)
-Critical environment variables are stored in .env file (not in git):
-- AWS_ACCESS_KEY_ID
-- AWS_SECRET_ACCESS_KEY
-- AWS_REGION=us-east-1
-- S3_BUCKET_NAME=video-analysis-app-676206912644
-- FLASK_SECRET_KEY (generated)
-- DATABASE_PATH=data/app.db
-
-## Development Guidelines
-
-### Application Architecture
-- Port: 5700 (Flask development server)
-- Virtual Environment: .venv (already configured)
-- Database: SQLite (data/app.db)
-- File Storage: AWS S3 (direct browser uploads via presigned URLs)
-- Analysis Engines: Amazon Rekognition (async for video, sync for images), Amazon Bedrock Nova (intelligent video analysis)
-
-**Code Architecture Note**: The application follows strict DRY (Don't Repeat Yourself) principles. Recent refactoring (2025-12-20) consolidated all individual and batch processing functions into shared core processing functions, eliminating ~239 lines of duplication. All data processing flows through single source of truth functions for easier maintenance and consistent behavior.
-
-**Database Performance Optimization (2025-12-20)**: Critical performance fix rewrote database queries to use LEFT JOINs with GROUP BY instead of correlated subqueries, eliminating N+1 query problem. For 10,000 files, this reduced 80,000+ queries to 1 query, improving page load times 50-100x (10+ seconds to <200ms). All file listing operations now use efficient single-query approach with aggregated statistics.
-
-### Key Services
-1. **S3 Service** (app/services/s3_service.py) - Handles file upload/download
-2. **Rekognition Video** (app/services/rekognition_video.py) - Async video analysis
-3. **Rekognition Image** (app/services/rekognition_image.py) - Sync image analysis
-4. **Face Collections** (app/services/face_collection_service.py) - Face management
-5. **Transcription Service** (app/services/transcription_service.py) - Local video transcription using faster-whisper
-6. **Nova Service** (app/services/nova_service.py) - AWS Bedrock Nova intelligent video analysis (summary, chapters, elements)
-   - Supported models: Lite, Pro, Premier (preview models pro_2_preview and omni_2_preview removed 2025-12-21)
-   - Nova Sonic transcription via app/services/nova_transcription_service.py with enhanced Bedrock API compatibility
-   - Nova Embeddings via app/services/nova_embeddings_service.py for semantic search (amazon.nova-2-multimodal-embeddings-v1:0, 1024 dimensions)
-   - Embedding Manager via app/services/embedding_manager.py for text chunking and data ingestion
-7. **Database Layer** (app/database.py) - SQLite operations with optimized queries
-   - get_dashboard_stats(): Returns 20+ metrics across 8 categories (library overview, processing statistics, proxy statistics, transcription statistics, analysis breakdown, recent activity, content percentages, performance metrics)
-   - list_files(): High-performance LEFT JOIN query with aggregated statistics (eliminates N+1 problem)
-   - get_summary_stats(): Efficient single-query approach for file listing summaries
-   - search_all(): Unified keyword search across 5 data sources (files, transcripts, Rekognition, Nova, collections) with UNION query and relevance scoring
-   - search_embeddings(): Vector KNN search using sqlite-vec for semantic search with similarity scoring
-   - get_content_for_embedding_results(): Enriches vector search results with actual content from source tables
-   - count_search_results(): Fast count-only query for pagination
-   - get_search_filters(): Returns available filter options (models, analysis types, statuses)
-   - get_embedding_stats(): Returns embedding statistics for monitoring (total count, by source/model breakdown)
-8. **Analysis API** (app/routes/analysis.py) - Multi-select analysis endpoint (supports arrays of analysis types)
-9. **Nova API** (app/routes/nova_analysis.py) - Nova video analysis endpoints (5 endpoints: /analyze, /status, /results, /models, /estimate-cost)
-10. **File Management API** (app/routes/file_management.py) - Centralized file management with search/filter/actions (10 endpoints: list, details, create-proxy, start-analysis, start-transcription, start-nova, delete-cascade, s3-files)
-    - Batch operations (proxy, transcribe, nova, rekognition) fetch ALL filtered files across all pages (500 files per paginated request)
-    - Batch proxy creation creates local-only proxies (no S3 upload) to save costs for large video libraries, uses NVENC GPU acceleration (h264_nvenc) for 3-5x faster encoding
-    - Batch progress metrics: Real-time tracking of total batch size, processed size, generated proxy size, processing time, and ETA for proxy/transcription jobs
-    - Date filtering: upload_from_date/upload_to_date (S3 upload time), created_from_date/created_to_date (file metadata creation time)
-    - Nova batch mode requires minimum 100 files (enforced in UI with dynamic availability checks)
-11. **Search API** (app/routes/search.py) - Unified search across all data sources (4 endpoints: /search, /api/search, /api/search/count, /api/search/filters)
-    - Keyword search: Multi-source search with advanced filtering, sorting, and pagination
-    - Semantic search: AI-powered natural language search using Nova Embeddings (opt-in via semantic=true parameter)
-    - Performance-optimized with 7 database indexes for sub-500ms response times (keyword), sub-500ms vector KNN queries (semantic)
-
-### Frontend Components
-**Templates** (app/templates/):
-- index.html - Comprehensive dashboard with 10+ statistics tiles showing library stats, processing stats, content breakdown, recent activity, analysis breakdown, transcription stats, and active jobs
-- upload.html - File upload with real-time progress tracking (XMLHttpRequest) and presigned URL support
-- file_management.html - Centralized file management with search/filter, status badges, quick actions (proxy, transcription, analysis, delete). PRIMARY interface for all video/image analysis and transcription operations
-- search.html - Unified search page with multi-source querying (files, transcripts, Rekognition, Nova, collections), advanced filtering, sorting, and pagination
-- collections.html - Face collection management interface
-- history.html - Job history with auto-load and download buttons for completed jobs
-- dashboard.html - Visual analytics dashboard with charts and insights for video analysis results (per-job analysis)
-- base.html - Base template with streamlined navigation (Home, File Management, Search, Upload, Face Collections, History)
-
-**Archived Templates** (removed from navigation 2025-12-20):
-- video_analysis.html.archived - Standalone video analysis (replaced by File Management batch operations)
-- image_analysis.html.archived - Standalone image analysis (replaced by File Management batch operations)
-
-**Static Assets**:
-- app/static/css/style.css - Application-wide styling with Bootstrap 5 integration
-- app/static/css/search.css - Search page custom styling for result cards, filter toggles, and highlights
-- app/static/js/utils.js - Shared JavaScript utilities for AJAX and API interactions
-- app/static/js/dashboard.js - Dashboard functionality with Chart.js visualizations and data processors
-- app/static/js/file_management.js - File management functionality with search/filter, pagination, and quick actions
-- app/static/js/search.js - Search page functionality with debounced input, filter management, and result rendering
-
-**Key Features**:
-- Comprehensive dashboard: Home page displays 10+ real-time statistics tiles with library overview, processing status, content breakdown, recent activity, analysis breakdown, transcription stats, and active jobs
-- Centralized workflow: File Management tab is the PRIMARY interface for all processing operations (video/image analysis, transcription, proxy creation). Replaced 3 separate analysis pages with unified batch operation interface
-- Unified search: Search page provides single query interface across 5 data sources (files, transcripts, Rekognition, Nova, collections) with advanced filtering, sorting by relevance/date/name, and pagination. Optional AI semantic search toggle for natural language queries
-- Multi-select analysis: Users can select 1-8 analysis types simultaneously (checkboxes replace radio buttons)
-- Real-time upload progress: XMLHttpRequest provides smooth 0-100% progress updates
-- Automatic timezone conversion: All timestamps display in Eastern Time (ET) with zoneinfo/tzdata
-- Download results: Excel (.xlsx) or JSON download for completed jobs with dropdown buttons
-- Auto-polling: History page automatically polls running jobs every 15 seconds until completion
-- Excel export: Professional formatted Excel files with Summary and Data sheets using openpyxl
-- Visual dashboard: Interactive charts, graphs, and insights for video analysis results (accessible via /dashboard/<job_id>)
-- File management: Centralized file view showing 3,161+ files (uploaded + transcribed) with summary statistics (count, total size, total duration), full-text search, advanced filtering, status badges, quick actions, and S3 file operations (view/download/delete)
-- Batch operations: All batch actions (proxy creation, transcription, Nova analysis, Rekognition analysis) respect current search/filter criteria and fetch ALL filtered files across pages (not just displayed page). Proxy and transcription jobs display detailed real-time progress metrics (total/processed sizes, generated proxy size, ETA)
-- High-performance database: LEFT JOIN queries with GROUP BY aggregation deliver sub-200ms page loads even with 10,000+ files, 7 search indexes enable sub-500ms keyword search, sqlite-vec enables sub-500ms semantic vector search
-- Semantic search: AI-powered natural language search using AWS Nova Embeddings (1024 dimensions) with smart text chunking, hash-based idempotency, and similarity scoring. UI toggle preserves existing keyword search by default
-
-### Running the Application
+## Quick Start
 ```bash
-cd E:\coding\video
-.\.venv\Scripts\activate
-python run.py
+cd E:\coding\video && .\.venv\Scripts\activate && python run.py
 # Access at http://localhost:5700
 ```
 
-### Testing AWS Configuration
-- S3 bucket access via AWS CLI
-- Rekognition API connectivity
-- CORS configuration for browser uploads
+## AWS Configuration
+- **S3 Bucket**: video-analysis-app-676206912644 (us-east-1)
+- **IAM Policy**: VideoAnalysisAppPolicy v3 (31 Rekognition + 4 Bedrock actions)
+- **CORS**: localhost:5700, 127.0.0.1:5700
 
-## Security Notes
-- Never commit .env file to git
-- S3 bucket has no public access
-- Use presigned URLs with short expiration for uploads
-- IAM policy v3 uses explicit permissions:
-  - 31 specific Rekognition actions (video/image analysis, collections)
-  - 4 Bedrock actions (bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream, bedrock:GetFoundationModel, bedrock:ListFoundationModels)
-  - Model-specific ARNs for Nova Micro, Lite, Pro, Premier in us-east-1
-- Policy follows principle of least privilege with granular action permissions
-- S3 CORS updated to support all headers (*) and methods (GET, POST, PUT, DELETE, HEAD) for localhost:5700 and 127.0.0.1:5700
+### Environment Variables (.env)
+```
+AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION=us-east-1
+S3_BUCKET_NAME=video-analysis-app-676206912644
+FLASK_SECRET_KEY, DATABASE_PATH=data/app.db
+SQLITE_VEC_PATH=C:\path\to\vec0.dll  # For semantic search
+NOVA_EMBED_MODEL_ID, NOVA_EMBED_DIMENSION=1024
+NOVA_SONIC_DEBUG=1  # Debug transcription
+```
+
+## Architecture
+
+### Application Stack
+- **Port**: 5700 (Flask)
+- **Database**: SQLite (data/app.db) with LEFT JOIN optimization (sub-200ms for 10k+ files)
+- **Storage**: AWS S3 (presigned URLs)
+- **Proxy Encoding**: NVENC GPU (h264_nvenc) for 3-5x faster proxy creation
+
+### Key Services
+| Service | File | Purpose |
+|---------|------|---------|
+| S3 | app/services/s3_service.py | File upload/download |
+| Rekognition Video | app/services/rekognition_video.py | Async video analysis |
+| Rekognition Image | app/services/rekognition_image.py | Sync image analysis |
+| Transcription | app/services/transcription_service.py | Local faster-whisper |
+| Nova Analysis | app/services/nova_service.py | Bedrock video analysis (Lite/Pro/Premier) |
+| Nova Sonic | app/services/nova_transcription_service.py | Cloud transcription |
+| Nova Embeddings | app/services/nova_embeddings_service.py | Semantic search vectors (1024 dim) |
+| Face Collections | app/services/face_collection_service.py | Face management |
+
+### Key Routes
+| Blueprint | File | Key Endpoints |
+|-----------|------|---------------|
+| Analysis | app/routes/analysis.py | Multi-select analysis (1-8 types) |
+| Nova | app/routes/nova_analysis.py | /api/nova/analyze, /status, /results, /models |
+| File Mgmt | app/routes/file_management.py | Batch ops (proxy, transcribe, nova, rekognition) |
+| Search | app/routes/search.py | /api/search?semantic=true, /api/search/count, /api/search/filters |
+| Transcription | app/routes/transcription.py | /api/scan, /api/start-batch, /api/batch-status |
+
+### Frontend
+**Primary UI**: File Management (`file_management.html`) - Unified interface for all processing
+**Templates**: index.html (dashboard), search.html, upload.html, history.html, dashboard.html (charts), collections.html
+**JavaScript**: utils.js, dashboard.js (Chart.js), file_management.js, search.js
+
+## Key Features
+
+### Batch Operations
+- Fetch ALL filtered files across pages (500/request)
+- Real-time progress metrics (size, ETA)
+- Nova batch requires 100+ files minimum
+
+### Search System
+- **Keyword**: UNION query across 5 sources (files, transcripts, Rekognition, Nova, collections)
+- **Semantic**: Nova Embeddings with sqlite-vec KNN (sub-500ms)
+- 7 database indexes for performance
+
+### Transcription
+- **Local**: faster-whisper (6 models: tiny→large-v3), GPU optional
+- **Cloud**: Nova Sonic via Bedrock
+- Multi-model support per video, word-level timestamps
+- Processing: GPU ~5-10x realtime, CPU ~1-2x realtime
+
+### Nova Analysis (Phase 1 Complete)
+- 4 analysis types: summary, chapters, elements, waterfall_classification
+- 3 models: Lite ($0.06/1K), Pro ($0.80/1K), Premier ($2.00/1K)
+- Videos < 30 min supported (chunking in Phase 2)
+- Cost tracking per analysis
+- **Waterfall Classification**: Uses structured prompt with 4-step decision process (Family→Functional Type→Tier Level→Sub-Type), evidence hierarchy ranking, confidence thresholds, and spec validation. See docs/Nova_Waterfall_Classification_Decision_Tree.md and docs/Nova_Waterfall_Classification_Spec.json
+
+### Video Dashboard
+- Chart.js visualizations at /dashboard/<job_id>
+- Analysis-type-specific processors (9 total)
+- Excel/JSON export
+
+## Database Schema
+
+### Key Tables
+- **files**: S3-uploaded files with metadata
+- **transcripts**: 25 fields (path, model, text, segments, video metadata)
+- **analysis_jobs**: Rekognition job tracking
+- **nova_jobs**: Nova analysis with cost tracking
+- **nova_embeddings**: sqlite-vec vectors (1024 dim)
+- **nova_embedding_metadata**: source_type, source_id, content_hash
+
+### Indexes (7 search-critical)
+```sql
+idx_files_name, idx_files_created_at
+idx_transcripts_text, idx_transcripts_file_name, idx_transcripts_created_at
+idx_analysis_jobs_analysis_type, idx_analysis_jobs_created_at
+```
+
+## Constraints
+- Video: Max 10GB (MP4, MOV, AVI, MKV)
+- Image: Max 15MB (JPEG, PNG)
+- Region: us-east-1 only
+- FFmpeg required (NVENC for GPU proxy)
+- Timezone: Eastern Time (tzdata on Windows)
 
 ## Known Issues
-- **Amazon Rekognition Person Tracking**: Returns AccessDeniedException despite correct IAM permissions. This appears to be an AWS account-level restriction requiring AWS Support enablement. All other video analysis types (labels, faces, celebrities, moderation, text, segments, face search) work correctly.
+- **Rekognition Person Tracking**: AccessDeniedException (AWS account restriction)
 
-## Recent Bug Fixes
+## Security
+- .env not in git
+- S3 no public access
+- Presigned URLs with short expiration
+- IAM least privilege
 
-**2025-12-21**:
-- **Nova Sonic Response Parsing**: Fixed transcription failures by implementing comprehensive Bedrock API response parsing supporting both streaming and non-streaming formats with multiple content structures. Added debug logging via NOVA_SONIC_DEBUG environment variable.
-- **FFmpeg Proxy Audio Handling**: Fixed proxy creation errors for videos without audio or with multiple audio streams. Now intelligently selects best audio stream (highest channel count) and gracefully handles audio-less videos.
-- **FFmpeg Audio Stream Mapping Bug**: Fixed critical bug where FFmpeg used relative audio stream indexing (0:a:N) instead of absolute stream indexing (0:N), causing proxy creation failures for videos with multiple audio streams. Changed mapping from '0:a:{index}' to '0:{index}' to correctly reference streams by absolute position in file.
-- **NVENC GPU Encoding**: Enabled NVIDIA NVENC hardware acceleration for proxy creation, replacing software encoding (libx264) with GPU encoding (h264_nvenc). Provides ~3-5x faster proxy generation on RTX 5070 Ti. Uses preset p4 (medium quality) and constant quality mode (CQ 28).
-- **Batch Progress Metrics**: Added comprehensive real-time statistics for batch proxy and transcription operations. Proxy jobs now track total source size, processed size, generated proxy size, and ETA. Transcription jobs show average file sizes, processing time, and ETA. Frontend dynamically updates metric labels based on operation type.
-- **Batch Operations Scope**: Fixed batch operations only processing currently visible page. Now fetches ALL filtered files across all pages (500 files per paginated request) for proxy, transcription, Nova, and Rekognition batch operations.
-- **Date Filter Clarity**: Split confusing from_date/to_date parameters into upload_from_date/upload_to_date (S3 upload) and created_from_date/created_to_date (file creation metadata) for clearer filtering.
+## Semantic Search Setup
+1. Download sqlite-vec from https://github.com/asg017/sqlite-vec/releases
+2. Set SQLITE_VEC_PATH in .env
+3. Enable nova-2-multimodal-embeddings-v1:0 in Bedrock console
+4. Run backfill: `python -m scripts.backfill_embeddings`
 
-**2025-12-17**:
-- **Segment Detection VideoMetadata Bug**: Fixed critical bug where Amazon Rekognition returns VideoMetadata as a list for segment detection (instead of dict like other analysis types). Added type checking to handle both formats safely.
-- **Collections Page JavaScript Error**: Fixed undefined collections.length error by properly extracting data.collections array from API response wrapper.
-- **History Auto-Refresh**: Added automatic 15-second polling for running jobs (IN_PROGRESS/SUBMITTED status) with automatic start/stop based on job states.
-- **Excel Export**: Implemented professional Excel export functionality with openpyxl library, supporting all analysis types with custom formatting per type.
+## Debug Commands
+```bash
+# Nova Sonic debug
+set NOVA_SONIC_DEBUG=1
 
-## Local Video Transcription Feature
-
-### Overview
-Completely local video transcription system using faster-whisper (CTranslate2-based Whisper implementation). No data is sent to cloud services. Designed for processing large video libraries (~10TB+) with efficient batch processing and deduplication.
-
-### System Requirements
-- **FFmpeg**: Must be installed and accessible in PATH (required for audio extraction and proxy creation)
-  - For GPU-accelerated proxy creation: FFmpeg must be compiled with NVENC support (--enable-nvenc)
-  - NVIDIA GPU with NVENC hardware encoder (GTX 600 series or newer, RTX series recommended)
-  - CUDA drivers installed for NVENC functionality
-- **Python Dependencies**: faster-whisper>=1.0.0, ffmpeg-python>=0.2.0
-- **Optional**: CUDA-capable GPU for 4x faster transcription processing (auto-detected)
-
-### Key Features
-1. **Directory Scanning**: Recursively scan directories for video files with deduplication
-2. **Batch Processing**: Process multiple files with progress tracking, resumable operations, and real-time statistics
-3. **Multi-Model Support**: Store multiple transcripts per video (same file transcribed with different Whisper models)
-4. **Smart Deduplication**: Filesystem metadata (path + size + modified time + model) for instant identification
-5. **Model Selection**: 6 model sizes (tiny, base, small, medium, large-v2, large-v3)
-6. **GPU Acceleration**: Automatic CUDA detection and utilization when available
-7. **Multiple Export Formats**: TXT, JSON, SRT (SubRip), VTT (WebVTT)
-8. **Database Storage**: Full transcripts with word-level timestamps stored in SQLite
-9. **Language Support**: Auto-detection or specify language (100+ languages supported)
-10. **Search & Filter**: Full-text search across transcripts with filters by model, status, language, date range
-11. **Enhanced Progress UI**: Solid completion bar, real-time statistics (dual avg size metrics, avg time, ETA, success rate)
-12. **Transcript Metrics**: Duration tracking, character/word counts, processing speed (Xrealtime), words per minute
-
-### Database Schema (Updated 2025-12-19)
-**transcripts** table (25 fields):
-- **Identity**: file_path, file_name, file_size, modified_time, model_name
-- **Transcript Data**: language, transcript_text, segments (JSON), word_timestamps (JSON)
-- **Content Metrics**: character_count, word_count, duration_seconds (all nullable, NULL for videos without speech)
-- **Video Metadata** (added 2025-12-19): resolution_width, resolution_height, frame_rate, codec_video, codec_audio, bitrate
-- **Quality Metrics**: confidence_score, processing_time
-- **Status Tracking**: status, error_message, created_at, completed_at
-- **Unique Constraint**: (file_path, file_size, modified_time, model_name) - allows multi-model storage
-- **Indexes**: model_name, language, file_name (for search/filter performance)
-
-### Architecture
-- **Service Layer** (app/services/transcription_service.py): Core transcription logic with model caching
-- **Routes** (app/routes/transcription.py): RESTful API endpoints for scanning, batch processing, status tracking
-- **UI** (app/templates/transcription.html): Bootstrap 5 interface with real-time progress updates
-- **Database** (app/database.py): CRUD operations for transcript records with JSON field handling
-
-### API Endpoints
-- POST `/transcription/api/scan` - Scan directory for videos
-- POST `/transcription/api/transcribe-single` - Transcribe single file
-- POST `/transcription/api/start-batch` - Start batch transcription job
-- GET `/transcription/api/batch-status/<job_id>` - Get batch progress
-- POST `/transcription/api/batch-cancel/<job_id>` - Cancel running batch
-- GET `/transcription/api/transcripts` - List transcripts (supports search/filter/sort/pagination)
-  - Query params: ?search, ?status, ?model, ?language, ?from_date, ?to_date, ?sort_by, ?sort_order, ?page, ?per_page
-- GET `/transcription/api/transcript/<id>` - Get single transcript
-- DELETE `/transcription/api/transcript/<id>` - Delete transcript
-- GET `/transcription/api/transcript/<id>/download?format=txt|json|srt|vtt` - Download transcript
-
-### Performance Considerations
-- **Model Loading**: Model loaded once and cached in memory for batch operations
-- **Audio Extraction**: Temporary WAV files (16kHz mono) auto-cleaned after processing
-- **Concurrent Processing**: Single-threaded batch processing (safer for large models)
-- **Memory Usage**: Depends on model size (tiny: ~1GB RAM, large-v3: ~10GB VRAM/RAM)
-- **Processing Speed**:
-  - GPU (CUDA): ~5-10x realtime (1 hour video = 6-12 minutes)
-  - CPU: ~1-2x realtime (1 hour video = 30-60 minutes)
-
-### Best Practices
-1. **Model Selection**: Use 'medium' for balanced quality/speed, 'large-v3' for best accuracy
-2. **Multi-Model Comparison**: Transcribe same video with different models to compare accuracy vs speed tradeoffs
-3. **GPU Usage**: Ensure CUDA toolkit installed for GPU acceleration
-4. **Batch Size**: Process 10-50 files per batch for optimal progress tracking
-5. **Force Reprocess**: Use sparingly - system automatically skips transcribed files per model
-6. **Search & Filter**: Use search for finding specific content, filters for narrowing by model/status/language
-7. **Error Handling**: Check batch errors list for failed files and reasons
-8. **Network Performance**: Optimized for network shares - uses instant filesystem metadata (no file reading during scan)
-
-### Workflow Example
-```python
-# 1. Scan directory
-POST /transcription/api/scan
-{
-  "directory_path": "E:\\videos",
-  "recursive": true
-}
-
-# 2. Start batch transcription
-POST /transcription/api/start-batch
-{
-  "file_paths": ["E:\\videos\\movie1.mp4", "E:\\videos\\movie2.mp4"],
-  "language": "en",  # optional
-  "force": false
-}
-
-# 3. Poll status every 2-5 seconds
-GET /transcription/api/batch-status/<job_id>
-
-# 4. Download completed transcripts
-GET /transcription/api/transcript/1/download?format=srt
+# Backfill embeddings
+python -m scripts.backfill_embeddings --force --limit 100
 ```
 
-### Metadata Capture (Added 2025-12-19)
-All transcriptions now automatically extract and store video metadata:
-- **When**: Metadata extracted before transcription starts (via ffprobe)
-- **What**: Resolution (width/height), frame rate, video/audio codecs, bitrate, duration
-- **Storage**: Stored in transcripts table alongside transcript text
-- **Migration**: One-time migration completed for 3,154 existing transcripts (100% success)
-- **Usage**: Powers file management summary statistics (total duration, etc.)
-
-### Nova Sonic Transcription (AWS Bedrock)
-
-**Overview**: Cloud-based transcription using AWS Bedrock Nova Sonic 2 Online model. Alternative to local Whisper transcription with faster processing and no local GPU requirements.
-
-**Key Features**:
-- Streaming and non-streaming Bedrock API support with automatic fallback
-- Multi-format response parsing (handles various Bedrock response structures)
-- Debug logging with S3 URI redaction via NOVA_SONIC_DEBUG environment variable
-- Provider normalization: accepts 'nova', 'sonic', 'nova_sonic', 'sonic2', 'sonic_2', 'sonic_2_online', 'nova2_sonic', 'nova_2_sonic'
-- Automatic S3 audio upload and cleanup
-- Same API endpoints as Whisper transcription (transparent provider switching)
-
-**Troubleshooting**:
-- **Enable debug logging**: Set NOVA_SONIC_DEBUG=1 in .env file to log request/response payloads
-- **Response parsing errors**: Debug logs show actual Bedrock response format for troubleshooting
-- **S3 upload failures**: Verify AWS credentials and S3 bucket permissions
-- **Empty transcripts**: Check debug logs for Bedrock response structure, may indicate unsupported audio format
-
-### Troubleshooting (Whisper)
-- **FFmpeg not found**: Install FFmpeg and add to PATH, or specify path in system environment
-- **CUDA not available**: Install NVIDIA CUDA Toolkit (11.x or 12.x) for GPU support
-- **Out of memory**: Use smaller model size (medium or small) or CPU device
-- **Slow processing**: Ensure GPU acceleration is working (check logs for device: cuda)
-- **Files skipped**: System prevents reprocessing same video with same model (use different model or force flag)
-
-## Unified Search Feature
-
-### Overview
-Comprehensive search page that provides a single query interface across all application data sources. Enables users to find files, transcripts, Rekognition analysis results, Nova analysis results, and face collections with a unified search experience, eliminating the need to search each feature separately.
-
-### Access
-- **URL**: `/search`
-- **Navigation**: Click "Search" link in main navigation (between File Management and Upload)
-- **API Endpoints**: 4 REST endpoints for search operations
-
-### Key Capabilities
-
-**1. Multi-Source Search**
-- **Files**: Searches file names, file types, and paths
-- **Transcripts**: Full-text search across transcript content (character count, word count, language)
-- **Rekognition Analysis**: Searches job names, analysis types, and statuses
-- **Nova Analysis**: Searches Nova job names, processing modes, and model names
-- **Face Collections**: Searches collection names and descriptions
-
-**2. Advanced Filtering**
-- **Source Type Toggles**: 5 checkboxes to include/exclude specific data sources
-- **File Type Filter**: Filter by video, image, or other file types
-- **Status Filter**: Filter by status (completed, failed, in progress, etc.)
-- **Model Filter**: Filter by transcription or Nova model (tiny, base, medium, large-v2, large-v3, Micro, Lite, Pro, Premier)
-- **Analysis Type Filter**: Filter by Rekognition analysis type (labels, faces, celebrities, text, moderation, person tracking, segments, face search)
-- **Date Range Filter**: Filter by creation date with from/to date pickers
-
-**3. Sort Options**
-- **Relevance**: Default sort (files/transcripts rank higher than analysis results)
-- **Newest First**: Sort by creation date descending
-- **Oldest First**: Sort by creation date ascending
-- **A-Z**: Sort by title/name alphabetically
-- **Z-A**: Sort by title/name reverse alphabetically
-
-**4. Performance Features**
-- **Debounced Search**: 300ms delay prevents API spam during typing
-- **Indexed Queries**: 7 database indexes on search-critical columns (name, text, type, status, date)
-- **Query Optimization**: LIMIT clauses applied per source before UNION to reduce result set size
-- **Response Time Target**: <500ms for 10,000+ records
-- **Pagination**: 50 results per page, max 200 total results
-
-**5. User Interface**
-- **Real-Time Result Counts**: Badge updates as filters change
-- **Result Cards**: Color-coded by source type with badges, timestamps, preview text
-- **Modal-Based Viewing**: File Details and Transcript Details modals open directly on search page (no navigation)
-- **Source-Specific Actions**: View file details, read full transcript, view analysis, manage collection
-- **Stay on Search Page**: Users can review multiple results without re-running search
-- **Loading States**: Spinner overlay during API calls, disabled controls during requests
-- **Error Handling**: Toast notifications for API failures with retry guidance
-- **Search Highlighting**: Query terms highlighted in result titles and previews
-- **Context-Aware Previews**: 150-character preview text with ellipsis
-
-### Database Architecture
-
-**Search Indexes** (7 total):
-```sql
-idx_files_name - B-tree index on files.file_name
-idx_files_created_at - B-tree index on files.created_at
-idx_transcripts_text - B-tree index on transcripts.transcript_text (for LIKE queries)
-idx_transcripts_file_name - B-tree index on transcripts.file_name
-idx_transcripts_created_at - B-tree index on transcripts.created_at
-idx_analysis_jobs_analysis_type - B-tree index on analysis_jobs.analysis_type
-idx_analysis_jobs_created_at - B-tree index on analysis_jobs.created_at
-```
-
-**Search Methods**:
-- `search_all(query, filters, sort, limit, offset)`: UNION query across 5 tables, returns standardized results
-- `count_search_results(query, filters)`: Fast count-only query for pagination
-- `get_search_filters()`: Returns available filter options (models, analysis types, statuses)
-
-**Result Format**:
-```python
-{
-    'source': 'files|transcripts|rekognition|nova|collections',
-    'id': int,
-    'title': str,
-    'preview': str (150 chars max),
-    'created_at': ISO timestamp,
-    'file_type': 'video|image|other',
-    'status': str,
-    'model': str (for transcripts/Nova),
-    'analysis_type': str (for Rekognition),
-    'relevance': float (1.0 for files/transcripts, 0.8 for analysis)
-}
-```
-
-### API Endpoints
-
-**1. GET `/search`**
-- Renders search page template
-- No authentication required
-
-**2. POST `/api/search`**
-- Execute search with filters, returns paginated results
-- Request body:
-  ```json
-  {
-    "query": "search term",
-    "sources": ["files", "transcripts", "rekognition", "nova", "collections"],
-    "file_type": "video|image|other",
-    "status": "completed|failed|in_progress",
-    "model": "medium|large-v3|Lite|Pro",
-    "analysis_type": "labels|faces|celebrities|text|moderation|person_tracking|segments|face_search",
-    "from_date": "2025-01-01",
-    "to_date": "2025-12-31",
-    "sort_by": "relevance|date|name",
-    "sort_order": "asc|desc",
-    "page": 1,
-    "per_page": 50
-  }
-  ```
-- Response: `{"results": [...], "total": int, "page": int, "per_page": int}`
-
-**3. GET `/api/search/count`**
-- Get total result count without fetching full results
-- Query params: Same as `/api/search` (via URL parameters)
-- Response: `{"count": int}`
-
-**4. GET `/api/search/filters`**
-- Get available filter options for dropdowns
-- Response: `{"models": [...], "analysis_types": [...], "statuses": [...]}`
-
-### Implementation Details
-
-**Backend (app/routes/search.py)**:
-- 620 lines total
-- Blueprint registration in Flask app factory
-- Query parsing and validation
-- Result formatting and preview extraction
-- Source-specific link generation
-
-**Frontend (app/templates/search.html)**:
-- 270 lines total
-- Bootstrap 5 responsive layout
-- Filter panel with collapsible sections
-- Result cards with source-specific styling
-- Pagination controls with page indicator
-
-**JavaScript (app/static/js/search.js)**:
-- 960+ lines total
-- Debounced search input (300ms delay)
-- Filter state management
-- AJAX API calls with error handling
-- Dynamic result rendering
-- Pagination with auto-scroll
-- Modal functions: viewFileDetails(), openTranscriptDetails(), viewAnalysisResult()
-- Comprehensive file details rendering (metadata, transcripts, analysis jobs)
-- Transcript modal with full text display and download options
-
-**Styling (app/static/css/search.css)**:
-- 140 lines total
-- Custom result card styling
-- Source type color coding
-- Filter toggle buttons
-- Search highlight styling
-
-### Performance Benchmarks
-- **Empty Query**: <100ms (returns no results with helpful message)
-- **Simple Name Search**: <200ms (indexed file_name/file_name columns)
-- **Full-Text Transcript Search**: <500ms (indexed transcript_text, LIKE query)
-- **Complex Multi-Filter**: <500ms (compound WHERE clauses with indexes)
-- **Pagination**: <50ms (OFFSET/LIMIT applied after initial query)
-
-### Best Practices
-1. **Use specific search terms**: More specific queries return faster and more relevant results
-2. **Filter by source type**: Narrow to specific data sources when you know what you're looking for
-3. **Use date ranges**: Limit results to recent content for faster queries
-4. **Combine filters**: Use multiple filters (status + model + date) to narrow results effectively
-5. **Check all sources initially**: Start with all sources enabled to discover unexpected matches
-6. **Sort by relevance**: Default sort ranks files/transcripts higher for better discoverability
-7. **Refine queries**: If >200 results, refine query or add filters instead of excessive pagination
-8. **Click titles to view details**: Result titles and "View" buttons open modals - stay on search page to review multiple results efficiently
-
-### Known Issues (Fixed 2025-12-21)
-- ✅ **Template Block Mismatch**: search.html used incorrect block names (extra_js, extra_css) instead of (extra_scripts, extra_head) matching base.html - JavaScript and CSS never loaded
-- ✅ **Navigation on Click**: Search results navigated to File Management page - now open modals directly on search page for better UX
-
-### Semantic Search (AI-Powered) - NEW 2025-12-21
-
-**Overview**: Optional AI-powered semantic search using AWS Nova Multimodal Embeddings for natural language queries. Enables users to search using conversational phrases like "pool maintenance tips" instead of exact keywords.
-
-**Key Features**:
-- **UI Toggle**: Bootstrap 5 form-switch toggle labeled "AI Semantic Search" on /search page
-- **Default Behavior**: Disabled by default (preserves existing keyword search)
-- **Supported Sources**: Transcripts and Nova analysis results only (files, Rekognition, collections use keyword search)
-- **Vector Storage**: sqlite-vec extension with 1024-dimension embeddings (4KB per vector)
-- **Similarity Scoring**: Results ranked by cosine similarity (0.0-1.0) with L2 distance conversion
-
-**Technical Implementation**:
-- **Model**: amazon.nova-2-multimodal-embeddings-v1:0 (us-east-1)
-- **API**: GET /api/search?semantic=true&q=query
-- **Response Format**: Includes metadata.similarity and metadata.distance fields
-- **Performance**: Sub-500ms KNN vector queries using sqlite-vec MATCH operator
-- **Text Chunking**: 4000 char chunks with 200 char overlap, sentence boundary detection
-- **Idempotency**: SHA-256 content hashing prevents duplicate embeddings
-
-**Database Tables**:
-- `nova_embeddings` (vec0 virtual table): Vector storage with rowid and embedding FLOAT[1024]
-- `nova_embedding_metadata`: Metadata with source_type, source_id, file_id, model_name, content_hash, created_at
-
-**Backfill Process**:
-- **Script**: `python -m scripts.backfill_embeddings`
-- **Options**: --force, --limit, --transcripts-only, --nova-only
-- **Estimated Cost**: ~$0.09 for 3,154 transcripts (avg 2,000 chars × $0.00009/1K chars)
-- **Progress Tracking**: tqdm progress bars with error reporting
-
-**Prerequisites**:
-1. Download sqlite-vec extension (vec0.dll) from https://github.com/asg017/sqlite-vec/releases
-2. Set SQLITE_VEC_PATH=C:\path\to\vec0.dll in .env
-3. Verify IAM permissions include bedrock:InvokeModel
-4. Enable amazon.nova-2-multimodal-embeddings-v1:0 in Bedrock console (us-east-1)
-5. Add env vars: NOVA_EMBED_MODEL_ID, NOVA_EMBED_DIMENSION=1024
-
-**Usage Example**:
-1. Navigate to /search
-2. Toggle "AI Semantic Search" to ON
-3. Enter natural language query: "pool maintenance tips"
-4. Results ranked by semantic similarity with scores displayed
-
-**Best Practices**:
-- Use semantic search for conceptual queries ("how to fix leaks")
-- Use keyword search for exact matches (file names, specific terms)
-- Semantic search works best with full sentences or phrases
-- Review similarity scores to assess relevance (>0.7 is strong match)
-
-### Future Enhancements
-- Full-text search with FTS5 virtual table for better relevance ranking
-- Search within Rekognition/Nova JSON results (detect specific labels, objects, scenes)
-- Saved search queries and filters
-- Export search results to CSV/Excel
-- Search history and recent searches
-- Autocomplete suggestions based on existing content
-- Fuzzy matching for typo tolerance
-- Search result snippets with highlighted context
-- Hybrid search (combine keyword + semantic scores)
-
-## Video Analysis Dashboard Feature
-
-### Overview
-Visual analytics dashboard that transforms raw AWS Rekognition JSON results into interactive charts, graphs, and insights. Provides professional presentation of video analysis results with analysis-type-specific visualizations.
-
-### Access
-- **URL Pattern**: `/dashboard/<job_id>`
-- **Navigation**: Click "View" button (graph icon) next to completed jobs in history page
-- **Raw JSON Access**: Click "JSON" button (code icon) to view raw JSON in modal
-
-### Dashboard Components
-
-**1. Statistics Cards**
-- Total Detections: Count of all detected items
-- Average Confidence: Mean confidence score across all detections
-- Video Duration: Extracted from VideoMetadata (handles dict/list formats)
-- Processing Time: Analysis job duration
-
-**2. Top Detected Items**
-- Analysis-type-specific top 10 items
-- Visual confidence bars with percentages
-- Color-coded by confidence level
-
-**3. Interactive Charts (Chart.js 4.4.0)**
-- **Distribution Chart** (Bar): Frequency of detected items by category
-- **Confidence Chart** (Doughnut): Confidence ranges or category breakdown
-- **Timeline Chart** (Line): Detection frequency over video duration with bucketing
-
-**4. Detailed Results Table**
-- Dynamic columns based on analysis type
-- Search functionality across all fields
-- Sort by confidence (descending) or timestamp (ascending)
-- Shows "Displaying X of Y results" count
-
-**5. Export Options**
-- Excel (.xlsx): Professional formatted spreadsheet
-- JSON: Raw analysis results
-
-### Analysis Type Support
-
-| Analysis Type | Dashboard Features |
-|--------------|-------------------|
-| Label Detection | Top labels by count, category aggregation, temporal distribution |
-| Face Detection | Emotion distribution, age groups (0-100), gender statistics |
-| Celebrity Recognition | Celebrity names with Wikipedia URLs and confidence scores |
-| Text Detection | OCR text categorized by type (LINE/WORD) |
-| Content Moderation | Flagged content grouped by parent category |
-| Person Tracking | Person indices with appearance counts |
-| Segment Detection | Scene/shot breakdown with timestamps and durations |
-| Face Search | Face matches with similarity percentages |
-
-### Technical Architecture
-
-**Backend**:
-- Route: `app/routes/dashboard.py`
-- Blueprint: Renders dashboard template with job data
-- API: Reuses existing `/api/history/<job_id>` endpoint
-
-**Frontend**:
-- Template: `app/templates/dashboard.html` (416 lines)
-- JavaScript: `app/static/js/dashboard.js` (927 lines, ES6 modules)
-- Charts: Chart.js 4.4.0 via CDN
-- No jQuery dependency (vanilla JavaScript)
-
-**Data Processing**:
-- Client-side processing with modular processor functions
-- 9 data processors (one per analysis type + generic fallback)
-- Timeline bucketing: Divides video into 20 time segments for smooth visualization
-- XSS prevention with escapeHtml() function
-
-**Design**:
-- Purple gradient header (#667eea to #764ba2)
-- Bootstrap 5 responsive grid layout
-- Desktop: Multi-column layout
-- Tablet: 2-column layout
-- Mobile: Single-column with collapsible sections
-
-### Best Practices
-1. **Use dashboard for presentations**: Professional charts suitable for reports
-2. **Use JSON view for debugging**: Raw data access for technical troubleshooting
-3. **Search table for specific items**: Find particular detections quickly
-4. **Export to Excel for analysis**: Further analysis in spreadsheet software
-5. **Timeline chart shows patterns**: Identify when events occur in video
-
-## Planning & Documentation
-
-### AWS Nova Integration Plan
-Comprehensive implementation plan for integrating Amazon Nova multimodal models into the application for intelligent video analysis. See **20251218NovaImplementation.md** (6,300+ lines) for complete technical specifications.
-
-**Scope**: Pool and landscape water feature video analysis across all content types (installation, showcase, maintenance, design, marketing, training, timelapse).
-
-**Key Components**:
-- **NovaVideoIndex Schema v1.1**: Domain-specific JSON schema with 20 water feature types, 10 content types, segment-level analysis
-- **4 Nova Models**: Micro ($0.035/1K input), Lite ($0.06), Pro ($0.80), Premier ($2.00 estimated)
-- **Long Video Handling**: Automatic chunking (25-min chunks, 10% overlap) with smart aggregation
-- **5 Implementation Phases**: Foundation → Chunking → Detection → UI → Polish
-- **Testing Strategy**: 10 unit tests, 5 integration tests, 13 edge cases, 3 stress tests
-- **Risk Mitigation**: 10 identified risks with detailed mitigation strategies
-
-**Cost Estimates** (per video):
-- 5 min video: $0.01-$0.05 (Micro), $0.02-$0.10 (Lite), $0.05-$0.06 (Pro)
-- 30 min video: $0.08-$0.12 (Lite), $0.25-$0.35 (Pro)
-- 2 hour video: $1.00-$1.50 (Pro), $2.00-$3.00 (Premier)
-
-**Processing Times** (estimated):
-- Lite: 0.1-0.3x realtime (5 min video = 1-2 minutes)
-- Pro: 0.13-0.27x realtime (30 min video = 4-7 minutes)
-
-**Database Schema**: `nova_jobs` table with 25 fields linking to `analysis_jobs` table via foreign key, storing chunking metadata, JSON results, performance metrics, and cost tracking.
-
-**Implementation Status**:
-- ✅ **Phase 1 Complete** (100%): Core Nova integration with 4 models, 3 analysis types, 5 API endpoints, database schema, IAM permissions
-- ⏸️ Phase 2-5: Not started (chunking, enhanced detection, UI, optimization)
-
-**Current Capabilities** (Phase 1):
-- Video summarization (3 depth levels: brief/standard/detailed)
-- Chapter detection with semantic segmentation and AI-generated titles
-- Element identification (equipment, topics, people detection)
-- Cost estimation and tracking per analysis
-- Support for videos < 30 minutes (single-chunk processing)
-- REST API: POST /api/nova/analyze, GET /api/nova/status, GET /api/nova/results, GET /api/nova/models, POST /api/nova/estimate-cost
-
-**Testing Status**: All integration tests passed, ready for live video analysis with estimated cost < $0.50 for initial testing.
-
-## Important Constraints
-- Video files: Max 10GB, formats: MP4, MOV, AVI, MKV
-- Image files: Max 15MB, formats: JPEG, PNG
-- Rekognition available in us-east-1 region
-- Nova models available in us-east-1 via Bedrock (22 models including Micro/Lite/Pro/Premier)
-- CORS configured for localhost:5700 and 127.0.0.1:5700 (update for production)
-- Timezone display: Eastern Time (requires tzdata package on Windows)
-- **Transcription**: Requires FFmpeg installed on system, GPU optional but recommended for large batches
-- **Nova**: Videos < 30 minutes supported (Phase 1), longer videos require Phase 2 chunking implementation
+## Documentation References
+- Nova Implementation Plan: 20251218NovaImplementation.md (6,300+ lines)
+- NovaVideoIndex Schema v1.1 for pool/landscape video analysis
