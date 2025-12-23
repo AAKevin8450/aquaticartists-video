@@ -148,11 +148,44 @@ class NovaVideoService:
         spec_json = json.dumps(spec, indent=2, ensure_ascii=True)
 
         return f"""You are classifying waterfall content in a video segment.
-Use the decision tree and spec below exactly. Follow the decision order in the spec.
-If a dimension cannot be determined confidently, set it to "Unknown" and include a reason.
-If there is no waterfall content, set all four dimensions to "Unknown" and explain why.
 
-Return ONLY JSON that matches the spec output format. Do not include markdown.
+This is a SEQUENTIAL 4-step classification process. You must:
+1. First determine FAMILY (boulder vs no boulder, then kit vs custom)
+2. Then determine FUNCTIONAL TYPE (slide and/or grotto detection)
+3. Then determine TIER LEVEL (size/complexity assessment)
+4. Finally determine SUB-TYPE (water path analysis)
+
+Each step builds on the previous. Follow this order strictly as defined in the spec.
+
+EVIDENCE PRIORITY (use this ranking):
+1. Visual evidence (HIGHEST) - geometry, materials, physical features
+2. Spoken narration / on-screen text - brand names, product terms
+3. Context / environment cues - equipment, scale, jobsite complexity
+
+Always prefer visual evidence over narration when they conflict.
+
+CRITICAL: The family taxonomy uses a 4-type model:
+- Custom Natural Stone (boulders + custom)
+- Custom Formal (no boulders + custom)
+- Genesis Natural (boulders + kit)
+- Genesis Formal (no boulders + kit)
+
+First split on BOULDER PRESENCE, then split on KIT vs CUSTOM.
+
+CONFIDENCE & UNKNOWN POLICY:
+- Minimum confidence threshold: 0.70 (0.75 for functional_type)
+- If confidence is below threshold, set dimension to "Unknown" with reason
+- DO NOT GUESS - use "Unknown" when evidence is insufficient
+- Overall confidence = minimum of all four dimension confidences
+- If there is no waterfall content, set all four dimensions to "Unknown" and explain why
+
+OUTPUT REQUIREMENTS:
+Return ONLY raw JSON - no markdown code fences, no explanatory text.
+Output must be valid JSON parseable by json.loads().
+All four dimensions are required: family, tier_level, functional_type, sub_type.
+Include confidence object with per-dimension scores and overall score.
+Include evidence array with specific cues observed.
+Include unknown_reasons object for any "Unknown" classifications.
 
 Decision Tree:
 {decision_tree}
