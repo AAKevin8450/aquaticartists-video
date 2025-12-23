@@ -320,6 +320,7 @@ class Database:
                     summary_result TEXT,
                     chapters_result TEXT,
                     elements_result TEXT,
+                    waterfall_classification_result TEXT,
                     started_at TIMESTAMP,
                     completed_at TIMESTAMP,
                     progress_percent INTEGER DEFAULT 0,
@@ -334,6 +335,10 @@ class Database:
                     FOREIGN KEY (analysis_job_id) REFERENCES analysis_jobs(id) ON DELETE CASCADE
                 )
             ''')
+            try:
+                cursor.execute('ALTER TABLE nova_jobs ADD COLUMN waterfall_classification_result TEXT')
+            except sqlite3.OperationalError:
+                pass
 
             # Search optimization indexes
             # Files table indexes for search
@@ -768,7 +773,7 @@ class Database:
                     (SELECT p.id FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1 LIMIT 1) as proxy_file_id,
                     (SELECT p.s3_key FROM files p WHERE p.source_file_id = f.id AND p.is_proxy = 1 LIMIT 1) as proxy_s3_key,
                     (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id) as total_analyses,
-                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status IN ('SUCCEEDED', 'COMPLETED')) as completed_analyses,
+                    (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'COMPLETED') as completed_analyses,
                     (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'IN_PROGRESS') as running_analyses,
                     (SELECT COUNT(*) FROM analysis_jobs aj WHERE aj.file_id = f.id AND aj.status = 'FAILED') as failed_analyses,
                     (SELECT COUNT(*) FROM transcripts t WHERE t.file_path = f.local_path OR t.file_id = f.id) as total_transcripts,
@@ -1106,16 +1111,17 @@ class Database:
         """Update job status and results."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            if status in ('SUCCEEDED', 'FAILED'):
+            normalized_status = 'COMPLETED' if status == 'SUCCEEDED' else status
+            if normalized_status in ('COMPLETED', 'FAILED'):
                 cursor.execute('''
                     UPDATE analysis_jobs
                     SET status = ?, results = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP
                     WHERE job_id = ?
-                ''', (status, json.dumps(results) if results else None, error_message, job_id))
+                ''', (normalized_status, json.dumps(results) if results else None, error_message, job_id))
             else:
                 cursor.execute('''
                     UPDATE analysis_jobs SET status = ? WHERE job_id = ?
-                ''', (status, job_id))
+                ''', (normalized_status, job_id))
 
     def list_jobs(self, file_id: Optional[int] = None, status: Optional[str] = None,
                   analysis_type: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
@@ -1631,7 +1637,7 @@ class Database:
             if nova_ids:
                 placeholders = ','.join('?' * len(nova_ids))
                 cursor.execute(f'''
-                    SELECT id, model, analysis_types, summary_result, chapters_result, elements_result
+                    SELECT id, model, analysis_types, summary_result, chapters_result, elements_result, waterfall_classification_result
                     FROM nova_jobs WHERE id IN ({placeholders})
                 ''', nova_ids)
                 nova_jobs = {row['id']: dict(row) for row in cursor.fetchall()}
@@ -1675,7 +1681,13 @@ class Database:
                                 chapters_result = json.loads(chapters_result)
                             enriched_result['preview'] = str(chapters_result)[:200] + '...'
                         else:
-                            enriched_result['preview'] = 'Analysis results'
+                            waterfall_result = source.get('waterfall_classification_result')
+                            if waterfall_result:
+                                if isinstance(waterfall_result, str):
+                                    waterfall_result = json.loads(waterfall_result)
+                                enriched_result['preview'] = str(waterfall_result)[:200] + '...'
+                            else:
+                                enriched_result['preview'] = 'Analysis results'
                 except:
                     enriched_result['preview'] = 'Analysis results'
 
@@ -1774,6 +1786,8 @@ class Database:
                     job['chapters_result'] = json.loads(job['chapters_result'])
                 if job.get('elements_result'):
                     job['elements_result'] = json.loads(job['elements_result'])
+                if job.get('waterfall_classification_result'):
+                    job['waterfall_classification_result'] = json.loads(job['waterfall_classification_result'])
                 return job
             return None
 
@@ -1796,6 +1810,8 @@ class Database:
                     job['chapters_result'] = json.loads(job['chapters_result'])
                 if job.get('elements_result'):
                     job['elements_result'] = json.loads(job['elements_result'])
+                if job.get('waterfall_classification_result'):
+                    job['waterfall_classification_result'] = json.loads(job['waterfall_classification_result'])
                 return job
             return None
 
@@ -1809,7 +1825,7 @@ class Database:
             for key, value in update_data.items():
                 fields.append(f"{key} = ?")
                 # JSON fields
-                if key in ('summary_result', 'chapters_result', 'elements_result', 'user_options'):
+                if key in ('summary_result', 'chapters_result', 'elements_result', 'waterfall_classification_result', 'user_options'):
                     values.append(json.dumps(value) if value is not None else None)
                 else:
                     values.append(value)
@@ -1941,6 +1957,8 @@ class Database:
                     job['chapters_result'] = json.loads(job['chapters_result'])
                 if job.get('elements_result'):
                     job['elements_result'] = json.loads(job['elements_result'])
+                if job.get('waterfall_classification_result'):
+                    job['waterfall_classification_result'] = json.loads(job['waterfall_classification_result'])
                 jobs.append(job)
             return jobs
 
@@ -2004,7 +2022,7 @@ class Database:
                     MAX(CASE WHEN p.is_proxy = 1 THEN p.s3_key END) as proxy_s3_key,
                     MAX(CASE WHEN p.is_proxy = 1 THEN p.size_bytes END) as proxy_size_bytes,
                     COUNT(DISTINCT aj.id) as total_analyses,
-                    COUNT(DISTINCT CASE WHEN aj.status IN ('SUCCEEDED', 'COMPLETED') THEN aj.id END) as completed_analyses,
+                    COUNT(DISTINCT CASE WHEN aj.status = 'COMPLETED' THEN aj.id END) as completed_analyses,
                     COUNT(DISTINCT CASE WHEN aj.status = 'IN_PROGRESS' THEN aj.id END) as running_analyses,
                     COUNT(DISTINCT CASE WHEN aj.status = 'FAILED' THEN aj.id END) as failed_analyses,
                     COUNT(DISTINCT t.id) as total_transcripts,
@@ -2453,7 +2471,7 @@ class Database:
             cursor.execute('''
                 SELECT
                     COUNT(*) as total_jobs,
-                    COUNT(CASE WHEN status = 'SUCCEEDED' THEN 1 END) as completed_jobs,
+                    COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) as completed_jobs,
                     COUNT(CASE WHEN status = 'FAILED' THEN 1 END) as failed_jobs,
                     COUNT(CASE WHEN status = 'IN_PROGRESS' THEN 1 END) as running_jobs
                 FROM analysis_jobs
@@ -2514,7 +2532,7 @@ class Database:
                 SELECT
                     COUNT(*) as jobs_completed_today
                 FROM analysis_jobs
-                WHERE status = 'SUCCEEDED'
+                WHERE status = 'COMPLETED'
                   AND completed_at >= ?
             ''', (today_start,))
             jobs_completed_today = cursor.fetchone()['jobs_completed_today']
@@ -2690,7 +2708,7 @@ class Database:
                     NULL as size_bytes,
                     duration_seconds
                 FROM transcripts
-                WHERE (status = 'COMPLETED' OR status = 'SUCCEEDED')
+                WHERE status = 'COMPLETED'
                 AND (
                     transcript_text LIKE ? OR
                     file_name LIKE ?
@@ -2732,7 +2750,7 @@ class Database:
                     f.duration_seconds
                 FROM analysis_jobs aj
                 JOIN files f ON aj.file_id = f.id
-                WHERE aj.status = 'SUCCEEDED'
+                WHERE aj.status = 'COMPLETED'
                 AND aj.results IS NOT NULL
                 AND CAST(aj.results AS TEXT) LIKE ?
                 '''
@@ -2771,6 +2789,7 @@ class Database:
                         WHEN CAST(nj.summary_result AS TEXT) LIKE ? THEN 'summary'
                         WHEN CAST(nj.chapters_result AS TEXT) LIKE ? THEN 'chapters'
                         WHEN CAST(nj.elements_result AS TEXT) LIKE ? THEN 'elements'
+                        WHEN CAST(nj.waterfall_classification_result AS TEXT) LIKE ? THEN 'waterfall_classification'
                     END as match_field,
                     f.size_bytes,
                     f.duration_seconds
@@ -2781,10 +2800,11 @@ class Database:
                 AND (
                     CAST(nj.summary_result AS TEXT) LIKE ? OR
                     CAST(nj.chapters_result AS TEXT) LIKE ? OR
-                    CAST(nj.elements_result AS TEXT) LIKE ?
+                    CAST(nj.elements_result AS TEXT) LIKE ? OR
+                    CAST(nj.waterfall_classification_result AS TEXT) LIKE ?
                 )
                 '''
-                params.extend([search_pattern] * 6)
+                params.extend([search_pattern] * 8)
 
                 # Add file_type filter if specified
                 if file_type:
@@ -2925,7 +2945,7 @@ class Database:
             if 'transcript' in active_sources:
                 query_str = '''
                 SELECT COUNT(*) as count FROM transcripts
-                WHERE (status = 'COMPLETED' OR status = 'SUCCEEDED')
+                WHERE status = 'COMPLETED'
                 AND (
                     transcript_text LIKE ? OR
                     file_name LIKE ?
@@ -2955,7 +2975,7 @@ class Database:
                 query_str = '''
                 SELECT COUNT(*) as count FROM analysis_jobs aj
                 JOIN files f ON aj.file_id = f.id
-                WHERE aj.status = 'SUCCEEDED'
+                WHERE aj.status = 'COMPLETED'
                 AND aj.results IS NOT NULL
                 AND CAST(aj.results AS TEXT) LIKE ?
                 '''
@@ -2988,10 +3008,11 @@ class Database:
                 AND (
                     CAST(nj.summary_result AS TEXT) LIKE ? OR
                     CAST(nj.chapters_result AS TEXT) LIKE ? OR
-                    CAST(nj.elements_result AS TEXT) LIKE ?
+                    CAST(nj.elements_result AS TEXT) LIKE ? OR
+                    CAST(nj.waterfall_classification_result AS TEXT) LIKE ?
                 )
                 '''
-                params = [search_pattern] * 3
+                params = [search_pattern] * 4
 
                 if file_type:
                     query_str += ' AND f.file_type = ?'
@@ -3062,7 +3083,7 @@ class Database:
             languages = [row['language'] for row in cursor.fetchall()]
 
             # Statuses (hardcoded common ones)
-            statuses = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'SUBMITTED', 'SUCCEEDED']
+            statuses = ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'FAILED', 'SUBMITTED']
 
             # File types (hardcoded)
             file_types = ['video', 'image']
@@ -3093,28 +3114,30 @@ class Database:
             # Check if job_id is an integer (database ID) or string (job_id field)
             if isinstance(job_id, int):
                 # It's the database ID
-                if status in ('SUCCEEDED', 'FAILED', 'COMPLETED'):
+                normalized_status = 'COMPLETED' if status == 'SUCCEEDED' else status
+                if normalized_status in ('COMPLETED', 'FAILED'):
                     cursor.execute('''
                         UPDATE analysis_jobs
                         SET status = ?, results = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP
                         WHERE id = ?
-                    ''', (status, json.dumps(results) if results else None, error_message, job_id))
+                    ''', (normalized_status, json.dumps(results) if results else None, error_message, job_id))
                 elif status:
                     cursor.execute('''
                         UPDATE analysis_jobs SET status = ? WHERE id = ?
-                    ''', (status, job_id))
+                    ''', (normalized_status, job_id))
             else:
                 # It's the job_id string
-                if status in ('SUCCEEDED', 'FAILED', 'COMPLETED'):
+                normalized_status = 'COMPLETED' if status == 'SUCCEEDED' else status
+                if normalized_status in ('COMPLETED', 'FAILED'):
                     cursor.execute('''
                         UPDATE analysis_jobs
                         SET status = ?, results = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP
                         WHERE job_id = ?
-                    ''', (status, json.dumps(results) if results else None, error_message, job_id))
+                    ''', (normalized_status, json.dumps(results) if results else None, error_message, job_id))
                 elif status:
                     cursor.execute('''
                         UPDATE analysis_jobs SET status = ? WHERE job_id = ?
-                    ''', (status, job_id))
+                    ''', (normalized_status, job_id))
 
 
 # Global database instance (will be initialized in app factory)

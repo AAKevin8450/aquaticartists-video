@@ -1,6 +1,6 @@
 # AGENTS
 
-Last Updated: 2025-12-21 22:41:51
+Last Updated: 2025-12-22 22:11:48
 
 Nova batch processing
 - Enable async batch mode by setting `BEDROCK_BATCH_ROLE_ARN`, `NOVA_BATCH_INPUT_PREFIX`, `NOVA_BATCH_OUTPUT_PREFIX` in `.env`.
@@ -21,6 +21,11 @@ Nova model keys
 - Nova 2 Lite runtime calls require the inference profile `us.amazon.nova-2-lite-v1:0` while reporting uses `amazon.nova-2-lite-v1:0`.
 - Nova Micro is disabled and not a valid model choice.
 - Nova pricing estimates are aligned to the latest published per-1K token rates in `NovaVideoService.MODEL_CONFIG`.
+
+Nova waterfall classification
+- Waterfall analysis runs as `waterfall_classification` and follows `docs/Nova_Waterfall_Classification_Decision_Tree.md` with output validated against `docs/Nova_Waterfall_Classification_Spec.json`.
+- Results are stored on `nova_jobs.waterfall_classification_result`, exposed in `/api/nova/results/<nova_job_id>`, and searchable alongside other Nova outputs.
+- File Management supports selecting waterfall classification for single and batch Nova runs; the Nova dashboard renders a classification panel and exports include a dedicated worksheet.
 
 Database
 - Run `migrations/003_add_nova_batch_fields.sql` to add batch metadata fields to `nova_jobs`.

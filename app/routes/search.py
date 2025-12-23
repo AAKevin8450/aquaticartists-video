@@ -134,6 +134,19 @@ def extract_preview_text(source_type: str, row: Dict[str, Any], query: str, max_
                             text = elements[:max_length]
                     if isinstance(elements, dict):
                         text = str(elements)[:max_length]
+                elif match_field == 'waterfall_classification' and nova_job.get('waterfall_classification_result'):
+                    classification = nova_job['waterfall_classification_result']
+                    if isinstance(classification, str):
+                        try:
+                            classification = json.loads(classification)
+                        except:
+                            text = classification[:max_length]
+                    if isinstance(classification, dict):
+                        family = classification.get('family', '')
+                        tier = classification.get('tier_level', '')
+                        functional = classification.get('functional_type', '')
+                        subtype = classification.get('sub_type', '')
+                        text = " | ".join([v for v in [family, tier, functional, subtype] if v]) or str(classification)[:max_length]
         if not text:
             text = row.get('title', '')
 

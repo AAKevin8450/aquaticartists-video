@@ -10,7 +10,7 @@ import time
 import logging
 from botocore.exceptions import ClientError
 from typing import Dict, Any, Optional, List, Tuple, Callable
-from functools import wraps
+from functools import wraps, lru_cache
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -125,6 +125,117 @@ class NovaVideoService:
         )
 
         logger.info(f"NovaVideoService initialized for bucket: {bucket_name}, region: {region}")
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _load_waterfall_assets() -> Tuple[str, Dict[str, Any]]:
+        """Load waterfall classification decision tree and spec from docs."""
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        decision_path = os.path.join(base_dir, 'docs', 'Nova_Waterfall_Classification_Decision_Tree.md')
+        spec_path = os.path.join(base_dir, 'docs', 'Nova_Waterfall_Classification_Spec.json')
+
+        with open(decision_path, 'r', encoding='utf-8') as decision_file:
+            decision_tree = decision_file.read()
+
+        with open(spec_path, 'r', encoding='utf-8') as spec_file:
+            spec = json.load(spec_file)
+
+        return decision_tree, spec
+
+    def _get_waterfall_classification_prompt(self) -> str:
+        """Build prompt for waterfall classification using the decision tree and spec."""
+        decision_tree, spec = self._load_waterfall_assets()
+        spec_json = json.dumps(spec, indent=2, ensure_ascii=True)
+
+        return f"""You are classifying waterfall content in a video segment.
+Use the decision tree and spec below exactly. Follow the decision order in the spec.
+If a dimension cannot be determined confidently, set it to "Unknown" and include a reason.
+If there is no waterfall content, set all four dimensions to "Unknown" and explain why.
+
+Return ONLY JSON that matches the spec output format. Do not include markdown.
+
+Decision Tree:
+{decision_tree}
+
+Spec:
+{spec_json}
+"""
+
+    def _validate_waterfall_classification(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and normalize waterfall classification output against the spec."""
+        _, spec = self._load_waterfall_assets()
+        taxonomy = spec.get('taxonomy', {})
+        required_fields = spec.get('output_format', {}).get('required_fields', [])
+
+        data = payload if isinstance(payload, dict) else {}
+        allowed = {
+            'family': set(taxonomy.get('family', {}).get('allowed', [])),
+            'tier_level': set(taxonomy.get('tier_level', {}).get('allowed', [])),
+            'functional_type': set(taxonomy.get('functional_type', {}).get('allowed', [])),
+            'sub_type': set(taxonomy.get('sub_type', {}).get('allowed', []))
+        }
+
+        unknown_reasons = data.get('unknown_reasons')
+        if not isinstance(unknown_reasons, dict):
+            unknown_reasons = {}
+
+        for field, allowed_values in allowed.items():
+            value = data.get(field)
+            if value not in allowed_values:
+                data[field] = 'Unknown'
+                if not unknown_reasons.get(field):
+                    unknown_reasons[field] = 'Invalid or missing value in model output.'
+
+        normalized_unknown_reasons = {}
+        for field in allowed.keys():
+            if data.get(field) == 'Unknown':
+                normalized_unknown_reasons[field] = unknown_reasons.get(
+                    field, 'Insufficient evidence to determine classification.'
+                )
+
+        confidence = data.get('confidence')
+        if not isinstance(confidence, dict):
+            confidence = {}
+
+        dim_confidences = {}
+        for field in allowed.keys():
+            raw_value = confidence.get(field)
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                value = 0.0 if data.get(field) == 'Unknown' else 0.5
+            value = max(0.0, min(1.0, value))
+            dim_confidences[field] = value
+
+        overall = confidence.get('overall')
+        try:
+            overall_value = float(overall)
+        except (TypeError, ValueError):
+            overall_value = min(dim_confidences.values()) if dim_confidences else 0.0
+        overall_value = max(0.0, min(1.0, overall_value))
+
+        dim_confidences['overall'] = overall_value
+        data['confidence'] = dim_confidences
+
+        evidence = data.get('evidence')
+        if not isinstance(evidence, list):
+            evidence = [evidence] if evidence else []
+        data['evidence'] = [str(item).strip() for item in evidence if str(item).strip()]
+
+        data['unknown_reasons'] = normalized_unknown_reasons
+
+        for field in required_fields:
+            if field not in data:
+                if field == 'confidence':
+                    data['confidence'] = dim_confidences
+                elif field == 'evidence':
+                    data['evidence'] = []
+                elif field == 'unknown_reasons':
+                    data['unknown_reasons'] = normalized_unknown_reasons
+                else:
+                    data[field] = data.get(field, 'Unknown')
+
+        return data
 
     def get_model_config(self, model: str) -> Dict[str, Any]:
         """Get configuration for a specific Nova model."""
@@ -310,13 +421,15 @@ class NovaVideoService:
         prompt_map = {
             'summary': self._get_summary_prompt(depth, language),
             'chapters': self._get_chapters_prompt(),
-            'elements': self._get_elements_prompt()
+            'elements': self._get_elements_prompt(),
+            'waterfall_classification': self._get_waterfall_classification_prompt()
         }
 
         inference_map = {
             'summary': {'maxTokens': 2048, 'temperature': 0.3, 'topP': 0.9},
             'chapters': {'maxTokens': 4096, 'temperature': 0.2, 'topP': 0.9},
-            'elements': {'maxTokens': 4096, 'temperature': 0.3, 'topP': 0.9}
+            'elements': {'maxTokens': 4096, 'temperature': 0.3, 'topP': 0.9},
+            'waterfall_classification': {'maxTokens': 2048, 'temperature': 0.2, 'topP': 0.9}
         }
 
         records = []
@@ -639,6 +752,31 @@ class NovaVideoService:
             results['elements'] = elements_result
             total_tokens += usage['total_tokens']
             total_cost += elements_result['cost_usd']
+
+        if 'waterfall_classification' in analysis_types and 'waterfall_classification' in record_outputs:
+            output = record_outputs['waterfall_classification']
+            classification_text = self._extract_text_from_batch_output(output) or '{}'
+            try:
+                parsed = self._parse_json_response(classification_text)
+            except NovaError:
+                parsed = {}
+
+            classification = self._validate_waterfall_classification(parsed)
+            usage = self._extract_usage_from_batch_output(output)
+
+            classification_result = {
+                **classification,
+                'model_used': model,
+                'model_id': self.get_model_config(model)['id'],
+                'tokens_used': usage['total_tokens'],
+                'cost_usd': self._calculate_cost(model, usage['input_tokens'], usage['output_tokens'], True),
+                'processing_time_seconds': 0.0,
+                'generated_at': datetime.utcnow().isoformat()
+            }
+
+            results['waterfall_classification'] = classification_result
+            total_tokens += usage['total_tokens']
+            total_cost += classification_result['cost_usd']
 
         results['totals'] = {
             'tokens_total': total_tokens,
@@ -1134,6 +1272,35 @@ Do NOT include any text outside the JSON structure."""
 
         return elements_result
 
+    def classify_waterfall(self, s3_key: str, model: str = 'lite') -> Dict[str, Any]:
+        """
+        Classify waterfall features in a video using Nova.
+
+        Args:
+            s3_key: S3 key of the video
+            model: Nova model ('lite', 'pro', 'premier')
+
+        Returns:
+            Dict with waterfall classification and metadata
+        """
+        prompt = self._get_waterfall_classification_prompt()
+        response = self._invoke_nova(s3_key, model, prompt, max_tokens=2048, temperature=0.2)
+
+        parsed = self._parse_json_response(response['text'])
+        classification = self._validate_waterfall_classification(parsed)
+
+        classification_result = {
+            **classification,
+            'model_used': model,
+            'model_id': response['model_id'],
+            'tokens_used': response['tokens_total'],
+            'cost_usd': response['cost_total_usd'],
+            'processing_time_seconds': response['processing_time_seconds'],
+            'generated_at': response['timestamp']
+        }
+
+        return classification_result
+
     def analyze_video(self, s3_key: str, model: str = 'lite',
                      analysis_types: List[str] = None,
                      options: Dict[str, Any] = None,
@@ -1145,7 +1312,7 @@ Do NOT include any text outside the JSON structure."""
         Args:
             s3_key: S3 key of the video
             model: Nova model to use
-            analysis_types: List of analysis types: ['summary', 'chapters', 'elements']
+            analysis_types: List of analysis types: ['summary', 'chapters', 'elements', 'waterfall_classification']
             options: Dict with options like {'summary_depth': 'standard', 'language': 'auto'}
             progress_callback: Optional callback function(current_chunk, total_chunks, status_message)
 
@@ -1217,6 +1384,13 @@ Do NOT include any text outside the JSON structure."""
             total_tokens += elements_result['tokens_used']
             total_cost += elements_result['cost_usd']
             total_processing_time += elements_result['processing_time_seconds']
+
+        if 'waterfall_classification' in analysis_types:
+            classification_result = self.classify_waterfall(s3_key, model)
+            results['waterfall_classification'] = classification_result
+            total_tokens += classification_result['tokens_used']
+            total_cost += classification_result['cost_usd']
+            total_processing_time += classification_result['processing_time_seconds']
 
         # Add totals
         results['totals'] = {
@@ -1389,7 +1563,34 @@ Do NOT include any text outside the JSON structure."""
         if 'elements' in analysis_types:
             result['elements'] = self.identify_elements(chunk_s3_key, model)
 
+        if 'waterfall_classification' in analysis_types:
+            result['waterfall_classification'] = self.classify_waterfall(chunk_s3_key, model)
+
         return result
+
+    def _select_best_waterfall_classification(
+        self,
+        chunk_results: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Select the highest-confidence waterfall classification from chunk results."""
+        best_result = None
+        best_confidence = -1.0
+
+        for chunk_result in chunk_results:
+            classification = chunk_result.get('waterfall_classification')
+            if not isinstance(classification, dict):
+                continue
+            confidence = classification.get('confidence', {})
+            overall = confidence.get('overall')
+            try:
+                overall_value = float(overall)
+            except (TypeError, ValueError):
+                overall_value = 0.0
+            if overall_value > best_confidence:
+                best_confidence = overall_value
+                best_result = classification
+
+        return best_result
 
     def _aggregate_chunk_results(
         self,
@@ -1422,7 +1623,7 @@ Do NOT include any text outside the JSON structure."""
 
         # Calculate totals from chunks
         for cr in chunk_results:
-            for key in ['summary', 'chapters', 'elements']:
+            for key in ['summary', 'chapters', 'elements', 'waterfall_classification']:
                 if key in cr:
                     data = cr[key]
                     if isinstance(data, dict):
@@ -1442,6 +1643,11 @@ Do NOT include any text outside the JSON structure."""
 
         if 'elements' in analysis_types:
             results['elements'] = self.aggregator.combine_elements(chunk_results)
+
+        if 'waterfall_classification' in analysis_types:
+            classification = self._select_best_waterfall_classification(chunk_results)
+            if classification:
+                results['waterfall_classification'] = classification
 
         # Add totals
         results['totals'] = {

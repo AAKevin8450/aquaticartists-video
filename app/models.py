@@ -38,7 +38,7 @@ class AnalysisJob:
     job_id: str = ''
     file_id: int = 0
     analysis_type: str = ''
-    status: str = 'SUBMITTED'  # SUBMITTED, IN_PROGRESS, SUCCEEDED, FAILED
+    status: str = 'SUBMITTED'  # SUBMITTED, IN_PROGRESS, COMPLETED, FAILED
     parameters: Dict[str, Any] = field(default_factory=dict)
     results: Optional[Dict[str, Any]] = None
     started_at: Optional[str] = None
@@ -146,7 +146,7 @@ class AnalysisType:
     # Job status constants
     STATUS_SUBMITTED = 'SUBMITTED'
     STATUS_IN_PROGRESS = 'IN_PROGRESS'
-    STATUS_SUCCEEDED = 'SUCCEEDED'
+    STATUS_COMPLETED = 'COMPLETED'
     STATUS_FAILED = 'FAILED'
 
 

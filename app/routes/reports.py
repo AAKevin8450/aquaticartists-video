@@ -69,7 +69,7 @@ def reports_summary():
             cursor.execute('''
                 SELECT
                     COUNT(*) as total_jobs,
-                    COUNT(CASE WHEN status IN ('SUCCEEDED', 'COMPLETED') THEN 1 END) as success_jobs,
+                    COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) as success_jobs,
                     COUNT(CASE WHEN status = 'FAILED' THEN 1 END) as failed_jobs,
                     COUNT(CASE WHEN status = 'IN_PROGRESS' THEN 1 END) as running_jobs,
                     COUNT(CASE WHEN status = 'SUBMITTED' THEN 1 END) as submitted_jobs
@@ -173,7 +173,7 @@ def reports_summary():
             cursor.execute('''
                 SELECT date(started_at) as day,
                        COUNT(*) as total_jobs,
-                       COUNT(CASE WHEN status IN ('SUCCEEDED', 'COMPLETED') THEN 1 END) as success_jobs,
+                       COUNT(CASE WHEN status = 'COMPLETED' THEN 1 END) as success_jobs,
                        COUNT(CASE WHEN status = 'FAILED' THEN 1 END) as failed_jobs
                 FROM analysis_jobs
                 WHERE date(started_at) BETWEEN date(?) AND date(?)

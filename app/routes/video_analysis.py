@@ -270,8 +270,8 @@ def get_job_status(job_id):
 
     Returns:
         {
-            "status": "IN_PROGRESS" | "SUCCEEDED" | "FAILED",
-            "results": {...},  # if SUCCEEDED
+            "status": "IN_PROGRESS" | "COMPLETED" | "FAILED",
+            "results": {...},  # if COMPLETED
             "error": "..."     # if FAILED
         }
     """
@@ -283,9 +283,10 @@ def get_job_status(job_id):
             return jsonify({'error': 'Job not found'}), 404
 
         # If job already completed, return cached results
-        if job['status'] in ('SUCCEEDED', 'FAILED'):
+        if job['status'] in ('COMPLETED', 'FAILED', 'SUCCEEDED'):
+            status = 'COMPLETED' if job['status'] == 'SUCCEEDED' else job['status']
             response = {
-                'status': job['status'],
+                'status': status,
                 'results': job.get('results'),
                 'error': job.get('error_message')
             }
@@ -310,7 +311,10 @@ def get_job_status(job_id):
         status_response = rekognition.get_job_status(job_id, job_type)
 
         # Update database if job completed
-        if status_response['status'] in ('SUCCEEDED', 'FAILED'):
+        if status_response.get('status') == 'SUCCEEDED':
+            status_response['status'] = 'COMPLETED'
+
+        if status_response['status'] in ('COMPLETED', 'FAILED'):
             db.update_job_status(
                 job_id,
                 status_response['status'],
@@ -341,15 +345,16 @@ def get_analysis_results(analysis_type, job_id):
         if not job:
             return jsonify({'error': 'Job not found'}), 404
 
-        if job['status'] != 'SUCCEEDED':
+        if job['status'] not in ('COMPLETED', 'SUCCEEDED'):
             return jsonify({
                 'error': f"Job not complete. Current status: {job['status']}"
             }), 400
 
+        status = 'COMPLETED' if job['status'] == 'SUCCEEDED' else job['status']
         return jsonify({
             'job_id': job_id,
             'analysis_type': job['analysis_type'],
-            'status': job['status'],
+            'status': status,
             'results': job['results'],
             'started_at': job['started_at'],
             'completed_at': job['completed_at']

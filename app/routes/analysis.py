@@ -236,7 +236,7 @@ def analyze_image():
         {
             "job_id": "uuid",
             "job_db_id": 1,
-            "status": "SUCCEEDED",
+            "status": "COMPLETED",
             "results": {
                 "label_detection": {...},
                 "face_detection": {...},
@@ -360,12 +360,12 @@ def analyze_image():
         )
 
         # Update with results immediately (synchronous)
-        db.update_job_status(job_id, 'SUCCEEDED', results={'analyses': results})
+        db.update_job_status(job_id, 'COMPLETED', results={'analyses': results})
 
         response = {
             'job_id': job_id,
             'job_db_id': job_db_id,
-            'status': 'SUCCEEDED',
+            'status': 'COMPLETED',
             'results': results,
             'count': len(results)
         }
