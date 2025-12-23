@@ -2516,9 +2516,9 @@ function updateBatchProgress(data) {
         document.getElementById('batchElapsed').textContent = formatDuration(data.elapsed_seconds);
     }
 
-    // Detailed statistics (for transcription and proxy jobs)
+    // Detailed statistics (for transcription, proxy, and nova jobs)
     const detailedStatsDiv = document.getElementById('batchDetailedStats');
-    if ((currentBatchActionType === 'transcribe' || currentBatchActionType === 'proxy') &&
+    if ((currentBatchActionType === 'transcribe' || currentBatchActionType === 'proxy' || currentBatchActionType === 'nova') &&
         (data.status === 'RUNNING' || data.status === 'COMPLETED')) {
         // Show detailed stats
         detailedStatsDiv.style.display = 'flex';
@@ -2555,6 +2555,45 @@ function updateBatchProgress(data) {
             // Time remaining (from backend)
             if (data.time_remaining_seconds !== undefined && data.time_remaining_seconds !== null && data.status === 'RUNNING') {
                 document.getElementById('batchETA').textContent = formatDuration(data.time_remaining_seconds);
+            } else {
+                document.getElementById('batchETA').textContent = '-';
+            }
+        } else if (currentBatchActionType === 'nova') {
+            // Nova analysis statistics
+            // Update labels
+            document.getElementById('batchLabel1').textContent = 'Total Cost';
+            document.getElementById('batchLabel1').title = 'Estimated total cost for processed files';
+            document.getElementById('batchLabel2').textContent = 'Avg Cost/File';
+            document.getElementById('batchLabel2').title = 'Estimated average cost per processed file';
+            document.getElementById('batchLabel3').textContent = 'Total Tokens';
+            document.getElementById('batchLabel3').title = 'Total tokens processed across all files';
+            document.getElementById('batchLabel4').textContent = 'Avg Tokens/File';
+            document.getElementById('batchLabel4').title = 'Average tokens per processed file';
+
+            // Total cost
+            if (data.total_cost_usd !== undefined && data.total_cost_usd !== null) {
+                document.getElementById('batchAvgSizeTotal').textContent = `$${data.total_cost_usd.toFixed(2)}`;
+            } else {
+                document.getElementById('batchAvgSizeTotal').textContent = '$0.00';
+            }
+
+            // Average cost per file
+            if (data.avg_cost_per_file !== undefined && data.avg_cost_per_file !== null) {
+                document.getElementById('batchAvgSizeProcessed').textContent = `$${data.avg_cost_per_file.toFixed(2)}`;
+            } else {
+                document.getElementById('batchAvgSizeProcessed').textContent = '-';
+            }
+
+            // Total tokens
+            if (data.total_tokens !== undefined && data.total_tokens !== null) {
+                document.getElementById('batchAvgTime').textContent = data.total_tokens.toLocaleString();
+            } else {
+                document.getElementById('batchAvgTime').textContent = '0';
+            }
+
+            // Average tokens per file
+            if (data.avg_tokens_per_file !== undefined && data.avg_tokens_per_file !== null) {
+                document.getElementById('batchETA').textContent = data.avg_tokens_per_file.toLocaleString();
             } else {
                 document.getElementById('batchETA').textContent = '-';
             }
