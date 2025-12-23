@@ -714,7 +714,9 @@ Spec:
             chapters_text = self._extract_text_from_batch_output(output) or '{}'
             try:
                 parsed = self._parse_json_response(chapters_text)
-            except NovaError:
+            except NovaError as e:
+                logger.error(f"Failed to parse chapters batch response: {e}")
+                logger.error(f"S3 prefix: {s3_prefix}")
                 parsed = {}
             chapters = parsed.get('chapters', [])
 
@@ -743,7 +745,9 @@ Spec:
             elements_text = self._extract_text_from_batch_output(output) or '{}'
             try:
                 parsed = self._parse_json_response(elements_text)
-            except NovaError:
+            except NovaError as e:
+                logger.error(f"Failed to parse elements batch response: {e}")
+                logger.error(f"S3 prefix: {s3_prefix}")
                 parsed = {}
 
             equipment = parsed.get('equipment', [])
@@ -791,7 +795,10 @@ Spec:
             classification_text = self._extract_text_from_batch_output(output) or '{}'
             try:
                 parsed = self._parse_json_response(classification_text)
-            except NovaError:
+            except NovaError as e:
+                logger.error(f"Failed to parse waterfall_classification batch response: {e}")
+                logger.error(f"S3 prefix: {s3_prefix}")
+                logger.error(f"Raw batch output: {output}")
                 parsed = {}
 
             classification = self._validate_waterfall_classification(parsed)
@@ -830,6 +837,35 @@ Spec:
 
         return results
 
+    def _sanitize_json_string(self, text: str) -> str:
+        """
+        Attempt to sanitize malformed JSON by fixing common issues.
+
+        This is a fallback method for when Nova returns JSON with unescaped characters.
+
+        Args:
+            text: Potentially malformed JSON string
+
+        Returns:
+            Sanitized JSON string
+        """
+        import re
+
+        # Remove any markdown code fences
+        cleaned = text.strip()
+        cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned)
+        cleaned = re.sub(r'\n?```\s*$', '', cleaned)
+
+        # Try to detect and fix common JSON issues:
+        # 1. Unescaped quotes within string values
+        # 2. Unescaped newlines within strings
+        # 3. Unescaped backslashes
+
+        # Note: This is a best-effort approach and may not work for all cases
+        # The proper solution is for Nova to return valid JSON
+
+        return cleaned
+
     def _parse_json_response(self, text: str) -> Dict[str, Any]:
         """
         Parse JSON from Nova response, handling markdown code fences.
@@ -853,8 +889,20 @@ Spec:
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError as e:
+            # Enhanced error logging for debugging
             logger.error(f"Failed to parse JSON response: {e}")
-            logger.error(f"Response text: {text[:500]}")
+            logger.error(f"Error at line {e.lineno}, column {e.colno}, position {e.pos}")
+            logger.error(f"First 1000 chars of response: {text[:1000]}")
+
+            # Log the problematic area around the error position
+            if e.pos and e.pos > 0:
+                start = max(0, e.pos - 100)
+                end = min(len(cleaned), e.pos + 100)
+                logger.error(f"Context around error (pos {e.pos}): ...{cleaned[start:end]}...")
+
+            # Log last 500 chars to check if response was truncated
+            logger.error(f"Last 500 chars of response: {text[-500:]}")
+
             raise NovaError(f"Failed to parse Nova response as JSON: {e}")
 
     def _parse_timecode_to_seconds(self, timecode: str) -> int:

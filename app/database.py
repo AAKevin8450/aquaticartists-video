@@ -1979,6 +1979,7 @@ class Database:
         max_size: Optional[int] = None,
         min_duration: Optional[int] = None,
         max_duration: Optional[int] = None,
+        min_transcript_chars: Optional[int] = None,
         sort_by: str = 'uploaded_at',
         sort_order: str = 'desc',
         limit: int = 50,
@@ -2137,6 +2138,15 @@ class Database:
             # Group by file ID to aggregate stats from joined tables
             query += ' GROUP BY f.id'
 
+            # Apply HAVING clause for aggregated fields (must come after GROUP BY)
+            having_clauses = []
+            if min_transcript_chars is not None:
+                having_clauses.append('max_completed_transcript_chars >= ?')
+                params.append(min_transcript_chars)
+
+            if having_clauses:
+                query += ' HAVING ' + ' AND '.join(having_clauses)
+
             # Add sorting
             valid_sort_fields = ['uploaded_at', 'filename', 'size_bytes', 'duration_seconds', 'file_type']
             if sort_by in valid_sort_fields:
@@ -2174,7 +2184,8 @@ class Database:
         min_size: Optional[int] = None,
         max_size: Optional[int] = None,
         min_duration: Optional[int] = None,
-        max_duration: Optional[int] = None
+        max_duration: Optional[int] = None,
+        min_transcript_chars: Optional[int] = None
     ) -> int:
         """Count all files from the files table."""
         with self.get_connection() as conn:
@@ -2278,6 +2289,15 @@ class Database:
                 query += ' AND f.duration_seconds <= ?'
                 params.append(max_duration)
 
+            if min_transcript_chars is not None:
+                query += ''' AND EXISTS (
+                    SELECT 1 FROM transcripts t
+                    WHERE t.file_path = f.local_path
+                      AND t.status = 'COMPLETED'
+                      AND COALESCE(t.character_count, LENGTH(COALESCE(t.transcript_text, ''))) >= ?
+                )'''
+                params.append(min_transcript_chars)
+
             cursor.execute(query, params)
             return cursor.fetchone()[0]
 
@@ -2297,7 +2317,8 @@ class Database:
         min_size: Optional[int] = None,
         max_size: Optional[int] = None,
         min_duration: Optional[int] = None,
-        max_duration: Optional[int] = None
+        max_duration: Optional[int] = None,
+        min_transcript_chars: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Get summary statistics for all files matching filters.
@@ -2422,6 +2443,15 @@ class Database:
             if max_duration is not None:
                 query += ' AND f.duration_seconds <= ?'
                 params.append(max_duration)
+
+            if min_transcript_chars is not None:
+                query += ''' AND EXISTS (
+                    SELECT 1 FROM transcripts t
+                    WHERE t.file_path = f.local_path
+                      AND t.status = 'COMPLETED'
+                      AND COALESCE(t.character_count, LENGTH(COALESCE(t.transcript_text, ''))) >= ?
+                )'''
+                params.append(min_transcript_chars)
 
             cursor.execute(query, params)
             row = cursor.fetchone()

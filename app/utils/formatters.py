@@ -38,7 +38,7 @@ def format_timestamp(timestamp: Optional[str], timezone: str = 'America/New_York
             try:
                 et_tz = ZoneInfo(timezone)
                 dt_et = dt.astimezone(et_tz)
-                return dt_et.strftime('%Y-%m-%d %H:%M:%S ET')
+                return dt_et.strftime('%Y-%m-%d %H:%M:%S')
             except Exception:
                 # Fallback if timezone not found
                 pass
@@ -75,8 +75,7 @@ def format_timestamp(timestamp: Optional[str], timezone: str = 'America/New_York
             offset_hours = 5
 
         dt_et = dt - timedelta(hours=offset_hours)
-        tz_label = 'EDT' if offset_hours == 4 else 'EST'
-        return dt_et.strftime(f'%Y-%m-%d %H:%M:%S {tz_label}')
+        return dt_et.strftime('%Y-%m-%d %H:%M:%S')
 
     except (ValueError, AttributeError) as e:
         # If parsing fails, return original
