@@ -30,6 +30,7 @@ def export_to_excel(job_data):
         ws_chapters = wb.create_sheet("Chapters")
         _format_nova_chapters(ws_chapters, job_data.get('results', {}))
         _create_nova_element_sheets(wb, job_data.get('results', {}))
+        _create_nova_waterfall_sheet(wb, job_data.get('results', {}))
     else:
         ws_data = wb.create_sheet("Data")
         _create_data_sheet(ws_data, job_data)
@@ -184,6 +185,46 @@ def _create_nova_element_sheets(wb, results):
 
     ws_speakers = wb.create_sheet("Speakers")
     _format_nova_speakers(ws_speakers, elements.get('speakers', []), elements.get('people', {}))
+
+
+def _create_nova_waterfall_sheet(wb, results):
+    """Create Nova waterfall classification sheet."""
+    classification = results.get('waterfall_classification', {}) if isinstance(results, dict) else {}
+    ws = wb.create_sheet("Waterfall Classification")
+
+    if not classification:
+        ws['A1'] = "No waterfall classification available"
+        return
+
+    fields = [
+        ("Family", classification.get('family', '')),
+        ("Functional Type", classification.get('functional_type', '')),
+        ("Tier Level", classification.get('tier_level', '')),
+        ("Sub-Type", classification.get('sub_type', ''))
+    ]
+
+    confidence = classification.get('confidence', {})
+    fields.append(("Confidence (Overall)", confidence.get('overall', '')))
+
+    evidence = classification.get('evidence', [])
+    fields.append(("Evidence", ', '.join(evidence) if isinstance(evidence, list) else str(evidence)))
+
+    unknown_reasons = classification.get('unknown_reasons', {})
+    if isinstance(unknown_reasons, dict):
+        unknown_text = '; '.join([f"{k}: {v}" for k, v in unknown_reasons.items() if v])
+    else:
+        unknown_text = str(unknown_reasons)
+    fields.append(("Unknown Reasons", unknown_text))
+
+    row = 1
+    for label, value in fields:
+        ws[f'A{row}'] = label
+        ws[f'A{row}'].font = Font(bold=True)
+        ws[f'B{row}'] = value
+        row += 1
+
+    ws.column_dimensions['A'].width = 22
+    ws.column_dimensions['B'].width = 60
 
 
 def _format_nova_equipment(ws, equipment):

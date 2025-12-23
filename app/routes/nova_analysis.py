@@ -126,6 +126,24 @@ def _build_analysis_text(job: Dict[str, Any]) -> str:
             if names:
                 parts.append("Speakers: " + ", ".join(names))
 
+    waterfall = job.get('waterfall_classification_result')
+    if waterfall:
+        waterfall_data = waterfall if isinstance(waterfall, dict) else _ensure_json_dict(waterfall)
+        family = _normalize_text(waterfall_data.get('family') or '')
+        tier = _normalize_text(waterfall_data.get('tier_level') or '')
+        functional = _normalize_text(waterfall_data.get('functional_type') or '')
+        subtype = _normalize_text(waterfall_data.get('sub_type') or '')
+        evidence = waterfall_data.get('evidence') or []
+        evidence_text = ''
+        if isinstance(evidence, list):
+            evidence_text = ", ".join([_normalize_text(e) for e in evidence if e])
+        details = " | ".join([v for v in [family, tier, functional, subtype] if v])
+        if details:
+            line = f"Waterfall Classification: {details}"
+            if evidence_text:
+                line += f" | Evidence: {evidence_text}"
+            parts.append(line)
+
     return "\n\n".join([p for p in parts if p])
 
 
@@ -156,7 +174,7 @@ def start_nova_analysis_internal(
     if processing_mode not in ('realtime', 'batch'):
         return {'error': 'processing_mode must be "realtime" or "batch"'}, 400
 
-    valid_analysis_types = ['summary', 'chapters', 'elements']
+    valid_analysis_types = ['summary', 'chapters', 'elements', 'waterfall_classification']
     invalid_types = [t for t in analysis_types if t not in valid_analysis_types]
     if invalid_types:
         return {
@@ -338,6 +356,9 @@ def start_nova_analysis_internal(
         if 'elements' in results:
             update_data['elements_result'] = json.dumps(results['elements'])
 
+        if 'waterfall_classification' in results:
+            update_data['waterfall_classification_result'] = json.dumps(results['waterfall_classification'])
+
         # Update database
         db.update_nova_job(nova_job_id, update_data)
         db.update_nova_job_completed_at(nova_job_id)
@@ -421,7 +442,7 @@ def start_nova_analysis():
         {
             "file_id": 123,
             "model": "lite",  # 'lite', 'pro', 'premier'
-            "analysis_types": ["summary", "chapters", "elements"],
+            "analysis_types": ["summary", "chapters", "elements", "waterfall_classification"],
             "options": {
                 "summary_depth": "standard",  # 'brief', 'standard', 'detailed'
                 "language": "auto"  # 'auto' or ISO code like 'en', 'es'
@@ -547,6 +568,9 @@ def get_nova_status(nova_job_id):
                 if 'elements' in results:
                     update_data['elements_result'] = json.dumps(results['elements'])
 
+                if 'waterfall_classification' in results:
+                    update_data['waterfall_classification_result'] = json.dumps(results['waterfall_classification'])
+
                 db.update_nova_job(nova_job_id, update_data)
                 db.update_nova_job_completed_at(nova_job_id)
 
@@ -643,6 +667,8 @@ def get_nova_results(nova_job_id):
 
         if job['elements_result']:
             results['elements'] = _ensure_json_dict(job['elements_result'])
+        if job.get('waterfall_classification_result'):
+            results['waterfall_classification'] = _ensure_json_dict(job['waterfall_classification_result'])
 
         response = {
             'nova_job_id': job['id'],

@@ -1,0 +1,634 @@
+{
+  "spec_name": "Nova Waterfall Classification Spec",
+  "spec_version": "1.1.0",
+  "created_local_date": "2025-12-22",
+  "taxonomy": {
+    "family": {
+      "type": "enum",
+      "allowed": [
+        "Custom Natural Stone",
+        "Custom Formal",
+        "Genesis Natural",
+        "Genesis Formal",
+        "Unknown"
+      ],
+      "description": "4-type family model. Natural families include boulders; Formal families exclude boulders."
+    },
+    "tier_level": {
+      "type": "enum",
+      "allowed": [
+        "Classic (Small)",
+        "Deluxe (Medium)",
+        "Ultimate (Large)",
+        "Unknown"
+      ],
+      "description": "Relative size/complexity tier."
+    },
+    "functional_type": {
+      "type": "enum",
+      "allowed": [
+        "Waterfall",
+        "Waterfall with Slide",
+        "Grotto",
+        "Grotto with Slide",
+        "Unknown"
+      ],
+      "description": "Functional configuration: waterfall only, slide, grotto, or both."
+    },
+    "sub_type": {
+      "type": "enum",
+      "allowed": [
+        "One-Tier",
+        "Two-Tier",
+        "Two-Tier Split",
+        "Three-Tier",
+        "Cantilever",
+        "Unknown"
+      ],
+      "description": "Water path subtype based on tiers (1/2/3), split flow, and cantilevered spill edge."
+    }
+  },
+  "output_format": {
+    "unit_of_classification": "clip_or_segment",
+    "required_fields": [
+      "family",
+      "tier_level",
+      "functional_type",
+      "sub_type",
+      "confidence",
+      "evidence",
+      "unknown_reasons"
+    ],
+    "fields": {
+      "segment_id": {
+        "type": "string",
+        "required": false,
+        "description": "Optional identifier for the clip/segment."
+      },
+      "time_start_seconds": {
+        "type": "number",
+        "required": false,
+        "description": "Optional start time (seconds) if segmenting a longer video."
+      },
+      "time_end_seconds": {
+        "type": "number",
+        "required": false,
+        "description": "Optional end time (seconds) if segmenting a longer video."
+      },
+      "family": {
+        "$ref": "#/taxonomy/family"
+      },
+      "tier_level": {
+        "$ref": "#/taxonomy/tier_level"
+      },
+      "functional_type": {
+        "$ref": "#/taxonomy/functional_type"
+      },
+      "sub_type": {
+        "$ref": "#/taxonomy/sub_type"
+      },
+      "confidence": {
+        "type": "object",
+        "required": true,
+        "description": "Per-dimension and overall confidence.",
+        "properties": {
+          "family": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "tier_level": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "functional_type": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "sub_type": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "overall": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          }
+        }
+      },
+      "evidence": {
+        "type": "array",
+        "required": true,
+        "items": {
+          "type": "string"
+        },
+        "description": "Short strings describing the cues used (visual and/or narration)."
+      },
+      "unknown_reasons": {
+        "type": "object",
+        "required": true,
+        "description": "Only include non-empty values for dimensions labeled Unknown.",
+        "properties": {
+          "family": {
+            "type": "string"
+          },
+          "tier_level": {
+            "type": "string"
+          },
+          "functional_type": {
+            "type": "string"
+          },
+          "sub_type": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "decision_order": [
+    "family",
+    "functional_type",
+    "tier_level",
+    "sub_type"
+  ],
+  "rules": {
+    "family_rules": {
+      "primary_visual_rules": [
+        {
+          "if_all": [
+            "boulders_present"
+          ],
+          "then": {
+            "family_allowed_subset": [
+              "Genesis Natural",
+              "Custom Natural Stone"
+            ]
+          },
+          "notes": "If primary construction uses natural boulders, the family must be Natural."
+        },
+        {
+          "if_all": [
+            "boulders_absent"
+          ],
+          "then": {
+            "family_allowed_subset": [
+              "Genesis Formal",
+              "Custom Formal"
+            ]
+          },
+          "notes": "If the water-producing structure is veneer/cap/tile/marble/rectilinear (no boulders), the family must be Formal."
+        }
+      ],
+      "kit_vs_custom_rules": [
+        {
+          "if_any": [
+            "explicit_genesis_language",
+            "kit_like_repeatable_composition",
+            "fast_install_emphasis",
+            "finished_on_all_sides_productized_unit"
+          ],
+          "then": {
+            "is_genesis": true,
+            "confidence_floor": 0.75
+          },
+          "notes": "Kit cues indicate Genesis (applies to both Natural and Formal)."
+        },
+        {
+          "if_any": [
+            "highly_site_specific_integration",
+            "heavy_equipment_large_scale",
+            "multi_day_build_context",
+            "custom_project_language",
+            "complex_plumbing_multiple_circuits"
+          ],
+          "then": {
+            "is_custom": true,
+            "confidence_floor": 0.7
+          },
+          "notes": "Bespoke build cues indicate Custom (applies to both Natural and Formal)."
+        }
+      ],
+      "final_assignment": [
+        {
+          "if_all": [
+            "boulders_present",
+            "is_genesis_true"
+          ],
+          "then": {
+            "family": "Genesis Natural",
+            "confidence_floor": 0.8
+          }
+        },
+        {
+          "if_all": [
+            "boulders_present",
+            "is_custom_true"
+          ],
+          "then": {
+            "family": "Custom Natural Stone",
+            "confidence_floor": 0.75
+          }
+        },
+        {
+          "if_all": [
+            "boulders_absent",
+            "is_genesis_true"
+          ],
+          "then": {
+            "family": "Genesis Formal",
+            "confidence_floor": 0.8
+          }
+        },
+        {
+          "if_all": [
+            "boulders_absent",
+            "is_custom_true"
+          ],
+          "then": {
+            "family": "Custom Formal",
+            "confidence_floor": 0.75
+          }
+        }
+      ],
+      "narration_keywords": {
+        "Genesis Natural": [
+          "genesis",
+          "kit",
+          "single",
+          "double",
+          "corner grotto",
+          "360",
+          "hidden plumbing",
+          "installed in one day"
+        ],
+        "Genesis Formal": [
+          "genesis",
+          "formal",
+          "modern",
+          "veneer",
+          "sheer descent",
+          "cap",
+          "lighted",
+          "spillway"
+        ],
+        "Custom Natural Stone": [
+          "custom",
+          "aquatic artists",
+          "project",
+          "boulders",
+          "natural stone",
+          "tons",
+          "big boulders"
+        ],
+        "Custom Formal": [
+          "custom",
+          "aquatic artists",
+          "formal",
+          "veneer",
+          "marble",
+          "caps",
+          "tile",
+          "stone facing"
+        ]
+      },
+      "conflict_resolution_priority": [
+        "BoulderVsNoBoulder",
+        "GenesisIfExplicitOrStrongKitCues",
+        "CustomIfLargeComplexAndSiteBuilt",
+        "UnknownIfStillAmbiguous"
+      ],
+      "unknown_policy": {
+        "min_confidence_to_assign": 0.7,
+        "below_threshold_action": "set_family_unknown_with_reason"
+      }
+    },
+    "functional_type_rules": {
+      "detectors": {
+        "has_slide": {
+          "visual_cues": [
+            "slide_chute_visible",
+            "ladder_to_slide",
+            "landscape_slide_route",
+            "stairs_to_slide",
+            "slide_runout_into_pool"
+          ],
+          "keyword_cues": [
+            "slide",
+            "ladder",
+            "stairs",
+            "steps"
+          ]
+        },
+        "has_grotto": {
+          "visual_cues": [
+            "usable_cavity_or_overhang",
+            "grotto_roof_spanning_opening",
+            "interior_camera_view",
+            "bench_or_sitting_area"
+          ],
+          "keyword_cues": [
+            "grotto",
+            "cave",
+            "inside",
+            "walk-in"
+          ]
+        }
+      },
+      "mapping": [
+        {
+          "if": {
+            "has_slide": false,
+            "has_grotto": false
+          },
+          "functional_type": "Waterfall"
+        },
+        {
+          "if": {
+            "has_slide": true,
+            "has_grotto": false
+          },
+          "functional_type": "Waterfall with Slide"
+        },
+        {
+          "if": {
+            "has_slide": false,
+            "has_grotto": true
+          },
+          "functional_type": "Grotto"
+        },
+        {
+          "if": {
+            "has_slide": true,
+            "has_grotto": true
+          },
+          "functional_type": "Grotto with Slide"
+        }
+      ],
+      "unknown_policy": {
+        "min_confidence_to_assign": 0.75,
+        "below_threshold_action": "set_functional_type_unknown_with_reason"
+      }
+    },
+    "tier_level_rules": {
+      "signals": {
+        "classic": {
+          "approx_height_ft_range": [
+            1.5,
+            2.0
+          ],
+          "approx_width_ft_range": [
+            8.0,
+            10.0
+          ],
+          "slide_access_cue": "ladder_common",
+          "complexity": "low_to_medium"
+        },
+        "deluxe": {
+          "approx_height_ft_range": [
+            2.5,
+            3.0
+          ],
+          "approx_width_ft_range": [
+            12.0,
+            14.0
+          ],
+          "slide_access_cue": "landscape_slide_steps_required",
+          "complexity": "medium"
+        },
+        "ultimate": {
+          "approx_height_ft_range": [
+            3.0,
+            999.0
+          ],
+          "approx_width_ft_range": [
+            14.0,
+            999.0
+          ],
+          "slide_access_cue": "large_landscape_slide",
+          "complexity": "high",
+          "hard_cues": [
+            "very_large_boulders_human_scale",
+            "heavy_machinery_prominent",
+            "multi_feature_water_park_scale",
+            "complex_plumbing_multiple_circuits"
+          ]
+        }
+      },
+      "assignment_logic": {
+        "priority": [
+          "Ultimate (Large)",
+          "Deluxe (Medium)",
+          "Classic (Small)"
+        ],
+        "notes": "Ultimate can be selected via strong hard cues even if width/height are uncertain."
+      },
+      "unknown_policy": {
+        "min_confidence_to_assign": 0.7,
+        "below_threshold_action": "set_tier_unknown_with_reason"
+      }
+    },
+    "sub_type_rules": {
+      "detectors": {
+        "cantilever_edge": {
+          "visual_cues": [
+            "projecting_flat_spill_stone_over_pool",
+            "distinct_straight_spill_edge",
+            "clean_sheet_drop_from_edge"
+          ],
+          "keyword_cues": [
+            "cantilever"
+          ]
+        },
+        "split_flow": {
+          "visual_cues": [
+            "flow_divides_around_central_boulder",
+            "two_distinct_channels_visible"
+          ],
+          "keyword_cues": [
+            "split"
+          ]
+        },
+        "three_tier": {
+          "visual_cues": [
+            "two_intermediate_shelves_visible",
+            "three_distinct_drops_visible"
+          ],
+          "keyword_cues": [
+            "three-tier",
+            "triple cascade"
+          ]
+        },
+        "two_tier": {
+          "visual_cues": [
+            "intermediate_shelf_visible",
+            "two_distinct_drops_visible"
+          ],
+          "keyword_cues": [
+            "two-tier",
+            "double cascade"
+          ]
+        }
+      },
+      "conflict_resolution_priority": [
+        "Cantilever",
+        "Two-Tier Split",
+        "Three-Tier",
+        "Two-Tier",
+        "One-Tier"
+      ],
+      "assignment_logic": [
+        {
+          "if": "cantilever_edge",
+          "sub_type": "Cantilever"
+        },
+        {
+          "elif": "split_flow",
+          "sub_type": "Two-Tier Split"
+        },
+        {
+          "elif": "three_tier",
+          "sub_type": "Three-Tier"
+        },
+        {
+          "elif": "two_tier",
+          "sub_type": "Two-Tier"
+        },
+        {
+          "else": "One-Tier"
+        }
+      ],
+      "unknown_policy": {
+        "min_confidence_to_assign": 0.7,
+        "below_threshold_action": "set_sub_type_unknown_with_reason"
+      }
+    },
+    "global_policies": {
+      "do_not_guess": true,
+      "unknown_allowed_per_dimension": true,
+      "confidence_guidelines": {
+        "high": [
+          0.9,
+          1.0
+        ],
+        "medium": [
+          0.7,
+          0.89
+        ],
+        "low": [
+          0.5,
+          0.69
+        ],
+        "very_low": [
+          0.0,
+          0.49
+        ]
+      },
+      "overall_confidence_calculation": {
+        "method": "min_of_dimensions",
+        "notes": "Overall confidence = minimum of the four dimension confidences (conservative)."
+      }
+    }
+  },
+  "examples": [
+    {
+      "description": "Rectilinear veneer waterfall with straight spill edge and sheet-like drop; no boulders; appears custom-sized statement piece",
+      "expected": {
+        "family": "Custom Formal",
+        "functional_type": "Waterfall",
+        "tier_level": "Unknown",
+        "sub_type": "Cantilever",
+        "confidence": {
+          "family": 0.8,
+          "functional_type": 0.85,
+          "tier_level": 0.55,
+          "sub_type": 0.8,
+          "overall": 0.55
+        },
+        "evidence": [
+          "No boulders; veneer/stone facing",
+          "Rectilinear modern geometry",
+          "Straight spill edge produces sheet-like drop"
+        ],
+        "unknown_reasons": {
+          "tier_level": "No reliable size reference for height/width."
+        }
+      }
+    },
+    {
+      "description": "Natural boulder kit with narration 'Genesis kit', compact footprint, single cascade",
+      "expected": {
+        "family": "Genesis Natural",
+        "functional_type": "Waterfall",
+        "tier_level": "Classic (Small)",
+        "sub_type": "One-Tier",
+        "confidence": {
+          "family": 0.85,
+          "functional_type": 0.9,
+          "tier_level": 0.75,
+          "sub_type": 0.8,
+          "overall": 0.75
+        },
+        "evidence": [
+          "Boulders clearly visible",
+          "Narration indicates Genesis/kit",
+          "Compact productized composition",
+          "Single drop into pool"
+        ],
+        "unknown_reasons": {}
+      }
+    },
+    {
+      "description": "Large boulder grotto with interior cavity and landscape slide + steps; multi-feature, site-built",
+      "expected": {
+        "family": "Custom Natural Stone",
+        "functional_type": "Grotto with Slide",
+        "tier_level": "Ultimate (Large)",
+        "sub_type": "Two-Tier",
+        "confidence": {
+          "family": 0.8,
+          "functional_type": 0.95,
+          "tier_level": 0.85,
+          "sub_type": 0.7,
+          "overall": 0.7
+        },
+        "evidence": [
+          "Boulders + custom rockwork",
+          "Usable cave/overhang visible",
+          "Slide route + steps visible",
+          "Large footprint/complexity"
+        ],
+        "unknown_reasons": {}
+      }
+    },
+    {
+      "description": "Formal kit unit with veneer and caps, clean modern face, no boulders, repeatable product-like install",
+      "expected": {
+        "family": "Genesis Formal",
+        "functional_type": "Waterfall",
+        "tier_level": "Deluxe (Medium)",
+        "sub_type": "Cantilever",
+        "confidence": {
+          "family": 0.82,
+          "functional_type": 0.85,
+          "tier_level": 0.7,
+          "sub_type": 0.78,
+          "overall": 0.7
+        },
+        "evidence": [
+          "No boulders; veneer/capped modern form",
+          "Repeatable productized unit cues",
+          "Straight spill edge with sheet-like drop"
+        ],
+        "unknown_reasons": {}
+      }
+    }
+  ],
+  "spec_notes": [
+    "Updated Families to 4-type model: Custom Natural Stone, Custom Formal, Genesis Natural, Genesis Formal.",
+    "Family decision now uses Boulder vs No Boulder as primary split, then Kit vs Custom.",
+    "Added Three-Tier to sub_type allowed values and rules."
+  ]
+}

@@ -5,6 +5,7 @@ Handles chunking, hashing, and idempotent storage of embeddings.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -286,6 +287,38 @@ class EmbeddingManager:
                     force=force,
                     stats=stats
                 )
+
+        # Embed waterfall classification
+        classification_result = job.get('waterfall_classification_result')
+        if classification_result:
+            if isinstance(classification_result, dict):
+                classification = classification_result
+            elif isinstance(classification_result, str):
+                try:
+                    classification = json.loads(classification_result)
+                except Exception:
+                    classification = {'raw': classification_result}
+            else:
+                classification = {'raw': str(classification_result)}
+
+            content = (
+                f"Waterfall Classification\n"
+                f"Family: {classification.get('family', '')}\n"
+                f"Tier: {classification.get('tier_level', '')}\n"
+                f"Functional: {classification.get('functional_type', '')}\n"
+                f"Sub-Type: {classification.get('sub_type', '')}\n"
+                f"Evidence: {', '.join(classification.get('evidence', []) or [])}"
+            )
+
+            self._embed_content(
+                content=content,
+                source_type='nova_analysis',
+                source_id=nova_job_id,
+                model_name=model_name,
+                file_id=job.get('file_id'),
+                force=force,
+                stats=stats
+            )
 
         stats['status'] = 'completed'
         return stats

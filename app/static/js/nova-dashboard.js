@@ -40,6 +40,7 @@ export async function initNovaDashboard(jobId) {
 function renderNovaDashboard() {
     renderNovaStats();
     renderSummary();
+    renderWaterfallClassification();
     renderChapters();
     renderElements();
     renderComparison();
@@ -95,6 +96,49 @@ function renderSummary() {
     summaryMeta.innerHTML = metaParts.length
         ? `<span class="badge bg-light text-dark me-2">${metaParts.join('</span><span class="badge bg-light text-dark me-2">')}</span>`
         : '';
+}
+
+function renderWaterfallClassification() {
+    const container = document.getElementById('novaWaterfallContent');
+    if (!container) {
+        return;
+    }
+
+    const classification = novaResults.waterfall_classification || null;
+    if (!classification) {
+        container.textContent = 'No waterfall classification available.';
+        return;
+    }
+
+    const fields = [
+        { label: 'Family', value: classification.family },
+        { label: 'Functional Type', value: classification.functional_type },
+        { label: 'Tier Level', value: classification.tier_level },
+        { label: 'Sub-Type', value: classification.sub_type }
+    ];
+
+    const confidence = classification.confidence || {};
+    const evidence = classification.evidence || [];
+    const unknownReasons = classification.unknown_reasons || {};
+
+    const fieldRows = fields.map(field => `
+        <div class="mb-2"><strong>${escapeHtml(field.label)}:</strong> ${escapeHtml(field.value || '--')}</div>
+    `).join('');
+
+    const confidenceRow = `
+        <div class="mb-2"><strong>Overall Confidence:</strong> ${confidence.overall != null ? Number(confidence.overall).toFixed(2) : '--'}</div>
+    `;
+
+    const evidenceList = Array.isArray(evidence) && evidence.length
+        ? `<div class="mb-2"><strong>Evidence:</strong> ${escapeHtml(evidence.join(', '))}</div>`
+        : '';
+
+    const unknownEntries = Object.entries(unknownReasons).filter(([, value]) => value);
+    const unknownList = unknownEntries.length
+        ? `<div class="mb-2"><strong>Unknown Reasons:</strong> ${unknownEntries.map(([key, value]) => `${escapeHtml(key)}: ${escapeHtml(value)}`).join('; ')}</div>`
+        : '';
+
+    container.innerHTML = `${fieldRows}${confidenceRow}${evidenceList}${unknownList}`;
 }
 
 function renderChapters() {

@@ -47,12 +47,12 @@ def _analyze_image(file_id, analysis_type, analysis_func, **kwargs):
         )
 
         # Update with results immediately (synchronous)
-        db.update_job_status(job_id, 'SUCCEEDED', results=results)
+        db.update_job_status(job_id, 'COMPLETED', results=results)
 
         return {
             'job_id': job_id,
             'job_db_id': job_db_id,
-            'status': 'SUCCEEDED',
+            'status': 'COMPLETED',
             'results': results
         }, 200
 
@@ -174,12 +174,12 @@ def compare_faces():
             }
         )
 
-        db.update_job_status(job_id, 'SUCCEEDED', results=results)
+        db.update_job_status(job_id, 'COMPLETED', results=results)
 
         return jsonify({
             'job_id': job_id,
             'job_db_id': job_db_id,
-            'status': 'SUCCEEDED',
+            'status': 'COMPLETED',
             'results': results
         }), 200
 

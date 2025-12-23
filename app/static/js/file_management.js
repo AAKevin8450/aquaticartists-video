@@ -2287,9 +2287,11 @@ function setSingleDefaults(actionType) {
         const summary = document.getElementById('singleNovaSummary');
         const chapters = document.getElementById('singleNovaChapters');
         const elements = document.getElementById('singleNovaElements');
+        const waterfall = document.getElementById('singleNovaWaterfall');
         if (summary) summary.checked = true;
         if (chapters) chapters.checked = true;
         if (elements) elements.checked = false;
+        if (waterfall) waterfall.checked = false;
         return;
     }
 

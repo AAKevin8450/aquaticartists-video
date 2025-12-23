@@ -1,3 +1,84 @@
+2025-12-22 22:11:48 - Updated by Codex
+
+[Category: Feature]
+Add Nova waterfall classification analysis using the decision tree + spec, and surface results across storage, search, exports, and UI.
+
+[Purpose]
+Apply a standardized waterfall taxonomy to Nova analysis outputs and make it discoverable and reportable throughout the app.
+
+[Impact]
+- New Nova analysis type `waterfall_classification` runs in realtime, batch, and chunked flows with spec-validated output
+- Results stored on `nova_jobs.waterfall_classification_result`, included in search previews, embeddings, and Excel exports
+- File Management UI allows selecting waterfall classification and dashboard renders classification details
+- Waterfall decision tree + JSON spec are now stored in `docs/`
+
+[Category: Refactoring]
+Normalize analysis job status language to use `COMPLETED` rather than `SUCCEEDED` in responses and reports.
+
+[Purpose]
+Align status values across analysis routes and reporting summaries.
+
+[Impact]
+- Image and video analysis endpoints return `COMPLETED` for finished jobs
+- Reports count completed jobs using the unified status value
+
+[Category: Documentation]
+Relocate planning and implementation docs into the `docs/` folder.
+
+[Purpose]
+Keep project guidance consolidated in `docs/` and add waterfall classification references.
+
+[Impact]
+- Prior root-level planning docs now live under `docs/`
+
+[Files Modified]
+- changelog.txt: Documented Nova waterfall classification, status normalization, and doc relocation
+- AGENTS.md: Added durable guidance for waterfall classification analysis and storage
+- app/database.py: Added waterfall classification storage/search handling on nova_jobs
+- app/models.py: Updated status constant/comment to use COMPLETED
+- app/routes/analysis.py: Return COMPLETED status for synchronous image analysis
+- app/routes/image_analysis.py: Return COMPLETED status for image endpoints
+- app/routes/nova_analysis.py: Accept, store, and return waterfall classification results
+- app/routes/reports.py: Count completed jobs using COMPLETED status only
+- app/routes/search.py: Preview waterfall classification matches in Nova search
+- app/routes/video_analysis.py: Normalize status to COMPLETED for Rekognition polling/results
+- app/services/embedding_manager.py: Embed waterfall classification output
+- app/services/nova_service.py: Load waterfall spec/decision tree, build prompt, validate outputs, and support new analysis type
+- app/static/js/file_management.js: Default state now includes waterfall classification option
+- app/static/js/nova-dashboard.js: Render waterfall classification panel
+- app/templates/dashboard.html: Added waterfall classification section to Nova dashboard
+- app/templates/file_management.html: Added waterfall classification checkboxes for Nova runs
+- app/utils/excel_exporter.py: Added Waterfall Classification worksheet for Nova exports
+- 20251217_testing_plan.md: Moved to docs/20251217_testing_plan.md
+- docs/20251217_testing_plan.md: New location for testing plan
+- 20251218NovaImplementation.md: Moved to docs/20251218NovaImplementation.md
+- docs/20251218NovaImplementation.md: New location for implementation notes
+- 20251221_Improvements.txt: Moved to docs/20251221_Improvements.txt
+- docs/20251221_Improvements.txt: New location for improvements notes
+- 20251221_nova_embeddings.md: Moved to docs/20251221_nova_embeddings.md
+- docs/20251221_nova_embeddings.md: New location for embeddings notes
+- FILE_TRACKING_IMPROVEMENTS.md: Moved to docs/FILE_TRACKING_IMPROVEMENTS.md
+- docs/FILE_TRACKING_IMPROVEMENTS.md: New location for file tracking notes
+- IMPLEMENTATION_SUMMARY.md: Moved to docs/IMPLEMENTATION_SUMMARY.md
+- docs/IMPLEMENTATION_SUMMARY.md: New location for implementation summary
+- MULTI_SELECT_TESTING.md: Moved to docs/MULTI_SELECT_TESTING.md
+- docs/MULTI_SELECT_TESTING.md: New location for multi-select testing notes
+- NOVA_PROGRESS.md: Moved to docs/NOVA_PROGRESS.md
+- docs/NOVA_PROGRESS.md: New location for Nova progress notes
+- TRANSCRIPTION_SETUP.md: Moved to docs/TRANSCRIPTION_SETUP.md
+- docs/TRANSCRIPTION_SETUP.md: New location for transcription setup guide
+- UX_IMPROVEMENTS_SUMMARY.md: Moved to docs/UX_IMPROVEMENTS_SUMMARY.md
+- docs/UX_IMPROVEMENTS_SUMMARY.md: New location for UX improvements summary
+- program_plan.md: Moved to docs/program_plan.md
+- docs/program_plan.md: New location for program plan
+- status.md: Moved to docs/status.md
+- docs/status.md: New location for status tracking
+- docs/Nova_Waterfall_Classification_Decision_Tree.md: Added waterfall classification decision tree
+- docs/Nova_Waterfall_Classification_Spec.json: Added waterfall classification output spec
+
+[Technical Details]
+- Waterfall classification prompt uses `docs/Nova_Waterfall_Classification_Decision_Tree.md` and `docs/Nova_Waterfall_Classification_Spec.json` to validate output fields and confidence values.
+
 2025-12-21 23:15:00 - Updated by Claude Code
 
 [Category: Bug Fix]
