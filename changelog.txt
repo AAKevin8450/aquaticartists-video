@@ -1,3 +1,43 @@
+2025-12-23 21:30:00 - Updated by Claude Code
+
+[Category: Enhancement]
+Add detailed token and cost statistics to Nova batch processing status window, matching transcription/proxy batch metrics display.
+
+[Purpose]
+Provide real-time visibility into Nova analysis costs during batch processing to help users monitor spending and understand token usage patterns across large batch operations.
+
+[Impact]
+- BatchJob class now tracks 4 Nova-specific metrics: total_tokens, per-file tokens, total_cost_usd, per-file costs
+- Nova batch status window displays: Total Cost, Avg Cost/File, Total Tokens, Avg Tokens/File (formatted with proper currency/number formatting)
+- Metrics calculated from nova_service results_summary (tokens_used, cost_usd) and aggregated in real-time
+- Status window UX now matches transcription/proxy windows with 4-stat detailed view
+- Frontend displays statistics only when data available (graceful handling of missing/null values)
+
+[Technical Details]
+- Backend tracks token/cost arrays for running average calculations (same pattern as transcription duration tracking)
+- Frontend reuses existing batchDetailedStats div with dynamic label switching based on action_type
+- Cost values rounded to 2 decimal places, token counts formatted with locale-based thousands separators
+- No database schema changes required (metrics calculated from existing nova_jobs data)
+
+[Files Modified]
+- app/routes/file_management.py:46-52 (BatchJob class - add 4 token/cost tracking fields)
+- app/routes/file_management.py:77-85 (BatchJob.to_dict - calculate avg token/cost metrics)
+- app/routes/file_management.py:100-106 (BatchJob.to_dict - include metrics in response)
+- app/routes/file_management.py:2106-2117 (_run_batch_nova - extract and track token/cost from results)
+- app/routes/file_management.py:2126-2128 (_run_batch_nova - include token/cost in results array)
+- app/static/js/file_management.js:2519-2521 (updateBatchProgress - add nova to detailed stats condition)
+- app/static/js/file_management.js:2561-2599 (updateBatchProgress - Nova statistics display logic with formatting)
+
+[UI Changes]
+- app/templates/file_management.html:476,478 (default summary depth: detailed)
+- app/templates/file_management.html:483,484 (default language: English)
+- app/templates/file_management.html:509,514 (elements/waterfall checked by default for single Nova)
+- app/templates/file_management.html:690,692 (default summary depth: detailed for batch)
+- app/templates/file_management.html:695,696 (default language: English for batch)
+- app/templates/file_management.html:721,726 (elements/waterfall checked by default for batch Nova)
+
+---
+
 2025-12-22 22:51:54 - Updated by Claude Code
 
 [Category: Enhancement]

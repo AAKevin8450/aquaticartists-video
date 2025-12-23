@@ -46,6 +46,10 @@ class BatchJob:
         self.total_batch_size = 0  # Total size of all files in batch (bytes)
         self.processed_files_sizes = []  # Sizes of processed files (bytes)
         self.total_proxy_size = 0  # Total size of all generated proxy files (bytes) - for proxy action only
+        self.total_tokens = 0  # Total tokens processed (Nova only)
+        self.processed_files_tokens = []  # Tokens for each processed file (Nova only)
+        self.total_cost_usd = 0.0  # Total cost in USD (Nova only)
+        self.processed_files_costs = []  # Cost for each processed file (Nova only)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON response."""
@@ -70,6 +74,16 @@ class BatchJob:
             remaining_files = self.total_files - processed_count
             time_remaining = avg_time_per_file * remaining_files
 
+        # Calculate Nova token metrics
+        avg_tokens_per_file = None
+        if len(self.processed_files_tokens) > 0:
+            avg_tokens_per_file = sum(self.processed_files_tokens) / len(self.processed_files_tokens)
+
+        # Calculate Nova cost metrics
+        avg_cost_per_file = None
+        if len(self.processed_files_costs) > 0:
+            avg_cost_per_file = sum(self.processed_files_costs) / len(self.processed_files_costs)
+
         return {
             'job_id': self.job_id,
             'action_type': self.action_type,
@@ -86,6 +100,10 @@ class BatchJob:
             'time_remaining_seconds': round(time_remaining, 1) if time_remaining is not None else None,
             'avg_video_size_total': avg_video_size_total,
             'avg_video_size_processed': avg_video_size_processed,
+            'total_tokens': self.total_tokens,
+            'avg_tokens_per_file': round(avg_tokens_per_file, 1) if avg_tokens_per_file is not None else None,
+            'total_cost_usd': round(self.total_cost_usd, 2) if self.total_cost_usd is not None else None,
+            'avg_cost_per_file': round(avg_cost_per_file, 2) if avg_cost_per_file is not None else None,
             'errors': self.errors,
             'results': self.results
         }
@@ -2085,6 +2103,19 @@ def _run_batch_nova(app, job: BatchJob):
                             (file_id, analysis_job_id)
                         )
 
+                # Track token usage and cost for Nova jobs
+                results_summary = payload.get('results_summary', {})
+                tokens_used = results_summary.get('tokens_used', 0)
+                cost_usd = results_summary.get('cost_usd', 0.0)
+
+                if tokens_used > 0:
+                    job.total_tokens += tokens_used
+                    job.processed_files_tokens.append(tokens_used)
+
+                if cost_usd > 0:
+                    job.total_cost_usd += cost_usd
+                    job.processed_files_costs.append(cost_usd)
+
                 job.completed_files += 1
                 job.results.append({
                     'file_id': file_id,
@@ -2092,7 +2123,9 @@ def _run_batch_nova(app, job: BatchJob):
                     'success': True,
                     'nova_job_id': payload.get('nova_job_id'),
                     'analysis_job_id': analysis_job_id,
-                    'status': payload.get('status')
+                    'status': payload.get('status'),
+                    'tokens_used': tokens_used,
+                    'cost_usd': cost_usd
                 })
 
             except Exception as e:

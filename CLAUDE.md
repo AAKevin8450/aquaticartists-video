@@ -62,7 +62,10 @@ NOVA_SONIC_DEBUG=1  # Debug transcription
 
 ### Batch Operations
 - Fetch ALL filtered files across pages (500/request)
-- Real-time progress metrics (size, ETA)
+- Real-time progress metrics with action-specific statistics:
+  - **Transcription**: Avg duration, total duration, avg time/file, ETA
+  - **Proxy**: Total size, avg size, avg time/file, ETA
+  - **Nova**: Total cost, avg cost/file, total tokens, avg tokens/file
 - Nova batch requires 100+ files minimum
 
 ### Search System
