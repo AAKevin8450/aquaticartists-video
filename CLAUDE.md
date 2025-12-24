@@ -43,13 +43,14 @@ NOVA_SONIC_DEBUG=1  # Debug transcription
 | Nova Sonic | app/services/nova_transcription_service.py | Cloud transcription |
 | Nova Embeddings | app/services/nova_embeddings_service.py | Semantic search vectors (1024 dim) |
 | Face Collections | app/services/face_collection_service.py | Face management |
+| Rescan | app/services/rescan_service.py | Folder rescan and file reconciliation |
 
 ### Key Routes
 | Blueprint | File | Key Endpoints |
 |-----------|------|---------------|
 | Analysis | app/routes/analysis.py | Multi-select analysis (1-8 types) |
 | Nova | app/routes/nova_analysis.py | /api/nova/analyze, /status, /results, /models |
-| File Mgmt | app/routes/file_management.py | Batch ops (proxy, transcribe, nova, rekognition) |
+| File Mgmt | app/routes/file_management.py | Batch ops, /api/files/rescan, /api/files/rescan/apply |
 | Search | app/routes/search.py | /api/search?semantic=true, /api/search/count, /api/search/filters |
 | Transcription | app/routes/transcription.py | /api/scan, /api/start-batch, /api/batch-status |
 
@@ -68,6 +69,14 @@ NOVA_SONIC_DEBUG=1  # Debug transcription
   - **Proxy**: Total size, avg size, avg time/file, ETA
   - **Nova**: Total cost, avg cost/file, total tokens, avg tokens/file
 - Nova batch requires 100+ files minimum
+
+### Folder Rescan
+- **Smart Matching**: Fingerprint-based (filename + size + mtime) to detect moved files
+- **Path Updates**: Preserves all analysis data (proxies, transcripts, Rekognition, Nova) when updating paths
+- **Two-Step Workflow**: Scan → review changes → apply selected actions
+- **Safety Features**: Pre-selected moved files, confirmation for deletions, relationship badges
+- **Endpoints**: POST /api/files/rescan, POST /api/files/rescan/apply
+- **Reconciliation**: 4-pass algorithm (exact path → fingerprint → deleted → new files)
 
 ### Search System
 - **Keyword**: UNION query across 5 sources (files, transcripts, Rekognition, Nova, collections)

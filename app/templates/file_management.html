@@ -227,6 +227,9 @@
             <button class="btn btn-secondary" id="batchEmbeddingsBtn">
                 <i class="bi bi-vector-pen"></i> Generate Embeddings
             </button>
+            <button class="btn btn-outline-primary" id="rescanFolderBtn">
+                <i class="bi bi-arrow-repeat"></i> Rescan Folder
+            </button>
         </div>
     </div>
 </div>
@@ -989,6 +992,189 @@
                 <button type="button" class="btn btn-primary" id="importSelectFolderBtn">
                     <i class="bi bi-check-lg"></i> Select This Folder
                 </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Rescan Folder Modal -->
+<div class="modal fade" id="rescanModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="bi bi-arrow-repeat"></i> Rescan Directory
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <!-- Step 1: Directory Selection -->
+                <div id="rescanStep1">
+                    <div class="mb-3">
+                        <label for="rescanDirectoryInput" class="form-label">Directory Path</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="rescanDirectoryInput"
+                                   placeholder="Select a directory to rescan" readonly>
+                            <button class="btn btn-outline-secondary" type="button" id="rescanBrowseBtn">
+                                <i class="bi bi-folder2-open"></i> Browse
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="rescanRecursiveCheck" checked>
+                        <label class="form-check-label" for="rescanRecursiveCheck">
+                            Recursive scan (include subdirectories)
+                        </label>
+                    </div>
+                    <button class="btn btn-primary" id="rescanStartBtn">
+                        <i class="bi bi-search"></i> Scan Now
+                    </button>
+                </div>
+
+                <!-- Step 2: Results Display -->
+                <div id="rescanStep2" style="display: none;">
+                    <!-- Summary -->
+                    <div class="alert alert-info">
+                        <h6 class="mb-2">Scan Results Summary</h6>
+                        <div class="row">
+                            <div class="col-md-3">
+                                <small class="text-muted">Files on disk:</small>
+                                <strong id="rescanTotalDisk">0</strong>
+                            </div>
+                            <div class="col-md-3">
+                                <small class="text-muted">Files in database:</small>
+                                <strong id="rescanTotalDB">0</strong>
+                            </div>
+                            <div class="col-md-2">
+                                <small class="text-muted">Unchanged:</small>
+                                <strong id="rescanMatched">0</strong>
+                            </div>
+                            <div class="col-md-2">
+                                <small class="text-muted">Moved:</small>
+                                <strong id="rescanMoved" class="text-warning">0</strong>
+                            </div>
+                            <div class="col-md-2">
+                                <small class="text-muted">Deleted:</small>
+                                <strong id="rescanDeleted" class="text-danger">0</strong>
+                            </div>
+                        </div>
+                        <div class="row mt-2">
+                            <div class="col-md-3">
+                                <small class="text-muted">New files:</small>
+                                <strong id="rescanNew" class="text-success">0</strong>
+                            </div>
+                            <div class="col-md-3">
+                                <small class="text-muted">Ambiguous:</small>
+                                <strong id="rescanAmbiguous" class="text-info">0</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Moved Files -->
+                    <div id="rescanMovedSection" style="display: none;">
+                        <div class="card mb-3">
+                            <div class="card-header bg-warning bg-opacity-10">
+                                <h6 class="mb-0">
+                                    <i class="bi bi-arrow-right-circle"></i> Moved Files
+                                    <span class="badge bg-warning" id="rescanMovedBadge">0</span>
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <p class="text-muted small">
+                                    These files were found at different paths but matched by fingerprint.
+                                    Updating their paths will preserve all analysis data.
+                                </p>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="rescanSelectAllMoved">
+                                    <label class="form-check-label" for="rescanSelectAllMoved">
+                                        Select all
+                                    </label>
+                                </div>
+                                <div id="rescanMovedList" class="list-group"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Deleted Files -->
+                    <div id="rescanDeletedSection" style="display: none;">
+                        <div class="card mb-3">
+                            <div class="card-header bg-danger bg-opacity-10">
+                                <h6 class="mb-0">
+                                    <i class="bi bi-trash"></i> Deleted from Disk
+                                    <span class="badge bg-danger" id="rescanDeletedBadge">0</span>
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <p class="text-muted small">
+                                    These files are in the database but no longer exist on disk.
+                                    <strong class="text-danger">WARNING:</strong> Removing will delete all proxies and analysis data.
+                                </p>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="rescanSelectAllDeleted">
+                                    <label class="form-check-label" for="rescanSelectAllDeleted">
+                                        Select all
+                                    </label>
+                                </div>
+                                <div id="rescanDeletedList" class="list-group"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- New Files -->
+                    <div id="rescanNewSection" style="display: none;">
+                        <div class="card mb-3">
+                            <div class="card-header bg-success bg-opacity-10">
+                                <h6 class="mb-0">
+                                    <i class="bi bi-file-plus"></i> New Files
+                                    <span class="badge bg-success" id="rescanNewBadge">0</span>
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <p class="text-muted small">
+                                    These files are on disk but not in the database.
+                                    Use the "Import Directory" feature to add them.
+                                </p>
+                                <div id="rescanNewList" class="list-group"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Ambiguous Files -->
+                    <div id="rescanAmbiguousSection" style="display: none;">
+                        <div class="card mb-3">
+                            <div class="card-header bg-info bg-opacity-10">
+                                <h6 class="mb-0">
+                                    <i class="bi bi-question-circle"></i> Ambiguous Matches
+                                    <span class="badge bg-info" id="rescanAmbiguousBadge">0</span>
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <p class="text-muted small">
+                                    These files have multiple possible matches. Review manually.
+                                </p>
+                                <div id="rescanAmbiguousList" class="list-group"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons -->
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-primary" id="rescanApplyBtn">
+                            <i class="bi bi-check-lg"></i> Apply Selected Changes
+                        </button>
+                        <button class="btn btn-secondary" id="rescanBackBtn">
+                            <i class="bi bi-arrow-left"></i> Back
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Loading Indicator -->
+                <div id="rescanLoading" style="display: none;" class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2 text-muted">Scanning directory...</p>
+                </div>
             </div>
         </div>
     </div>
