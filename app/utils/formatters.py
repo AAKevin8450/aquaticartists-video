@@ -98,8 +98,10 @@ def format_file_size(size_bytes: int) -> str:
         return f"{size_bytes / 1024:.1f} KB"
     elif size_bytes < 1024 * 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
+    elif size_bytes < 1024 * 1024 * 1024 * 1000:
         return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024 * 1024):.2f} TB"
 
 
 def format_confidence(confidence: float) -> str:

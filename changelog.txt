@@ -1,3 +1,75 @@
+2025-12-24 15:24:00 - Updated by Claude Code
+
+[Category: Feature]
+Add folder rescan feature to detect and handle moved/renamed folders, deleted files, and new files while preserving analysis data.
+
+[Purpose]
+Enable users to synchronize database records with filesystem changes when source folders are renamed or reorganized, using smart fingerprint matching (filename + size + mtime) to preserve all existing analysis data (proxies, transcripts, Rekognition jobs, Nova jobs) during path updates.
+
+[Impact]
+- Database records automatically updated when files are moved to new folders without losing analysis data
+- Orphaned records cleanly removed when source files are permanently deleted
+- New files discovered and ready for import without manual rescanning
+- Two-step workflow (scan → review → apply) with safety features: pre-selected moved files, confirmation for deletions, relationship badges
+- Smart fingerprint matching detects moved files with high accuracy while avoiding ambiguous matches
+- UI shows impact of changes before applying with detailed relationship information (proxy, analysis, transcripts)
+
+[Technical Details]
+- RescanService implements 4-pass reconciliation: exact path matches → fingerprint matches → deleted files → new files
+- Fingerprint: f"{filename}|{size_bytes}|{int(mtime)}" enables matching moved files without expensive hashing
+- Database operations preserve foreign key relationships and CASCADE DELETE behavior
+- Frontend implements two-step modal workflow with Bootstrap collapse sections for moved/deleted/new files
+- Rescan button integrated into File Management action bar with comprehensive modal UI
+- Support for ambiguous match handling (skip/delete/first_match) when multiple candidates found
+
+[Files Modified]
+- app/database.py:741-821 (5 new methods: get_files_by_source_directory, get_file_by_fingerprint, update_file_local_path_and_metadata, get_all_local_files, bulk_delete_files_by_ids)
+- app/services/rescan_service.py:1-391 (NEW - RescanService class with scan_directory, get_database_files_for_directory, reconcile, apply_changes methods)
+- app/routes/file_management.py:1796-1997 (2 new endpoints: POST /api/files/rescan, POST /api/files/rescan/apply)
+- app/templates/file_management.html:230-232 (add Rescan Folder button to action bar)
+- app/templates/file_management.html:1000-1185 (add rescan modal with 2-step workflow UI)
+- app/static/js/file_management.js:94-107 (rescan button event listeners)
+- app/static/js/file_management.js:2851-3123 (rescan functions: openRescanModal, performRescan, renderRescanResults, applyRescanChanges)
+- app/utils/formatters.py:65 (add PB/TB support to formatFileSize)
+
+[Database Methods Added]
+- get_files_by_source_directory(directory_path): Query files by source_directory metadata (LIKE pattern matching)
+- get_file_by_fingerprint(filename, size_bytes, mtime, tolerance=2): Find file by fingerprint with mtime tolerance
+- update_file_local_path_and_metadata(file_id, new_path, new_source_dir): Update paths while preserving relationships
+- get_all_local_files(): Return all files with local_path set (imported files only)
+- bulk_delete_files_by_ids(file_ids): Batch delete with CASCADE to related tables
+
+[RescanService Methods]
+- get_file_fingerprint(filename, size, mtime): Static method for fingerprint generation
+- scan_directory(directory_path, recursive=True): Discover all video/image files with metadata
+- get_database_files_for_directory(directory_path): Load DB files with relationship stats
+- reconcile(directory_path, mode='smart'): Main logic - returns matched/moved/deleted/new/ambiguous categorization
+- apply_changes(reconcile_results, options): Execute path updates, deletions, imports based on user selection
+
+[API Endpoints]
+- POST /api/files/rescan: Scan directory and return detected changes with summary/details
+- POST /api/files/rescan/apply: Apply selected changes (update moved, delete missing, import new)
+
+[UI Components]
+- Rescan Modal Step 1: Directory input with browse button and recursive scan checkbox
+- Rescan Modal Step 2: Results display with summary metrics and expandable sections
+- Moved Files Section: Checkboxes, old/new path display, relationship badges (proxy/analysis/transcripts)
+- Deleted Files Section: Checkboxes with warning about data loss
+- New Files Section: List of discovered files with sizes
+- Apply/Cancel buttons with confirmation logic
+
+[Safety Features]
+- Moved files pre-selected by default (preserves data)
+- Deleted files require explicit confirmation
+- Relationship badges show what data will be preserved/lost
+- Summary shows totals before applying changes
+- Back button allows re-scanning without losing results
+
+[Removed/Deprecated]
+- file_updates.md (implementation plan - no longer needed)
+
+---
+
 2025-12-23 17:29:05 - Updated by Claude Code
 
 [Category: UI Enhancement]

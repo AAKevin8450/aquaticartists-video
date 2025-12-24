@@ -1793,6 +1793,205 @@ def cancel_batch_job(job_id: str):
         return jsonify({'error': str(e)}), 500
 
 
+@bp.route('/api/files/rescan', methods=['POST'])
+def rescan_directory():
+    """
+    Rescan a directory and return detected changes.
+
+    Request body:
+    {
+        "directory_path": "/path/to/scan",
+        "recursive": true
+    }
+
+    Response:
+    {
+        "success": true,
+        "summary": {
+            "total_on_disk": 150,
+            "total_in_database": 145,
+            "matched": 140,
+            "moved": 3,
+            "deleted": 2,
+            "new": 7,
+            "ambiguous": 0
+        },
+        "details": {
+            "moved": [...],
+            "deleted": [...],
+            "new": [...],
+            "ambiguous": [...]
+        }
+    }
+    """
+    try:
+        from app.services.rescan_service import RescanService
+
+        data = request.get_json()
+        directory_path = data.get('directory_path')
+        recursive = data.get('recursive', True)
+
+        if not directory_path:
+            return jsonify({'error': 'directory_path is required'}), 400
+
+        # Validate directory exists
+        from pathlib import Path
+        dir_path = Path(directory_path)
+        if not dir_path.exists():
+            return jsonify({'error': 'Directory does not exist'}), 400
+        if not dir_path.is_dir():
+            return jsonify({'error': 'Path is not a directory'}), 400
+
+        # Create rescan service and perform reconciliation
+        db = get_db()
+        rescan_service = RescanService(db)
+        results = rescan_service.reconcile(directory_path, mode='smart')
+
+        # Build summary
+        summary = {
+            'total_on_disk': len(rescan_service.scan_directory(directory_path, recursive)),
+            'total_in_database': len(rescan_service.get_database_files_for_directory(directory_path)),
+            'matched': len(results['matched']),
+            'moved': len(results['moved']),
+            'deleted': len(results['deleted']),
+            'new': len(results['new']),
+            'ambiguous': len(results['ambiguous'])
+        }
+
+        # Build details
+        details = {
+            'moved': [
+                {
+                    'id': db_file['id'],
+                    'old_path': db_file['local_path'],
+                    'new_path': disk_file['path'],
+                    'filename': db_file['filename'],
+                    'size_bytes': db_file['size_bytes'],
+                    'has_proxy': db_file['has_proxy'],
+                    'has_analysis': db_file['has_analysis'],
+                    'has_transcripts': db_file['has_transcripts']
+                }
+                for db_file, disk_file in results['moved']
+            ],
+            'deleted': [
+                {
+                    'id': db_file['id'],
+                    'path': db_file['local_path'],
+                    'filename': db_file['filename'],
+                    'size_bytes': db_file['size_bytes'],
+                    'has_proxy': db_file['has_proxy'],
+                    'has_analysis': db_file['has_analysis'],
+                    'has_transcripts': db_file['has_transcripts']
+                }
+                for db_file in results['deleted']
+            ],
+            'new': [
+                {
+                    'path': disk_file['path'],
+                    'filename': disk_file['filename'],
+                    'size_bytes': disk_file['size_bytes']
+                }
+                for disk_file in results['new']
+            ],
+            'ambiguous': [
+                {
+                    'id': db_file['id'],
+                    'old_path': db_file['local_path'],
+                    'candidates': [
+                        {
+                            'path': candidate['path'],
+                            'size_bytes': candidate['size_bytes']
+                        }
+                        for candidate in candidates
+                    ]
+                }
+                for db_file, candidates in results['ambiguous']
+            ]
+        }
+
+        return jsonify({
+            'success': True,
+            'summary': summary,
+            'details': details
+        }), 200
+
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        current_app.logger.error(f"Rescan error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/api/files/rescan/apply', methods=['POST'])
+def apply_rescan_changes():
+    """
+    Apply changes detected by rescan.
+
+    Request body:
+    {
+        "directory_path": "/path/to/scan",
+        "actions": {
+            "update_moved": true,
+            "delete_missing": true,
+            "import_new": false,
+            "handle_ambiguous": "skip"
+        },
+        "selected_files": {
+            "moved": [1, 3, 5],       // File IDs to update
+            "deleted": [2],            // File IDs to delete
+            "new": ["/path/to/new.mp4"] // Paths to import
+        }
+    }
+
+    Response:
+    {
+        "success": true,
+        "results": {
+            "updated": 3,
+            "deleted": 1,
+            "imported": 0,
+            "skipped": 0,
+            "errors": []
+        }
+    }
+    """
+    try:
+        from app.services.rescan_service import RescanService
+
+        data = request.get_json()
+        directory_path = data.get('directory_path')
+        actions = data.get('actions', {})
+        selected_files = data.get('selected_files', {})
+
+        if not directory_path:
+            return jsonify({'error': 'directory_path is required'}), 400
+
+        # Create rescan service and perform reconciliation
+        db = get_db()
+        rescan_service = RescanService(db)
+        reconcile_results = rescan_service.reconcile(directory_path, mode='smart')
+
+        # Apply changes
+        options = {
+            'update_moved': actions.get('update_moved', True),
+            'delete_missing': actions.get('delete_missing', False),
+            'import_new': actions.get('import_new', False),
+            'handle_ambiguous': actions.get('handle_ambiguous', 'skip'),
+            'selected_files': selected_files
+        }
+
+        results = rescan_service.apply_changes(reconcile_results, options)
+
+        return jsonify({
+            'success': True,
+            'results': results
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Apply rescan error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 # ============================================================================
 # BATCH PROCESSING WORKERS
 # ============================================================================

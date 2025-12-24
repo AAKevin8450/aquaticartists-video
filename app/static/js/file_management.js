@@ -91,6 +91,22 @@ function initializeEventListeners() {
     document.getElementById('batchRekognitionBtn').addEventListener('click', () => startBatchAction('rekognition'));
     document.getElementById('batchEmbeddingsBtn').addEventListener('click', () => startBatchAction('embeddings'));
 
+    // Rescan folder button
+    document.getElementById('rescanFolderBtn').addEventListener('click', openRescanModal);
+    document.getElementById('rescanBrowseBtn').addEventListener('click', openRescanFolderBrowser);
+    document.getElementById('rescanStartBtn').addEventListener('click', performRescan);
+    document.getElementById('rescanBackBtn').addEventListener('click', () => {
+        document.getElementById('rescanStep2').style.display = 'none';
+        document.getElementById('rescanStep1').style.display = 'block';
+    });
+    document.getElementById('rescanApplyBtn').addEventListener('click', applyRescanChanges);
+    document.getElementById('rescanSelectAllMoved').addEventListener('change', (e) => {
+        document.querySelectorAll('.rescan-moved-checkbox').forEach(cb => cb.checked = e.target.checked);
+    });
+    document.getElementById('rescanSelectAllDeleted').addEventListener('change', (e) => {
+        document.querySelectorAll('.rescan-deleted-checkbox').forEach(cb => cb.checked = e.target.checked);
+    });
+
     // S3 files section (lazy load)
     const s3FilesCollapse = document.getElementById('s3FilesCollapse');
     s3FilesCollapse.addEventListener('show.bs.collapse', () => {
@@ -1557,7 +1573,10 @@ function renderS3Files(files) {
     const countBadge = document.getElementById('s3FilesCountBadge');
 
     if (countBadge) {
-        countBadge.textContent = `${files.length} file${files.length !== 1 ? 's' : ''}`;
+        // Calculate total size
+        const totalSize = files.reduce((sum, file) => sum + (file.size_bytes || 0), 0);
+        const totalSizeFormatted = formatFileSize(totalSize);
+        countBadge.textContent = `${files.length} file${files.length !== 1 ? 's' : ''} (${totalSizeFormatted})`;
     }
 
     if (files.length === 0) {
@@ -1752,7 +1771,7 @@ function escapeHtml(unsafe) {
 function formatFileSize(bytes) {
     if (bytes === 0 || !bytes) return '0 B';
     const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
 }
@@ -2826,5 +2845,279 @@ async function findAndShowFileByNovaId(novaId) {
     } catch (error) {
         console.error('Failed to find file by Nova ID:', error);
         showAlert(`Failed to open Nova analysis: ${error.message}`, 'danger');
+    }
+}
+
+// ============================================================================
+// RESCAN FOLDER FUNCTIONALITY
+// ============================================================================
+
+let rescanResults = null;
+
+function openRescanModal() {
+    const modal = new bootstrap.Modal(document.getElementById('rescanModal'));
+
+    // Reset to step 1
+    document.getElementById('rescanStep1').style.display = 'block';
+    document.getElementById('rescanStep2').style.display = 'none';
+    document.getElementById('rescanLoading').style.display = 'none';
+
+    // Clear previous results
+    document.getElementById('rescanDirectoryInput').value = '';
+    rescanResults = null;
+
+    modal.show();
+}
+
+function openRescanFolderBrowser() {
+    showAlert('Folder browser integration needed - please enter the path manually', 'info');
+}
+
+async function performRescan() {
+    const directoryPath = document.getElementById('rescanDirectoryInput').value.trim();
+    const recursive = document.getElementById('rescanRecursiveCheck').checked;
+
+    if (!directoryPath) {
+        showAlert('Please select a directory to rescan', 'warning');
+        return;
+    }
+
+    // Show loading
+    document.getElementById('rescanStep1').style.display = 'none';
+    document.getElementById('rescanLoading').style.display = 'block';
+
+    try {
+        const response = await fetch('/api/files/rescan', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                directory_path: directoryPath,
+                recursive: recursive
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to scan directory');
+        }
+
+        const data = await response.json();
+        rescanResults = data;
+
+        // Hide loading, show results
+        document.getElementById('rescanLoading').style.display = 'none';
+        renderRescanResults(data);
+        document.getElementById('rescanStep2').style.display = 'block';
+
+    } catch (error) {
+        console.error('Rescan error:', error);
+        showAlert(`Failed to scan directory: ${error.message}`, 'danger');
+
+        // Go back to step 1
+        document.getElementById('rescanLoading').style.display = 'none';
+        document.getElementById('rescanStep1').style.display = 'block';
+    }
+}
+
+function renderRescanResults(data) {
+    const summary = data.summary;
+    const details = data.details;
+
+    // Update summary
+    document.getElementById('rescanTotalDisk').textContent = summary.total_on_disk;
+    document.getElementById('rescanTotalDB').textContent = summary.total_in_database;
+    document.getElementById('rescanMatched').textContent = summary.matched;
+    document.getElementById('rescanMoved').textContent = summary.moved;
+    document.getElementById('rescanDeleted').textContent = summary.deleted;
+    document.getElementById('rescanNew').textContent = summary.new;
+    document.getElementById('rescanAmbiguous').textContent = summary.ambiguous;
+
+    // Render moved files
+    const movedSection = document.getElementById('rescanMovedSection');
+    const movedList = document.getElementById('rescanMovedList');
+    const movedBadge = document.getElementById('rescanMovedBadge');
+
+    if (details.moved.length > 0) {
+        movedSection.style.display = 'block';
+        movedBadge.textContent = details.moved.length;
+        movedList.innerHTML = details.moved.map(file => `
+            <div class="list-group-item">
+                <div class="form-check">
+                    <input class="form-check-input rescan-moved-checkbox" type="checkbox"
+                           value="${file.id}" id="moved-${file.id}" checked>
+                    <label class="form-check-label w-100" for="moved-${file.id}">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="flex-grow-1">
+                                <strong>${file.filename}</strong>
+                                <div class="small text-muted">
+                                    <div><strong>Old:</strong> ${file.old_path}</div>
+                                    <div><strong>New:</strong> ${file.new_path}</div>
+                                </div>
+                                <div class="mt-1">
+                                    ${file.has_proxy ? '<span class="badge bg-secondary me-1">Proxy</span>' : ''}
+                                    ${file.has_analysis ? '<span class="badge bg-info me-1">Analysis</span>' : ''}
+                                    ${file.has_transcripts ? '<span class="badge bg-success me-1">Transcript</span>' : ''}
+                                </div>
+                            </div>
+                            <span class="badge bg-light text-dark">${formatFileSize(file.size_bytes)}</span>
+                        </div>
+                    </label>
+                </div>
+            </div>
+        `).join('');
+    } else {
+        movedSection.style.display = 'none';
+    }
+
+    // Render deleted files
+    const deletedSection = document.getElementById('rescanDeletedSection');
+    const deletedList = document.getElementById('rescanDeletedList');
+    const deletedBadge = document.getElementById('rescanDeletedBadge');
+
+    if (details.deleted.length > 0) {
+        deletedSection.style.display = 'block';
+        deletedBadge.textContent = details.deleted.length;
+        deletedList.innerHTML = details.deleted.map(file => `
+            <div class="list-group-item">
+                <div class="form-check">
+                    <input class="form-check-input rescan-deleted-checkbox" type="checkbox"
+                           value="${file.id}" id="deleted-${file.id}">
+                    <label class="form-check-label w-100" for="deleted-${file.id}">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="flex-grow-1">
+                                <strong>${file.filename}</strong>
+                                <div class="small text-muted">${file.path}</div>
+                                <div class="mt-1">
+                                    ${file.has_proxy ? '<span class="badge bg-secondary me-1">Proxy</span>' : ''}
+                                    ${file.has_analysis ? '<span class="badge bg-info me-1">Analysis</span>' : ''}
+                                    ${file.has_transcripts ? '<span class="badge bg-success me-1">Transcript</span>' : ''}
+                                </div>
+                            </div>
+                            <span class="badge bg-light text-dark">${formatFileSize(file.size_bytes)}</span>
+                        </div>
+                    </label>
+                </div>
+            </div>
+        `).join('');
+    } else {
+        deletedSection.style.display = 'none';
+    }
+
+    // Render new files
+    const newSection = document.getElementById('rescanNewSection');
+    const newList = document.getElementById('rescanNewList');
+    const newBadge = document.getElementById('rescanNewBadge');
+
+    if (details.new.length > 0) {
+        newSection.style.display = 'block';
+        newBadge.textContent = details.new.length;
+        newList.innerHTML = details.new.map(file => `
+            <div class="list-group-item">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div class="flex-grow-1">
+                        <strong>${file.filename}</strong>
+                        <div class="small text-muted">${file.path}</div>
+                    </div>
+                    <span class="badge bg-light text-dark">${formatFileSize(file.size_bytes)}</span>
+                </div>
+            </div>
+        `).join('');
+    } else {
+        newSection.style.display = 'none';
+    }
+
+    // Render ambiguous files
+    const ambiguousSection = document.getElementById('rescanAmbiguousSection');
+    const ambiguousList = document.getElementById('rescanAmbiguousList');
+    const ambiguousBadge = document.getElementById('rescanAmbiguousBadge');
+
+    if (details.ambiguous.length > 0) {
+        ambiguousSection.style.display = 'block';
+        ambiguousBadge.textContent = details.ambiguous.length;
+        ambiguousList.innerHTML = details.ambiguous.map(item => `
+            <div class="list-group-item">
+                <div><strong>Database file:</strong> ${item.old_path}</div>
+                <div class="small text-muted mt-2"><strong>Possible matches:</strong></div>
+                <ul class="small">
+                    ${item.candidates.map(c => `<li>${c.path} (${formatFileSize(c.size_bytes)})</li>`).join('')}
+                </ul>
+            </div>
+        `).join('');
+    } else {
+        ambiguousSection.style.display = 'none';
+    }
+}
+
+async function applyRescanChanges() {
+    if (!rescanResults) {
+        showAlert('No rescan results available', 'warning');
+        return;
+    }
+
+    const directoryPath = document.getElementById('rescanDirectoryInput').value.trim();
+
+    // Collect selected files
+    const selectedMoved = Array.from(document.querySelectorAll('.rescan-moved-checkbox:checked'))
+        .map(cb => parseInt(cb.value));
+    const selectedDeleted = Array.from(document.querySelectorAll('.rescan-deleted-checkbox:checked'))
+        .map(cb => parseInt(cb.value));
+
+    if (selectedMoved.length === 0 && selectedDeleted.length === 0) {
+        showAlert('No changes selected to apply', 'warning');
+        return;
+    }
+
+    // Confirm deletion if any files selected for deletion
+    if (selectedDeleted.length > 0) {
+        if (!confirm(`You are about to delete ${selectedDeleted.length} file(s) from the database. This will also delete any associated proxies and analysis data. Continue?`)) {
+            return;
+        }
+    }
+
+    try {
+        const response = await fetch('/api/files/rescan/apply', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                directory_path: directoryPath,
+                actions: {
+                    update_moved: true,
+                    delete_missing: true,
+                    import_new: false,
+                    handle_ambiguous: 'skip'
+                },
+                selected_files: {
+                    moved: selectedMoved,
+                    deleted: selectedDeleted,
+                    new: []
+                }
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to apply changes');
+        }
+
+        const data = await response.json();
+        const results = data.results;
+
+        showAlert(
+            `Successfully applied changes: ${results.updated} updated, ${results.deleted} deleted` +
+            (results.errors.length > 0 ? `, ${results.errors.length} errors` : ''),
+            results.errors.length > 0 ? 'warning' : 'success'
+        );
+
+        // Close modal and refresh file list
+        bootstrap.Modal.getInstance(document.getElementById('rescanModal')).hide();
+        loadFiles();
+
+    } catch (error) {
+        console.error('Apply rescan error:', error);
+        showAlert(`Failed to apply changes: ${error.message}`, 'danger');
     }
 }

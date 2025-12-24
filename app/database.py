@@ -738,6 +738,86 @@ class Database:
             'errors': errors
         }
 
+    def get_files_by_source_directory(self, directory_path: str) -> List[Dict[str, Any]]:
+        """Get all files that were imported from a specific directory (including subdirs)."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM files
+                WHERE local_path IS NOT NULL
+                AND json_extract(metadata, '$.source_directory') LIKE ?
+            ''', (f"{directory_path}%",))
+            files = [dict(row) for row in cursor.fetchall()]
+            for file in files:
+                if 'metadata' in file:
+                    file['metadata'] = self._parse_json_field(file['metadata'], default={})
+            return files
+
+    def get_file_by_fingerprint(self, filename: str, size_bytes: int, mtime: float,
+                                mtime_tolerance: int = 2) -> Optional[Dict[str, Any]]:
+        """Find file by fingerprint (name + size + approx mtime)."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM files
+                WHERE filename = ?
+                AND size_bytes = ?
+                AND ABS(CAST(json_extract(metadata, '$.file_mtime') AS REAL) - ?) < ?
+                AND local_path IS NOT NULL
+                LIMIT 1
+            ''', (filename, size_bytes, mtime, mtime_tolerance))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            file = dict(row)
+            if 'metadata' in file:
+                file['metadata'] = self._parse_json_field(file['metadata'], default={})
+            return file
+
+    def update_file_local_path_and_metadata(self, file_id: int, new_local_path: str,
+                                            new_source_directory: str) -> bool:
+        """Update file path and source directory without touching related records."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            # Get current metadata
+            cursor.execute('SELECT metadata FROM files WHERE id = ?', (file_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+
+            metadata = self._parse_json_field(row['metadata'], default={})
+            metadata['source_directory'] = new_source_directory
+
+            # Update both local_path and metadata
+            cursor.execute('''
+                UPDATE files
+                SET local_path = ?, metadata = ?
+                WHERE id = ?
+            ''', (new_local_path, json.dumps(metadata), file_id))
+            return cursor.rowcount > 0
+
+    def get_all_local_files(self) -> List[Dict[str, Any]]:
+        """Get all files with local_path set (imported files only)."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM files WHERE local_path IS NOT NULL')
+            files = [dict(row) for row in cursor.fetchall()]
+            for file in files:
+                if 'metadata' in file:
+                    file['metadata'] = self._parse_json_field(file['metadata'], default={})
+            return files
+
+    def bulk_delete_files_by_ids(self, file_ids: List[int]) -> int:
+        """Delete multiple files by ID (cascades to related tables)."""
+        if not file_ids:
+            return 0
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            placeholders = ','.join('?' * len(file_ids))
+            cursor.execute(f'DELETE FROM files WHERE id IN ({placeholders})', file_ids)
+            return cursor.rowcount
+
     def list_source_files_with_stats(
         self,
         file_type: Optional[str] = None,
