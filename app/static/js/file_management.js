@@ -87,6 +87,7 @@ function initializeEventListeners() {
     // Batch action buttons
     document.getElementById('batchProxyBtn').addEventListener('click', () => startBatchAction('proxy'));
     document.getElementById('batchTranscribeBtn').addEventListener('click', () => startBatchAction('transcribe'));
+    document.getElementById('batchTranscriptSummaryBtn').addEventListener('click', () => startBatchAction('transcript-summary'));
     document.getElementById('batchNovaBtn').addEventListener('click', () => startBatchAction('nova'));
     document.getElementById('batchRekognitionBtn').addEventListener('click', () => startBatchAction('rekognition'));
     document.getElementById('batchEmbeddingsBtn').addEventListener('click', () => startBatchAction('embeddings'));
@@ -2011,6 +2012,7 @@ async function getBatchOptions(actionType) {
         const descriptions = {
             proxy: 'Generate 720p/15fps proxies for all eligible videos in the current view.',
             transcribe: 'Configure Whisper transcription settings for the current file set.',
+            'transcript-summary': 'Generate Nova transcript summaries for files with completed transcripts.',
             nova: 'Choose Nova model and analysis types for proxy-backed videos.',
             rekognition: 'Select Rekognition analysis types and target files.',
             embeddings: 'Generate Nova Embeddings for transcripts and analysis results.'
@@ -2034,6 +2036,7 @@ async function getBatchOptions(actionType) {
             const labels = {
                 proxy: 'Start Proxy Batch',
                 transcribe: 'Start Transcription Batch',
+                'transcript-summary': 'Start Transcript Summary Batch',
                 nova: 'Start Nova Batch',
                 rekognition: 'Start Rekognition Batch',
                 embeddings: 'Start Embeddings Batch'
@@ -2048,6 +2051,7 @@ async function getBatchOptions(actionType) {
         if (actionType === 'nova') {
             loadNovaModels();
             updateNovaBatchModeAvailability(getCurrentFileTotal());
+            updateNovaCombinedState('batch');
         }
 
         batchOptionsModal.show();
@@ -2057,6 +2061,8 @@ async function getBatchOptions(actionType) {
 function initializeBatchOptionsModal() {
     const modalEl = document.getElementById('batchOptionsModal');
     if (!modalEl) return;
+
+    setupNovaCombinedToggle('batch');
 
     const confirmBtn = document.getElementById('batchOptionsConfirmBtn');
     if (confirmBtn) {
@@ -2127,6 +2133,12 @@ function buildBatchOptions(actionType) {
                 force: force,
                 device: device,
                 compute_type: computeType
+            };
+        }
+        case 'transcript-summary': {
+            const force = !!document.getElementById('batchTranscriptSummaryForce')?.checked;
+            return {
+                force: force
             };
         }
         case 'nova': {
@@ -2242,6 +2254,8 @@ function initializeSingleOptionsModal() {
     const modalEl = document.getElementById('singleOptionsModal');
     if (!modalEl) return;
 
+    setupNovaCombinedToggle('single');
+
     const confirmBtn = document.getElementById('singleOptionsConfirmBtn');
     if (confirmBtn) {
         confirmBtn.addEventListener('click', () => {
@@ -2308,10 +2322,13 @@ function setSingleDefaults(actionType) {
         const chapters = document.getElementById('singleNovaChapters');
         const elements = document.getElementById('singleNovaElements');
         const waterfall = document.getElementById('singleNovaWaterfall');
+        const combined = document.getElementById('singleNovaCombined');
         if (summary) summary.checked = true;
         if (chapters) chapters.checked = true;
         if (elements) elements.checked = false;
         if (waterfall) waterfall.checked = false;
+        if (combined) combined.checked = false;
+        updateNovaCombinedState('single');
         return;
     }
 
@@ -2412,6 +2429,41 @@ function showBatchOptionsError(message) {
     errorEl.classList.remove('d-none');
 }
 
+function setupNovaCombinedToggle(prefix) {
+    const combined = document.getElementById(`${prefix}NovaCombined`);
+    const inputs = Array.from(document.querySelectorAll(`.${prefix}-nova-type`));
+    if (!combined || inputs.length === 0) return;
+
+    inputs.forEach(input => {
+        input.addEventListener('change', () => {
+            if (input.value !== 'combined' && input.checked) {
+                combined.checked = false;
+            }
+            updateNovaCombinedState(prefix);
+        });
+    });
+
+    updateNovaCombinedState(prefix);
+}
+
+function updateNovaCombinedState(prefix) {
+    const combined = document.getElementById(`${prefix}NovaCombined`);
+    if (!combined) return;
+    const inputs = Array.from(document.querySelectorAll(`.${prefix}-nova-type`));
+    const others = inputs.filter(input => input.value !== 'combined');
+
+    if (combined.checked) {
+        others.forEach(input => {
+            input.checked = false;
+            input.disabled = true;
+        });
+    } else {
+        others.forEach(input => {
+            input.disabled = false;
+        });
+    }
+}
+
 async function loadNovaModels() {
     if (novaModelsLoaded) return;
     const modelSelects = [
@@ -2460,6 +2512,7 @@ function showBatchProgressModal(actionType, totalFiles) {
     const titles = {
         'proxy': 'Generating Proxy Videos',
         'transcribe': 'Transcribing Videos',
+        'transcript-summary': 'Generating Transcript Summaries',
         'nova': 'Running Nova Analysis',
         'rekognition': 'Running Rekognition Analysis'
     };
@@ -2538,7 +2591,7 @@ function updateBatchProgress(data) {
 
     // Detailed statistics (for transcription, proxy, and nova jobs)
     const detailedStatsDiv = document.getElementById('batchDetailedStats');
-    if ((currentBatchActionType === 'transcribe' || currentBatchActionType === 'proxy' || currentBatchActionType === 'nova') &&
+    if ((currentBatchActionType === 'transcribe' || currentBatchActionType === 'transcript-summary' || currentBatchActionType === 'proxy' || currentBatchActionType === 'nova') &&
         (data.status === 'RUNNING' || data.status === 'COMPLETED')) {
         // Show detailed stats
         detailedStatsDiv.style.display = 'flex';

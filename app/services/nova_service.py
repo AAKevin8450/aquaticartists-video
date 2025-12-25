@@ -52,6 +52,7 @@ def handle_bedrock_errors(func):
 
 class NovaVideoService:
     """Service for AWS Nova video analysis via Amazon Bedrock."""
+    COMBINED_ANALYSIS_TYPES = ['summary', 'chapters', 'elements', 'waterfall_classification']
 
     # Model configurations with pricing and token limits
     MODEL_CONFIG = {
@@ -193,6 +194,14 @@ Decision Tree:
 Spec:
 {spec_json}
 """
+
+    def _resolve_analysis_types(self, analysis_types: Optional[List[str]]) -> Tuple[List[str], List[str], bool]:
+        """Normalize analysis types, handling the combined option."""
+        requested = analysis_types or ['summary']
+        use_combined = 'combined' in requested
+        if use_combined:
+            return ['combined'], list(self.COMBINED_ANALYSIS_TYPES), True
+        return requested, requested, False
 
     def _validate_waterfall_classification(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Validate and normalize waterfall classification output against the spec."""
@@ -445,6 +454,7 @@ Spec:
     def _build_batch_records(self, s3_key: str, analysis_types: List[str],
                              options: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Build batch records for Nova batch inference."""
+        requested_types, _, _ = self._resolve_analysis_types(analysis_types)
         s3_uri = self._build_s3_uri(s3_key)
         video_format = self._get_video_format(s3_key)
 
@@ -455,18 +465,20 @@ Spec:
             'summary': self._get_summary_prompt(depth, language),
             'chapters': self._get_chapters_prompt(),
             'elements': self._get_elements_prompt(),
-            'waterfall_classification': self._get_waterfall_classification_prompt()
+            'waterfall_classification': self._get_waterfall_classification_prompt(),
+            'combined': self._get_combined_prompt(depth, language)
         }
 
         inference_map = {
             'summary': {'maxTokens': 2048, 'temperature': 0.3, 'topP': 0.9},
             'chapters': {'maxTokens': 4096, 'temperature': 0.2, 'topP': 0.9},
             'elements': {'maxTokens': 4096, 'temperature': 0.3, 'topP': 0.9},
-            'waterfall_classification': {'maxTokens': 2048, 'temperature': 0.2, 'topP': 0.9}
+            'waterfall_classification': {'maxTokens': 2048, 'temperature': 0.2, 'topP': 0.9},
+            'combined': {'maxTokens': 4096, 'temperature': 0.2, 'topP': 0.9}
         }
 
         records = []
-        for analysis_type in analysis_types:
+        for analysis_type in requested_types:
             prompt = prompt_map.get(analysis_type)
             if not prompt:
                 continue
@@ -653,9 +665,10 @@ Spec:
                             analysis_types: List[str],
                             options: Dict[str, Any]) -> Dict[str, Any]:
         """Fetch and parse batch results from S3."""
+        requested_types, effective_types, use_combined = self._resolve_analysis_types(analysis_types)
         results = {
             'model': model,
-            'analysis_types': analysis_types,
+            'analysis_types': requested_types,
             'options': options,
             'chunked': False,
             'processing_mode': 'batch'
@@ -687,7 +700,34 @@ Spec:
             output = payload.get('modelOutput') or payload.get('output') or payload.get('response') or {}
             record_outputs[record_id] = output
 
-        if 'summary' in analysis_types and 'summary' in record_outputs:
+        if use_combined and 'combined' in record_outputs:
+            output = record_outputs['combined']
+            combined_text = self._extract_text_from_batch_output(output) or '{}'
+            usage = self._extract_usage_from_batch_output(output)
+            try:
+                parsed = self._parse_json_response(combined_text)
+            except NovaError as e:
+                logger.error(f"Failed to parse combined batch response: {e}")
+                logger.error(f"S3 prefix: {s3_prefix}")
+                parsed = {}
+
+            combined_results = self._build_combined_results(
+                payload=parsed,
+                model=model,
+                options=options,
+                usage=usage,
+                cost_usd=self._calculate_cost(model, usage['input_tokens'], usage['output_tokens'], True),
+                processing_time_seconds=0.0,
+                generated_at=datetime.utcnow().isoformat()
+            )
+
+            results.update(combined_results)
+            total_tokens += usage['total_tokens']
+            total_cost += combined_results['totals']['cost_total_usd']
+
+            return results
+
+        if 'summary' in requested_types and 'summary' in record_outputs:
             output = record_outputs['summary']
             summary_text = self._extract_text_from_batch_output(output) or ''
             usage = self._extract_usage_from_batch_output(output)
@@ -709,7 +749,7 @@ Spec:
             total_tokens += usage['total_tokens']
             total_cost += summary_result['cost_usd']
 
-        if 'chapters' in analysis_types and 'chapters' in record_outputs:
+        if 'chapters' in requested_types and 'chapters' in record_outputs:
             output = record_outputs['chapters']
             chapters_text = self._extract_text_from_batch_output(output) or '{}'
             try:
@@ -740,7 +780,7 @@ Spec:
             total_tokens += usage['total_tokens']
             total_cost += chapters_result['cost_usd']
 
-        if 'elements' in analysis_types and 'elements' in record_outputs:
+        if 'elements' in requested_types and 'elements' in record_outputs:
             output = record_outputs['elements']
             elements_text = self._extract_text_from_batch_output(output) or '{}'
             try:
@@ -790,7 +830,7 @@ Spec:
             total_tokens += usage['total_tokens']
             total_cost += elements_result['cost_usd']
 
-        if 'waterfall_classification' in analysis_types and 'waterfall_classification' in record_outputs:
+        if 'waterfall_classification' in requested_types and 'waterfall_classification' in record_outputs:
             output = record_outputs['waterfall_classification']
             classification_text = self._extract_text_from_batch_output(output) or '{}'
             try:
@@ -822,7 +862,7 @@ Spec:
             'tokens_total': total_tokens,
             'cost_total_usd': round(total_cost, 4),
             'processing_time_seconds': 0.0,
-            'analyses_completed': len([t for t in analysis_types if t in results])
+            'analyses_completed': len([t for t in requested_types if t in results])
         }
 
         if results['totals']['cost_total_usd'] == 0 and options.get('estimated_duration_seconds'):
@@ -832,7 +872,7 @@ Spec:
                 batch_mode=True
             )
             results['totals']['cost_total_usd'] = round(
-                estimate['total_cost_usd'] * len(analysis_types), 4
+                estimate['total_cost_usd'] * len(requested_types), 4
             )
 
         return results
@@ -1215,6 +1255,236 @@ Return as JSON:
 
 Do NOT include any text outside the JSON structure."""
 
+    def _get_combined_prompt(self, depth: str, language: str) -> str:
+        """Build combined analysis prompt for a single-pass output."""
+        language_note = ""
+        if language != 'auto':
+            language_note = f"Provide the summary in {language} language."
+
+        depth_guidance = {
+            'brief': "2-3 sentences, under 50 words.",
+            'standard': "1-2 paragraphs, around 150 words, include main topic, key points, takeaways.",
+            'detailed': ("3-5 paragraphs, around 400 words, include overview, main topics, key points, "
+                         "notable events, conclusions, and timestamps when relevant.")
+        }
+        summary_guidance = depth_guidance.get(depth, depth_guidance['standard'])
+
+        decision_tree, spec = self._load_waterfall_assets()
+        spec_json = json.dumps(spec, indent=2, ensure_ascii=True)
+
+        return f"""Analyze this video and return a SINGLE JSON object that includes all four analysis sections.
+
+SUMMARY REQUIREMENTS:
+- {summary_guidance}
+- {language_note or "Use the video's original language."}
+
+CHAPTERS REQUIREMENTS:
+- Title (3-8 words), start/end timecodes (MM:SS or HH:MM:SS), summary (2-3 sentences), key points (2-5).
+- Chapters should be contiguous and cover the full video without gaps when possible.
+
+ELEMENTS REQUIREMENTS:
+- Equipment: name, category, time_ranges, discussed (true/false), confidence (high/medium/low).
+- Topics: topic, time_ranges, importance (high/medium/low), description, keywords (3-8 terms).
+- People: max_count, multiple_speakers.
+- Speakers: speaker_id, role, time_ranges, speaking_percentage.
+
+WATERFALL CLASSIFICATION REQUIREMENTS:
+- Follow the sequential 4-step decision process and spec below.
+- Apply Unknown rules and include confidence, evidence, unknown_reasons.
+
+OUTPUT JSON SCHEMA (return ONLY JSON, no markdown):
+{{
+  "summary": {{
+    "text": "...",
+    "depth": "{depth}",
+    "language": "{language}"
+  }},
+  "chapters": {{
+    "chapters": [
+      {{
+        "index": 1,
+        "title": "...",
+        "start_time": "00:00",
+        "end_time": "03:00",
+        "summary": "...",
+        "key_points": ["point1", "point2"]
+      }}
+    ]
+  }},
+  "elements": {{
+    "equipment": [
+      {{
+        "name": "...",
+        "category": "...",
+        "time_ranges": ["MM:SS-MM:SS"],
+        "discussed": true,
+        "confidence": "high"
+      }}
+    ],
+    "topics_discussed": [
+      {{
+        "topic": "...",
+        "time_ranges": ["MM:SS-MM:SS"],
+        "importance": "high",
+        "description": "...",
+        "keywords": ["..."]
+      }}
+    ],
+    "people": {{
+      "max_count": 2,
+      "multiple_speakers": true
+    }},
+    "speakers": [
+      {{
+        "speaker_id": "Speaker_1",
+        "role": "...",
+        "time_ranges": ["MM:SS-MM:SS"],
+        "speaking_percentage": 65
+      }}
+    ]
+  }},
+  "waterfall_classification": {{
+    "family": "...",
+    "tier_level": "...",
+    "functional_type": "...",
+    "sub_type": "...",
+    "confidence": {{
+      "family": 0.0,
+      "tier_level": 0.0,
+      "functional_type": 0.0,
+      "sub_type": 0.0,
+      "overall": 0.0
+    }},
+    "evidence": ["..."],
+    "unknown_reasons": {{}}
+  }}
+}}
+
+Decision Tree:
+{decision_tree}
+
+Spec:
+{spec_json}
+"""
+
+    def _build_combined_results(
+        self,
+        payload: Dict[str, Any],
+        model: str,
+        options: Dict[str, Any],
+        usage: Dict[str, int],
+        cost_usd: float,
+        processing_time_seconds: float,
+        generated_at: str
+    ) -> Dict[str, Any]:
+        """Build normalized results from a combined analysis payload."""
+        summary_payload = payload.get('summary') or {}
+        if isinstance(summary_payload, str):
+            summary_text = summary_payload
+        else:
+            summary_text = summary_payload.get('text') or ''
+
+        chapters_payload = payload.get('chapters') or {}
+        if isinstance(chapters_payload, list):
+            chapters = chapters_payload
+        else:
+            chapters = chapters_payload.get('chapters', []) if isinstance(chapters_payload, dict) else []
+
+        for chapter in chapters:
+            self._enrich_chapter_data(chapter)
+
+        elements_payload = payload.get('elements') or {}
+        if not isinstance(elements_payload, dict):
+            elements_payload = {}
+
+        equipment = elements_payload.get('equipment', [])
+        topics_discussed = elements_payload.get('topics_discussed', [])
+        people = elements_payload.get('people', {'max_count': 0, 'multiple_speakers': False})
+        speakers = elements_payload.get('speakers', [])
+
+        for equip in equipment:
+            self._enrich_equipment_data(equip)
+
+        for topic in topics_discussed:
+            self._enrich_topic_data(topic)
+
+        for speaker in speakers:
+            self._enrich_speaker_data(speaker)
+
+        if speakers and not people.get('multiple_speakers'):
+            people['multiple_speakers'] = len(speakers) > 1
+
+        topics_summary = self._build_topics_summary(topics_discussed)
+
+        classification_payload = payload.get('waterfall_classification') or {}
+        classification = self._validate_waterfall_classification(
+            classification_payload if isinstance(classification_payload, dict) else {}
+        )
+
+        summary_result = {
+            'text': summary_text,
+            'depth': options.get('summary_depth', summary_payload.get('depth') or 'standard'),
+            'language': options.get('language', summary_payload.get('language') or 'auto'),
+            'word_count': len(summary_text.split()) if summary_text else 0,
+            'generated_at': generated_at,
+            'model_used': model,
+            'model_id': self.get_model_config(model)['id'],
+            'tokens_used': usage['total_tokens'],
+            'tokens_input': usage['input_tokens'],
+            'tokens_output': usage['output_tokens'],
+            'cost_usd': cost_usd,
+            'processing_time_seconds': processing_time_seconds
+        }
+
+        chapters_result = {
+            'chapters': chapters,
+            'total_chapters': len(chapters),
+            'detection_method': 'semantic_segmentation',
+            'model_used': model,
+            'model_id': self.get_model_config(model)['id'],
+            'tokens_used': 0,
+            'cost_usd': 0,
+            'processing_time_seconds': processing_time_seconds,
+            'generated_at': generated_at
+        }
+
+        elements_result = {
+            'equipment': equipment,
+            'topics_discussed': topics_discussed,
+            'topics_summary': topics_summary,
+            'people': people,
+            'speakers': speakers,
+            'model_used': model,
+            'model_id': self.get_model_config(model)['id'],
+            'tokens_used': 0,
+            'cost_usd': 0,
+            'processing_time_seconds': processing_time_seconds,
+            'generated_at': generated_at
+        }
+
+        classification_result = {
+            **classification,
+            'model_used': model,
+            'model_id': self.get_model_config(model)['id'],
+            'tokens_used': 0,
+            'cost_usd': 0,
+            'processing_time_seconds': processing_time_seconds,
+            'generated_at': generated_at
+        }
+
+        return {
+            'summary': summary_result,
+            'chapters': chapters_result,
+            'elements': elements_result,
+            'waterfall_classification': classification_result,
+            'totals': {
+                'tokens_total': usage['total_tokens'],
+                'cost_total_usd': round(cost_usd, 4),
+                'processing_time_seconds': round(processing_time_seconds, 2),
+                'analyses_completed': len(self.COMBINED_ANALYSIS_TYPES)
+            }
+        }
+
     # ============================================================================
     # ANALYSIS METHODS
     # ============================================================================
@@ -1382,6 +1652,43 @@ Do NOT include any text outside the JSON structure."""
 
         return classification_result
 
+    def analyze_combined(self, s3_key: str, model: str = 'lite',
+                         options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Run a combined Nova analysis in a single call.
+
+        Args:
+            s3_key: S3 key of the video
+            model: Nova model ('lite', 'pro', 'premier')
+            options: Dict with options like {'summary_depth': 'standard', 'language': 'auto'}
+
+        Returns:
+            Dict containing summary, chapters, elements, and waterfall classification
+        """
+        options = options or {}
+        depth = options.get('summary_depth', 'standard')
+        language = options.get('language', 'auto')
+        prompt = self._get_combined_prompt(depth, language)
+
+        response = self._invoke_nova(s3_key, model, prompt, max_tokens=4096, temperature=0.2)
+        parsed = self._parse_json_response(response['text'])
+
+        usage = {
+            'input_tokens': response['tokens_input'],
+            'output_tokens': response['tokens_output'],
+            'total_tokens': response['tokens_total']
+        }
+
+        return self._build_combined_results(
+            payload=parsed,
+            model=model,
+            options=options,
+            usage=usage,
+            cost_usd=response['cost_total_usd'],
+            processing_time_seconds=response['processing_time_seconds'],
+            generated_at=response['timestamp']
+        )
+
     def analyze_video(self, s3_key: str, model: str = 'lite',
                      analysis_types: List[str] = None,
                      options: Dict[str, Any] = None,
@@ -1400,8 +1707,7 @@ Do NOT include any text outside the JSON structure."""
         Returns:
             Dict with all requested analyses and combined metadata
         """
-        if analysis_types is None:
-            analysis_types = ['summary']
+        requested_types, effective_types, use_combined = self._resolve_analysis_types(analysis_types)
 
         if options is None:
             options = {}
@@ -1420,7 +1726,8 @@ Do NOT include any text outside the JSON structure."""
             return self.analyze_video_chunked(
                 s3_key=s3_key,
                 model=model,
-                analysis_types=analysis_types,
+                analysis_types=requested_types,
+                effective_analysis_types=effective_types,
                 options=options,
                 video_duration=video_duration,
                 progress_callback=progress_callback
@@ -1431,7 +1738,7 @@ Do NOT include any text outside the JSON structure."""
 
         results = {
             'model': model,
-            'analysis_types': analysis_types,
+            'analysis_types': requested_types,
             'options': options,
             's3_key': s3_key,
             'chunked': False,
@@ -1442,8 +1749,15 @@ Do NOT include any text outside the JSON structure."""
         total_cost = 0.0
         total_processing_time = 0.0
 
+        if use_combined:
+            combined_results = self.analyze_combined(s3_key, model, options)
+            results.update(combined_results)
+            results['analysis_types'] = requested_types
+            results['processing_mode'] = 'realtime'
+            return results
+
         # Run requested analyses
-        if 'summary' in analysis_types:
+        if 'summary' in effective_types:
             depth = options.get('summary_depth', 'standard')
             language = options.get('language', 'auto')
             summary_result = self.generate_summary(s3_key, model, depth, language)
@@ -1452,21 +1766,21 @@ Do NOT include any text outside the JSON structure."""
             total_cost += summary_result['cost_usd']
             total_processing_time += summary_result['processing_time_seconds']
 
-        if 'chapters' in analysis_types:
+        if 'chapters' in effective_types:
             chapters_result = self.detect_chapters(s3_key, model)
             results['chapters'] = chapters_result
             total_tokens += chapters_result['tokens_used']
             total_cost += chapters_result['cost_usd']
             total_processing_time += chapters_result['processing_time_seconds']
 
-        if 'elements' in analysis_types:
+        if 'elements' in effective_types:
             elements_result = self.identify_elements(s3_key, model)
             results['elements'] = elements_result
             total_tokens += elements_result['tokens_used']
             total_cost += elements_result['cost_usd']
             total_processing_time += elements_result['processing_time_seconds']
 
-        if 'waterfall_classification' in analysis_types:
+        if 'waterfall_classification' in effective_types:
             classification_result = self.classify_waterfall(s3_key, model)
             results['waterfall_classification'] = classification_result
             total_tokens += classification_result['tokens_used']
@@ -1478,7 +1792,7 @@ Do NOT include any text outside the JSON structure."""
             'tokens_total': total_tokens,
             'cost_total_usd': round(total_cost, 4),
             'processing_time_seconds': round(total_processing_time, 2),
-            'analyses_completed': len([t for t in analysis_types if t in results])
+            'analyses_completed': len([t for t in effective_types if t in results])
         }
 
         return results
@@ -1490,6 +1804,7 @@ Do NOT include any text outside the JSON structure."""
         analysis_types: List[str],
         options: Dict[str, Any],
         video_duration: float,
+        effective_analysis_types: Optional[List[str]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None
     ) -> Dict[str, Any]:
         """
@@ -1506,6 +1821,7 @@ Do NOT include any text outside the JSON structure."""
         Returns:
             Dict with aggregated results from all chunks
         """
+        effective_types = effective_analysis_types or analysis_types
         logger.info(f"Starting chunked analysis for {s3_key} (duration: {video_duration}s)")
 
         # Generate chunk boundaries
@@ -1565,7 +1881,7 @@ Do NOT include any text outside the JSON structure."""
             aggregated_results = self._aggregate_chunk_results(
                 chunk_results=chunk_results,
                 model=model,
-                analysis_types=analysis_types,
+                analysis_types=effective_types,
                 options=options
             )
 
@@ -1579,6 +1895,7 @@ Do NOT include any text outside the JSON structure."""
                 'video_duration': video_duration
             }
             aggregated_results['processing_mode'] = 'realtime'
+            aggregated_results['analysis_types'] = analysis_types
 
             return aggregated_results
 
@@ -1633,6 +1950,10 @@ Do NOT include any text outside the JSON structure."""
                 context_summary = str(summary_data)
 
         # Run analyses on chunk
+        if 'combined' in analysis_types:
+            result.update(self.analyze_combined(chunk_s3_key, model, options))
+            return result
+
         if 'summary' in analysis_types:
             depth = options.get('summary_depth', 'standard')
             language = options.get('language', 'auto')

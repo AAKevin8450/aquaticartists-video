@@ -1,16 +1,18 @@
 # AGENTS
 
-Last Updated: 2025-12-22 22:11:48
+Last Updated: 2025-12-25 18:37:48
 
 Nova batch processing
 - Enable async batch mode by setting `BEDROCK_BATCH_ROLE_ARN`, `NOVA_BATCH_INPUT_PREFIX`, `NOVA_BATCH_OUTPUT_PREFIX` in `.env`.
 - Batch submissions use Bedrock batch jobs; results are finalized when `/api/nova/status/<nova_job_id>` is polled.
 - Batch cost estimates apply a 50% discount and are surfaced in the Nova UI.
 - Batch Nova runs auto-create proxies when missing and reuse the core Nova start flow.
+- Nova analysis types accept `combined` for a single-pass prompt; prompt schema is documented in `docs/nova_combined.md`.
 
 Nova transcription & embeddings
 - Transcription supports `whisper` (local) and `nova_sonic` (Bedrock) providers; Nova Sonic requires S3 access.
 - Configure Nova Sonic with `NOVA_SONIC_MODEL_ID`, `NOVA_SONIC_RUNTIME_ID`, and `NOVA_SONIC_MAX_TOKENS`.
+- Transcript summaries use Nova 2 Lite and store <=1000-char text in `transcripts.transcript_summary`; batch runs via `/api/batch/transcript-summary` with optional overwrite.
 - Embeddings are generated via `/api/nova/embeddings/generate` and stored in sqlite-vec tables.
 - Configure embeddings with `NOVA_EMBED_MODEL_ID`, `NOVA_EMBED_DIMENSION`, `NOVA_EMBED_REQUEST_FORMAT`, and optional `SQLITE_VEC_PATH`; run `migrations/006_add_nova_embeddings.sql`.
 - File Management batch embeddings run via `/api/batch/embeddings` with optional force re-embed.
@@ -29,6 +31,7 @@ Nova waterfall classification
 
 Database
 - Run `migrations/003_add_nova_batch_fields.sql` to add batch metadata fields to `nova_jobs`.
+- Run `migrations/007_add_transcript_summary.sql` to add transcript summary storage.
 
 Local-first file handling
 - Uploads are stored locally in `./uploads` with a flat naming scheme: `originalname_<file_id>.ext`.

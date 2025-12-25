@@ -218,6 +218,9 @@
             <button class="btn btn-info" id="batchTranscribeBtn">
                 <i class="bi bi-mic"></i> Transcribe
             </button>
+            <button class="btn btn-outline-info" id="batchTranscriptSummaryBtn">
+                <i class="bi bi-card-text"></i> Transcript Summaries
+            </button>
             <button class="btn btn-warning" id="batchNovaBtn">
                 <i class="bi bi-stars"></i> Nova Analysis
             </button>
@@ -510,6 +513,12 @@
                                             <label class="form-check-label" for="singleNovaWaterfall">Waterfall Classification</label>
                                         </div>
                                     </div>
+                                    <div class="col-md-4">
+                                        <div class="form-check">
+                                            <input class="form-check-input single-nova-type" type="checkbox" id="singleNovaCombined" value="combined">
+                                            <label class="form-check-label" for="singleNovaCombined">Combined (single pass)</label>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -660,6 +669,22 @@
                         </div>
                     </div>
 
+                    <div class="batch-options-group" data-action="transcript-summary" style="display: none;">
+                        <div class="border rounded p-3 bg-light">
+                            <h6 class="mb-2">Transcript Summary Generation</h6>
+                            <p class="mb-3 text-muted small">
+                                Uses Nova 2 Lite to generate a concise transcript summary under 1,000 characters.
+                                Existing summaries are skipped unless overwritten.
+                            </p>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="batchTranscriptSummaryForce">
+                                <label class="form-check-label" for="batchTranscriptSummaryForce">
+                                    Overwrite existing transcript summaries
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="batch-options-group" data-action="nova" style="display: none;">
                         <div class="row g-3">
                             <div class="col-md-6">
@@ -720,6 +745,12 @@
                                         <div class="form-check">
                                             <input class="form-check-input batch-nova-type" type="checkbox" id="batchNovaWaterfall" value="waterfall_classification" checked>
                                             <label class="form-check-label" for="batchNovaWaterfall">Waterfall Classification</label>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="form-check">
+                                            <input class="form-check-input batch-nova-type" type="checkbox" id="batchNovaCombined" value="combined">
+                                            <label class="form-check-label" for="batchNovaCombined">Combined (single pass)</label>
                                         </div>
                                     </div>
                                 </div>

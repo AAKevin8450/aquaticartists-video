@@ -32,7 +32,7 @@ class BatchJob:
 
     def __init__(self, job_id: str, action_type: str, total_files: int, file_ids: List[int]):
         self.job_id = job_id
-        self.action_type = action_type  # 'proxy', 'transcribe', 'nova', 'rekognition'
+        self.action_type = action_type  # 'proxy', 'transcribe', 'transcript-summary', 'nova', 'rekognition'
         self.total_files = total_files
         self.file_ids = file_ids
         self.completed_files = 0
@@ -120,6 +120,21 @@ def _normalize_transcription_provider(provider: str) -> str:
     ):
         return 'nova_sonic'
     return provider
+
+
+def _select_latest_completed_transcript(transcripts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Pick the most recent completed transcript with text."""
+    completed = [
+        t for t in transcripts
+        if t.get('status') == 'COMPLETED' and t.get('transcript_text')
+    ]
+    if not completed:
+        return {}
+    completed.sort(
+        key=lambda t: t.get('completed_at') or t.get('created_at') or '',
+        reverse=True
+    )
+    return completed[0]
 
 
 # ============================================================================
@@ -1502,6 +1517,75 @@ def batch_transcribe():
         return jsonify({'error': f'Batch transcribe error: {str(e)}'}), 500
 
 
+@bp.route('/api/batch/transcript-summary', methods=['POST'])
+def batch_transcript_summary():
+    """
+    Generate Nova transcript summaries for specified files.
+
+    Request body:
+        {
+            "file_ids": [1, 2, 3, ...],
+            "force": false  # Overwrite existing transcript summaries
+        }
+    """
+    try:
+        data = request.get_json() or {}
+        file_ids = data.get('file_ids', [])
+        if not file_ids:
+            return jsonify({'error': 'No file IDs provided'}), 400
+
+        force = bool(data.get('force', False))
+
+        db = get_db()
+        eligible_file_ids = []
+        for file_id in file_ids:
+            file = db.get_file(file_id)
+            if not file:
+                current_app.logger.warning(f"File {file_id} not found, skipping")
+                continue
+            if file.get('file_type') != 'video':
+                current_app.logger.warning(f"File {file_id} is not a video, skipping")
+                continue
+
+            transcripts = db.get_transcripts_by_file(file_id)
+            transcript = _select_latest_completed_transcript(transcripts)
+            if not transcript:
+                current_app.logger.warning(f"File {file_id} has no completed transcript, skipping")
+                continue
+            if transcript.get('transcript_summary') and not force:
+                current_app.logger.info(f"File {file_id} already has transcript summary, skipping")
+                continue
+
+            eligible_file_ids.append(file_id)
+
+        if not eligible_file_ids:
+            return jsonify({'error': 'No eligible files for transcript summary generation'}), 404
+
+        job_id = f"batch-transcript-summary-{uuid.uuid4().hex[:8]}"
+        job = BatchJob(job_id, 'transcript-summary', len(eligible_file_ids), eligible_file_ids)
+        job.options = {'force': force}
+
+        with _batch_jobs_lock:
+            _batch_jobs[job_id] = job
+
+        app = current_app._get_current_object()
+        thread = threading.Thread(target=_run_batch_transcript_summary, args=(app, job))
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'job_id': job_id,
+            'total_files': len(eligible_file_ids),
+            'message': f'Batch transcript summary started for {len(eligible_file_ids)} file(s)'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Batch transcript summary error: {e}", exc_info=True)
+        import traceback
+        current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
+        return jsonify({'error': f'Batch transcript summary error: {str(e)}'}), 500
+
+
 @bp.route('/api/batch/nova', methods=['POST'])
 def batch_nova():
     """
@@ -2290,6 +2374,94 @@ def _run_batch_transcribe(app, job: BatchJob):
                 current_app.logger.error(f"Batch transcribe error for file {file_id}: {e}")
 
         # Mark job as complete
+        job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+        job.end_time = time.time()
+        job.current_file = None
+
+
+def _run_batch_transcript_summary(app, job: BatchJob):
+    """Background worker for batch transcript summary generation."""
+    with app.app_context():
+        from app.services.nova_transcript_summary_service import NovaTranscriptSummaryService
+
+        options = job.options or {}
+        force = bool(options.get('force', False))
+
+        service = NovaTranscriptSummaryService(
+            region=current_app.config['AWS_REGION'],
+            aws_access_key=current_app.config.get('AWS_ACCESS_KEY_ID'),
+            aws_secret_key=current_app.config.get('AWS_SECRET_ACCESS_KEY')
+        )
+
+        db = get_db()
+        for file_id in job.file_ids:
+            try:
+                file = db.get_file(file_id)
+                if file and file.get('size_bytes'):
+                    job.total_batch_size += file['size_bytes']
+            except Exception:
+                pass
+
+        for file_id in job.file_ids:
+            if job.status == 'CANCELLED':
+                break
+
+            try:
+                db = get_db()
+                file = db.get_file(file_id)
+                if not file:
+                    raise Exception(f'File {file_id} not found')
+
+                job.current_file = file['filename']
+
+                transcripts = db.get_transcripts_by_file(file_id)
+                transcript = _select_latest_completed_transcript(transcripts)
+                if not transcript:
+                    raise Exception('No completed transcript found')
+
+                if transcript.get('transcript_summary') and not force:
+                    job.completed_files += 1
+                    job.processed_files_sizes.append(file.get('size_bytes') or 0)
+                    job.results.append({
+                        'file_id': file_id,
+                        'filename': file['filename'],
+                        'transcript_id': transcript['id'],
+                        'success': True,
+                        'skipped': True
+                    })
+                    continue
+
+                summary_result = service.summarize_transcript(
+                    transcript_text=transcript.get('transcript_text', ''),
+                    max_chars=1000
+                )
+                summary_text = summary_result['summary']
+                db.update_transcript_summary(transcript['id'], summary_text)
+
+                job.completed_files += 1
+                job.processed_files_sizes.append(file.get('size_bytes') or 0)
+                job.results.append({
+                    'file_id': file_id,
+                    'filename': file['filename'],
+                    'transcript_id': transcript['id'],
+                    'success': True,
+                    'summary_length': len(summary_text)
+                })
+
+            except Exception as e:
+                job.failed_files += 1
+                error_msg = str(e)
+                job.errors.append({
+                    'file_id': file_id,
+                    'filename': file.get('filename', f'File {file_id}'),
+                    'error': error_msg
+                })
+                try:
+                    job.processed_files_sizes.append(file.get('size_bytes') or 0)
+                except Exception:
+                    pass
+                current_app.logger.error(f"Batch transcript summary error for file {file_id}: {e}")
+
         job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
         job.end_time = time.time()
         job.current_file = None

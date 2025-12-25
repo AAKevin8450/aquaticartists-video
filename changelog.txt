@@ -1,3 +1,35 @@
+2025-12-25 18:37:48 - Updated by Codex
+
+[Category: Feature / API / Database / Documentation]
+Add combined Nova analysis single-pass output and batch transcript summary generation with Nova 2 Lite, plus supporting UI and schema updates.
+
+[Purpose]
+Enable single-pass Nova analysis and transcript summaries to guide future Nova runs.
+
+[Impact]
+- New combined Nova analysis type performs summary/chapters/elements/waterfall in one prompt, reducing repeated video passes.
+- File Management adds batch transcript summary generation with optional overwrite; skips existing summaries by default.
+- Transcripts store `transcript_summary` (<=1000 chars) with a new migration.
+- Combined Nova prompt documented for future reuse.
+
+[Technical Details]
+- app/services/nova_service.py: combined prompt, parsing, batch handling, and analysis type normalization.
+- app/routes/nova_analysis.py: allow combined analysis type; cost estimate treats combined as single.
+- app/services/nova_transcript_summary_service.py: new Nova 2 Lite transcript summary service (text-only).
+- app/routes/file_management.py: batch transcript summary API + worker, latest transcript selection, skip/force logic.
+- app/templates/file_management.html & app/static/js/file_management.js: batch UI button, options, and progress labeling.
+
+[Files Modified]
+- app/database.py (add transcript_summary column + helper)
+- app/routes/file_management.py (batch transcript summary API/worker, transcript selection helper)
+- app/routes/nova_analysis.py (accept combined analysis type)
+- app/services/nova_service.py (combined analysis prompt, parsing, batch support)
+- app/services/nova_transcript_summary_service.py (NEW transcript summary service)
+- app/static/js/file_management.js (batch UI wiring, progress labels)
+- app/templates/file_management.html (batch UI controls)
+- docs/nova_combined.md (NEW combined prompt spec)
+- migrations/007_add_transcript_summary.sql (NEW transcript_summary column)
+
 2025-12-25 10:41:57 - Updated by Claude Code
 
 [Category: Bug Fix / Infrastructure]
