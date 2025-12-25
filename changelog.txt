@@ -1,3 +1,35 @@
+2025-12-25 00:00:00 - Updated by Claude Code
+
+[Category: Feature]
+Add native OS folder browser integration for rescan directory selection using tkinter.
+
+[Purpose]
+Replace placeholder folder browser with functional native OS dialog to improve UX when selecting directories for rescanning. Users can now click the browse button to open their system's native folder picker instead of manually typing paths.
+
+[Impact]
+- Folder browser button now opens native OS folder selection dialog (Windows Explorer/macOS Finder/Linux file picker)
+- Selected folder path automatically populates the rescan directory input field
+- Dialog cancellation handled gracefully without errors
+- Improved rescan accuracy by searching all local files instead of source_directory filtering (better detection of renamed folders)
+
+[Technical Details]
+- Backend: New POST /api/files/system-browse endpoint using tkinter.filedialog.askdirectory()
+- Frontend: openRescanFolderBrowser() function calls backend API and populates input field
+- tkinter root window hidden and brought to front (-topmost) for clean UX
+- RescanService.get_database_files_for_directory() now accepts search_all parameter (default True) to query all local files, improving moved/renamed folder detection
+- Error handling for missing tkinter package with user-friendly message
+
+[Files Modified]
+- app/routes/file_management.py:455-492 (NEW endpoint: POST /api/files/system-browse with tkinter dialog)
+- app/static/js/file_management.js:2872-2900 (implement openRescanFolderBrowser with API call)
+- app/services/rescan_service.py:83-102 (add search_all parameter to get_database_files_for_directory)
+
+[Dependencies]
+- Requires tkinter (python-tk package) - standard in most Python installations
+- Falls back to manual entry if tkinter unavailable
+
+---
+
 2025-12-24 15:24:00 - Updated by Claude Code
 
 [Category: Feature]

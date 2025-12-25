@@ -452,6 +452,46 @@ def browse_directory():
         return jsonify({'error': 'Failed to browse directory'}), 500
 
 
+@bp.route('/api/files/system-browse', methods=['POST'])
+def system_browse_directory():
+    """
+    Open native OS folder browser dialog using tkinter.
+
+    Returns the selected folder path or empty string if cancelled.
+    """
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        # Create root window and hide it
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)  # Bring dialog to front
+
+        # Open native folder browser
+        folder_path = filedialog.askdirectory(
+            title="Select folder to rescan",
+            mustexist=True
+        )
+
+        # Destroy the root window
+        root.destroy()
+
+        # Return the selected path (empty string if cancelled)
+        return jsonify({
+            'path': folder_path,
+            'cancelled': not bool(folder_path)
+        }), 200
+
+    except ImportError:
+        return jsonify({
+            'error': 'tkinter not available - please install python-tk package'
+        }), 500
+    except Exception as e:
+        current_app.logger.error(f"System browse error: {e}")
+        return jsonify({'error': f'Failed to open folder browser: {str(e)}'}), 500
+
+
 @bp.route('/api/files/import-directory', methods=['POST'])
 def import_directory():
     """

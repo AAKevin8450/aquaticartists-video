@@ -80,17 +80,24 @@ class RescanService:
 
         return discovered_files
 
-    def get_database_files_for_directory(self, directory_path: str) -> List[Dict[str, Any]]:
+    def get_database_files_for_directory(self, directory_path: str, search_all: bool = True) -> List[Dict[str, Any]]:
         """
         Get all database files that were originally imported from this directory.
 
         Args:
             directory_path: Directory path to query
+            search_all: If True, search all local files (handles renamed folders).
+                       If False, only search files from this specific source directory.
 
         Returns:
             List of database file dictionaries with fingerprints and stats
         """
-        db_files = self.db.get_files_by_source_directory(directory_path)
+        if search_all:
+            # Search all local files - better for detecting renamed/moved folders
+            db_files = self.db.get_all_local_files()
+        else:
+            # Only search files from this specific source directory
+            db_files = self.db.get_files_by_source_directory(directory_path)
         result = []
 
         for file in db_files:
