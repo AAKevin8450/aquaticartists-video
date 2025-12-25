@@ -118,6 +118,8 @@ class Database:
         conn.row_factory = sqlite3.Row  # Enable dict-like access to rows
         # Enable WAL mode for better concurrent access
         conn.execute('PRAGMA journal_mode=WAL')
+        # Enable foreign key constraints for CASCADE deletes
+        conn.execute('PRAGMA foreign_keys=ON')
         try:
             self._load_vector_extension(conn)
         except Exception:

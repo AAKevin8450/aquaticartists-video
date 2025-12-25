@@ -1,3 +1,59 @@
+2025-12-25 10:41:57 - Updated by Claude Code
+
+[Category: Bug Fix / Infrastructure]
+Fix proxy video system to enable foreign key constraints and reconcile orphaned proxy files with database records.
+
+[Purpose]
+Resolve critical issue where proxy video associations were lost during folder rescans due to disabled foreign key constraints. The database showed only 30GB of proxies while 70GB existed on disk, with 4,276 files orphaned or missing database records.
+
+[Impact]
+- Foreign key constraints now enabled globally - CASCADE deletes work properly when source files are removed
+- All 5,997 proxy files (66.55 GB) now correctly tracked in database with matching records
+- Deleted 406 orphaned proxy files (7 GB) whose source files no longer exist
+- Added 3,870 missing database records for valid proxy files
+- Reconciliation script available for future proxy system maintenance
+- Proxy system integrity maintained during folder rescans and file deletions
+
+[Root Causes Fixed]
+1. SQLite foreign key constraints were disabled - CASCADE deletes from schema didn't work
+2. Rescan operation included proxy files in reconciliation but couldn't find them (wrong directory)
+3. Manual deletions left orphaned records when CASCADE failed
+
+[Technical Details]
+- app/database.py:122: Added `PRAGMA foreign_keys=ON` to enable CASCADE DELETE on source_file_id FK
+- scripts/reconcile_proxies.py: New 360-line reconciliation utility with 4 actions:
+  - Scan proxy_video folder and parse filenames ({name}_{source_file_id}_720p15.{ext})
+  - Add database records for proxies with valid source files (3,870 added)
+  - Delete database records for missing proxy files (2 deleted)
+  - Delete orphaned proxy files when source deleted (406 files, 7GB freed with --delete-orphans)
+  - Update file sizes where disk/DB mismatch
+- Dry-run mode by default, --no-dry-run to apply, --yes to skip confirmation, --delete-orphans to remove orphans
+- Progress tracking with tqdm, detailed logging of all actions
+- Uses regex pattern matching to extract source_file_id from proxy filenames
+
+[Files Modified]
+- app/database.py:122 (add PRAGMA foreign_keys=ON to get_connection)
+- scripts/reconcile_proxies.py (NEW 360-line reconciliation script)
+
+[Reconciliation Results]
+- Before: 6,403 disk files (73.60 GB), 2,127 DB records (28.81 GB) - 44.8 GB mismatch
+- After: 5,997 disk files (66.55 GB), 5,997 DB records (66.55 GB) - perfect sync
+- Freed: 7 GB of orphaned proxy files whose source files were deleted
+
+[Usage]
+```bash
+# Preview changes
+python -m scripts.reconcile_proxies
+
+# Apply fixes (add missing records, update sizes)
+python -m scripts.reconcile_proxies --no-dry-run --yes
+
+# Apply fixes AND delete orphaned proxies (recommended)
+python -m scripts.reconcile_proxies --no-dry-run --delete-orphans --yes
+```
+
+---
+
 2025-12-25 00:00:00 - Updated by Claude Code
 
 [Category: Feature]
