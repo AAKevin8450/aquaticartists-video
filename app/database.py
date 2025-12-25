@@ -264,6 +264,11 @@ class Database:
             except sqlite3.OperationalError:
                 pass  # Column already exists
 
+            try:
+                cursor.execute('ALTER TABLE transcripts ADD COLUMN transcript_summary TEXT')
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+
             # Create indexes for better query performance
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_files_type
@@ -1412,6 +1417,16 @@ class Database:
                 cursor.execute('''
                     UPDATE transcripts SET status = ? WHERE id = ?
                 ''', (status, transcript_id))
+
+    def update_transcript_summary(self, transcript_id: int, transcript_summary: str) -> None:
+        """Update transcript summary text."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE transcripts
+                SET transcript_summary = ?
+                WHERE id = ?
+            ''', (transcript_summary, transcript_id))
 
     def list_transcripts(self, status: Optional[str] = None, model: Optional[str] = None,
                         language: Optional[str] = None, search: Optional[str] = None,

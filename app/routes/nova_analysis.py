@@ -174,12 +174,15 @@ def start_nova_analysis_internal(
     if processing_mode not in ('realtime', 'batch'):
         return {'error': 'processing_mode must be "realtime" or "batch"'}, 400
 
-    valid_analysis_types = ['summary', 'chapters', 'elements', 'waterfall_classification']
+    valid_analysis_types = ['summary', 'chapters', 'elements', 'waterfall_classification', 'combined']
     invalid_types = [t for t in analysis_types if t not in valid_analysis_types]
     if invalid_types:
         return {
             'error': f'Invalid analysis types: {invalid_types}. Valid types: {valid_analysis_types}'
         }, 400
+    if 'combined' in analysis_types:
+        analysis_types = ['combined']
+        options['combined'] = True
 
     # Get file from database
     db = get_db()
@@ -784,7 +787,7 @@ def estimate_analysis_cost():
 
         # Multiply by number of analysis types (each requires separate API call in current implementation)
         # Future optimization: combine analyses in single prompt
-        analysis_count = len(analysis_types)
+        analysis_count = 1 if 'combined' in analysis_types else len(analysis_types)
         total_cost = base_estimate['total_cost_usd'] * analysis_count
 
         return jsonify({
