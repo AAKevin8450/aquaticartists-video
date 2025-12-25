@@ -2869,8 +2869,35 @@ function openRescanModal() {
     modal.show();
 }
 
-function openRescanFolderBrowser() {
-    showAlert('Folder browser integration needed - please enter the path manually', 'info');
+async function openRescanFolderBrowser() {
+    try {
+        // Call backend to open native OS folder browser
+        const response = await fetch('/api/files/system-browse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            showAlert(result.error || 'Failed to open folder browser', 'danger');
+            return;
+        }
+
+        // If user cancelled the dialog
+        if (result.cancelled) {
+            return;
+        }
+
+        // Populate the directory input with selected path
+        if (result.path) {
+            document.getElementById('rescanDirectoryInput').value = result.path;
+        }
+
+    } catch (error) {
+        console.error('System browse error:', error);
+        showAlert('Error opening folder browser', 'danger');
+    }
 }
 
 async function performRescan() {

@@ -50,7 +50,7 @@ NOVA_SONIC_DEBUG=1  # Debug transcription
 |-----------|------|---------------|
 | Analysis | app/routes/analysis.py | Multi-select analysis (1-8 types) |
 | Nova | app/routes/nova_analysis.py | /api/nova/analyze, /status, /results, /models |
-| File Mgmt | app/routes/file_management.py | Batch ops, /api/files/rescan, /api/files/rescan/apply |
+| File Mgmt | app/routes/file_management.py | Batch ops, /api/files/rescan, /api/files/rescan/apply, /api/files/system-browse |
 | Search | app/routes/search.py | /api/search?semantic=true, /api/search/count, /api/search/filters |
 | Transcription | app/routes/transcription.py | /api/scan, /api/start-batch, /api/batch-status |
 
@@ -75,8 +75,10 @@ NOVA_SONIC_DEBUG=1  # Debug transcription
 - **Path Updates**: Preserves all analysis data (proxies, transcripts, Rekognition, Nova) when updating paths
 - **Two-Step Workflow**: Scan → review changes → apply selected actions
 - **Safety Features**: Pre-selected moved files, confirmation for deletions, relationship badges
-- **Endpoints**: POST /api/files/rescan, POST /api/files/rescan/apply
+- **Native Folder Browser**: tkinter-based OS dialog for easy directory selection
+- **Endpoints**: POST /api/files/rescan, POST /api/files/rescan/apply, POST /api/files/system-browse
 - **Reconciliation**: 4-pass algorithm (exact path → fingerprint → deleted → new files)
+- **Search Mode**: search_all=True (default) queries all local files for better renamed folder detection
 
 ### Search System
 - **Keyword**: UNION query across 5 sources (files, transcripts, Rekognition, Nova, collections)
