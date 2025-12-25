@@ -28,9 +28,10 @@ NOVA_SONIC_DEBUG=1  # Debug transcription
 
 ### Application Stack
 - **Port**: 5700 (Flask)
-- **Database**: SQLite (data/app.db) with LEFT JOIN optimization (sub-200ms for 10k+ files)
+- **Database**: SQLite (data/app.db) with LEFT JOIN optimization (sub-200ms for 10k+ files), foreign keys enabled for CASCADE deletes
 - **Storage**: AWS S3 (presigned URLs)
 - **Proxy Encoding**: NVENC GPU (h264_nvenc) for 3-5x faster proxy creation
+- **Proxy Storage**: proxy_video/ folder, naming: {name}_{source_file_id}_720p15.{ext}
 
 ### Key Services
 | Service | File | Purpose |
@@ -151,6 +152,10 @@ set NOVA_SONIC_DEBUG=1
 
 # Backfill embeddings
 python -m scripts.backfill_embeddings --force --limit 100
+
+# Reconcile proxy videos (if database/disk mismatch)
+python -m scripts.reconcile_proxies  # Dry-run preview
+python -m scripts.reconcile_proxies --no-dry-run --delete-orphans --yes  # Apply fixes
 ```
 
 ## Documentation References
