@@ -137,12 +137,51 @@ def _build_analysis_text(job: Dict[str, Any]) -> str:
         evidence_text = ''
         if isinstance(evidence, list):
             evidence_text = ", ".join([_normalize_text(e) for e in evidence if e])
+        
+        # Enhanced waterfall fields
+        search_tags = waterfall_data.get('search_tags') or []
+        product_keywords = waterfall_data.get('product_keywords') or []
+        building_techniques = waterfall_data.get('building_techniques') or []
+        
         details = " | ".join([v for v in [family, tier, functional, subtype] if v])
         if details:
             line = f"Waterfall Classification: {details}"
             if evidence_text:
                 line += f" | Evidence: {evidence_text}"
+            if search_tags:
+                line += f" | Tags: {', '.join([_normalize_text(t) for t in search_tags])}"
+            if product_keywords:
+                line += f" | Products: {', '.join([_normalize_text(p) for p in product_keywords])}"
+            if building_techniques:
+                line += f" | Techniques: {', '.join([_normalize_text(t) for t in building_techniques])}"
             parts.append(line)
+
+    search_metadata = job.get('search_metadata')
+    if search_metadata:
+        meta = search_metadata if isinstance(search_metadata, dict) else _ensure_json_dict(search_metadata)
+        project = meta.get('project', {})
+        location = meta.get('location', {})
+        content = meta.get('content', {})
+        
+        meta_parts = []
+        if project.get('customer_name') and project.get('customer_name') != 'unknown':
+            meta_parts.append(f"Customer: {project['customer_name']}")
+        if project.get('project_name') and project.get('project_name') != 'unknown':
+            meta_parts.append(f"Project: {project['project_name']}")
+        if location.get('city') and location.get('city') != 'unknown':
+            loc = location['city']
+            if location.get('state_region') and location.get('state_region') != 'unknown':
+                loc += f", {location['state_region']}"
+            meta_parts.append(f"Location: {loc}")
+        if content.get('content_type') and content.get('content_type') != 'unknown':
+            meta_parts.append(f"Type: {content['content_type']}")
+            
+        keywords = meta.get('keywords', [])
+        if keywords:
+            meta_parts.append(f"Keywords: {', '.join(keywords)}")
+            
+        if meta_parts:
+            parts.append("Metadata: " + " | ".join(meta_parts))
 
     return "\n\n".join([p for p in parts if p])
 
@@ -318,6 +357,20 @@ def start_nova_analysis_internal(
             except Exception as e:
                 logger.warning(f"Failed to update chunk progress: {e}")
 
+        # Build analysis context
+        file_with_context = db.get_file_with_transcript_summary(file_id) or {}
+        file_tokens = NovaVideoService.normalize_file_context(
+            file.get('filename'),
+            file.get('local_path')
+        )
+        analysis_context = {
+            **file_tokens,
+            'filename': file.get('filename'),
+            'file_path': file.get('local_path'),
+            'transcript_summary': file_with_context.get('transcript_summary'),
+            'duration_seconds': file.get('duration_seconds') or file.get('metadata', {}).get('duration_seconds')
+        }
+
         # Run analysis
         logger.info(f"Starting Nova analysis for job {nova_job_id}, S3 key: {s3_key}")
         results = nova_service.analyze_video(
@@ -325,6 +378,7 @@ def start_nova_analysis_internal(
             model=model,
             analysis_types=analysis_types,
             options=options,
+            context=analysis_context,
             progress_callback=progress_callback
         )
 
@@ -361,6 +415,9 @@ def start_nova_analysis_internal(
 
         if 'waterfall_classification' in results:
             update_data['waterfall_classification_result'] = json.dumps(results['waterfall_classification'])
+
+        if 'search_metadata' in results:
+            update_data['search_metadata'] = json.dumps(results['search_metadata'])
 
         # Update database
         db.update_nova_job(nova_job_id, update_data)

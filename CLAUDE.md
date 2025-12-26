@@ -63,18 +63,22 @@ SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
 - Endpoints: POST /api/files/rescan, /api/files/rescan/apply, /api/files/system-browse
 
 ### Search
-- **Keyword**: UNION across files, transcripts, Rekognition, Nova, collections
+- **Keyword**: UNION across files, transcripts, Rekognition, Nova (summary/chapters/elements/waterfall/search_metadata), collections
 - **Semantic**: Nova Embeddings with sqlite-vec KNN (sub-500ms)
+- **Optimized for**: Customer/project names, location (city/state/site), waterfall type/family/tier, product names, video type (tutorial/demo/review), building techniques, job codes
 
 ### Nova Analysis
 - 4 types: summary, chapters, elements, waterfall_classification
 - 3 models: Lite ($0.06/1K), Pro ($0.80/1K), Premier ($2.00/1K)
 - Videos < 30 min supported
+- Context-aware: Uses filename, path, transcript summary to enhance analysis accuracy
+- Returns search_metadata (project/location/customer/content type/entities/keywords) for discovery
 
 ## Database Tables
 - **files**: S3-uploaded files with metadata
 - **transcripts**: Text, segments, transcript_summary, video metadata
 - **analysis_jobs/nova_jobs**: Job tracking with cost
+- **nova_jobs**: summary_result, chapters_result, elements_result, waterfall_classification_result, search_metadata
 - **nova_embeddings**: sqlite-vec vectors
 
 ## Constraints
