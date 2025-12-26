@@ -352,6 +352,70 @@ class Database:
             except sqlite3.OperationalError:
                 pass
 
+            # Rescan jobs table (for folder rescan operations with progress tracking)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS rescan_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT UNIQUE NOT NULL,
+                    directory_path TEXT NOT NULL,
+                    recursive BOOLEAN DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'SUBMITTED',
+                    current_operation TEXT,
+                    files_scanned INTEGER DEFAULT 0,
+                    total_files INTEGER DEFAULT 0,
+                    progress_percent INTEGER DEFAULT 0,
+                    results JSON,
+                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    error_message TEXT,
+                    cancelled BOOLEAN DEFAULT 0
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_rescan_jobs_status
+                ON rescan_jobs(status)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_rescan_jobs_started_at
+                ON rescan_jobs(started_at DESC)
+            ''')
+
+            # Import jobs table (for directory import operations with progress tracking)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS import_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT UNIQUE NOT NULL,
+                    directory_path TEXT NOT NULL,
+                    recursive BOOLEAN DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'SUBMITTED',
+                    current_operation TEXT,
+                    files_scanned INTEGER DEFAULT 0,
+                    files_imported INTEGER DEFAULT 0,
+                    files_skipped_existing INTEGER DEFAULT 0,
+                    files_skipped_unsupported INTEGER DEFAULT 0,
+                    total_files INTEGER DEFAULT 0,
+                    progress_percent INTEGER DEFAULT 0,
+                    errors JSON,
+                    results JSON,
+                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    error_message TEXT,
+                    cancelled BOOLEAN DEFAULT 0
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_import_jobs_status
+                ON import_jobs(status)
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_import_jobs_started_at
+                ON import_jobs(started_at DESC)
+            ''')
+
             # Search optimization indexes
             # Files table indexes for search
             cursor.execute('''
@@ -2084,6 +2148,253 @@ class Database:
                 jobs.append(job)
             return jobs
 
+    # Rescan Jobs methods
+    def create_rescan_job(self, job_id: str, directory_path: str, recursive: bool = True) -> int:
+        """Create a new rescan job."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO rescan_jobs (job_id, directory_path, recursive, status)
+                VALUES (?, ?, ?, 'SUBMITTED')
+            ''', (job_id, directory_path, recursive))
+            return cursor.lastrowid
+
+    def get_rescan_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Get rescan job by job_id."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM rescan_jobs WHERE job_id = ?', (job_id,))
+            row = cursor.fetchone()
+            if row:
+                job = dict(row)
+                # Parse JSON fields
+                if job.get('results'):
+                    job['results'] = json.loads(job['results'])
+                return job
+            return None
+
+    def update_rescan_job(self, job_id: str, update_data: Dict[str, Any]):
+        """Update rescan job with arbitrary fields."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            fields = []
+            values = []
+            for key, value in update_data.items():
+                fields.append(f"{key} = ?")
+                # JSON fields
+                if key == 'results':
+                    values.append(json.dumps(value) if value is not None else None)
+                else:
+                    values.append(value)
+
+            values.append(job_id)
+            query = f"UPDATE rescan_jobs SET {', '.join(fields)} WHERE job_id = ?"
+            cursor.execute(query, values)
+
+    def update_rescan_job_progress(self, job_id: str, files_scanned: int,
+                                   total_files: int = None, current_operation: str = None):
+        """Update rescan job progress."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Calculate progress percentage
+            if total_files and total_files > 0:
+                progress_percent = int((files_scanned / total_files) * 100)
+            else:
+                progress_percent = 0
+
+            updates = ['files_scanned = ?', 'progress_percent = ?']
+            values = [files_scanned, progress_percent]
+
+            if total_files is not None:
+                updates.append('total_files = ?')
+                values.append(total_files)
+
+            if current_operation is not None:
+                updates.append('current_operation = ?')
+                values.append(current_operation)
+
+            values.append(job_id)
+            query = f"UPDATE rescan_jobs SET {', '.join(updates)} WHERE job_id = ?"
+            cursor.execute(query, values)
+
+    def update_rescan_job_status(self, job_id: str, status: str):
+        """Update rescan job status."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE rescan_jobs SET status = ? WHERE job_id = ?',
+                         (status, job_id))
+
+    def complete_rescan_job(self, job_id: str, results: Dict[str, Any],
+                           error_message: str = None):
+        """Mark rescan job as completed with results."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            status = 'FAILED' if error_message else 'SUCCEEDED'
+            cursor.execute('''
+                UPDATE rescan_jobs
+                SET status = ?,
+                    results = ?,
+                    completed_at = CURRENT_TIMESTAMP,
+                    error_message = ?,
+                    progress_percent = 100
+                WHERE job_id = ?
+            ''', (status, json.dumps(results), error_message, job_id))
+
+    def cancel_rescan_job(self, job_id: str):
+        """Cancel a rescan job."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE rescan_jobs
+                SET status = 'CANCELLED',
+                    cancelled = 1,
+                    completed_at = CURRENT_TIMESTAMP
+                WHERE job_id = ?
+            ''', (job_id,))
+
+    def is_rescan_job_cancelled(self, job_id: str) -> bool:
+        """Check if a rescan job has been cancelled."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT cancelled FROM rescan_jobs WHERE job_id = ?', (job_id,))
+            row = cursor.fetchone()
+            return bool(row['cancelled']) if row else False
+
+    # Import Jobs methods
+    def create_import_job(self, job_id: str, directory_path: str, recursive: bool = True) -> int:
+        """Create a new import job."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO import_jobs (job_id, directory_path, recursive, status)
+                VALUES (?, ?, ?, 'SUBMITTED')
+            ''', (job_id, directory_path, recursive))
+            return cursor.lastrowid
+
+    def get_import_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Get import job by job_id."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM import_jobs WHERE job_id = ?', (job_id,))
+            row = cursor.fetchone()
+            if row:
+                job = dict(row)
+                # Parse JSON fields
+                if job.get('errors'):
+                    job['errors'] = json.loads(job['errors'])
+                if job.get('results'):
+                    job['results'] = json.loads(job['results'])
+                return job
+            return None
+
+    def update_import_job(self, job_id: str, update_data: Dict[str, Any]):
+        """Update import job with arbitrary fields."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            fields = []
+            values = []
+            for key, value in update_data.items():
+                fields.append(f"{key} = ?")
+                # JSON fields
+                if key in ('errors', 'results'):
+                    values.append(json.dumps(value) if value is not None else None)
+                else:
+                    values.append(value)
+
+            values.append(job_id)
+            query = f"UPDATE import_jobs SET {', '.join(fields)} WHERE job_id = ?"
+            cursor.execute(query, values)
+
+    def update_import_job_progress(self, job_id: str, files_scanned: int = None,
+                                   files_imported: int = None, files_skipped_existing: int = None,
+                                   files_skipped_unsupported: int = None, total_files: int = None,
+                                   current_operation: str = None):
+        """Update import job progress."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+
+            updates = []
+            values = []
+
+            if files_scanned is not None:
+                updates.append('files_scanned = ?')
+                values.append(files_scanned)
+
+            if files_imported is not None:
+                updates.append('files_imported = ?')
+                values.append(files_imported)
+
+            if files_skipped_existing is not None:
+                updates.append('files_skipped_existing = ?')
+                values.append(files_skipped_existing)
+
+            if files_skipped_unsupported is not None:
+                updates.append('files_skipped_unsupported = ?')
+                values.append(files_skipped_unsupported)
+
+            if total_files is not None:
+                updates.append('total_files = ?')
+                values.append(total_files)
+
+            # Calculate progress percentage
+            if total_files and total_files > 0 and files_scanned is not None:
+                progress_percent = int((files_scanned / total_files) * 100)
+                updates.append('progress_percent = ?')
+                values.append(progress_percent)
+
+            if current_operation is not None:
+                updates.append('current_operation = ?')
+                values.append(current_operation)
+
+            if updates:
+                values.append(job_id)
+                query = f"UPDATE import_jobs SET {', '.join(updates)} WHERE job_id = ?"
+                cursor.execute(query, values)
+
+    def update_import_job_status(self, job_id: str, status: str):
+        """Update import job status."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE import_jobs SET status = ? WHERE job_id = ?',
+                         (status, job_id))
+
+    def complete_import_job(self, job_id: str, results: Dict[str, Any],
+                           error_message: str = None):
+        """Mark import job as completed with results."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            status = 'FAILED' if error_message else 'SUCCEEDED'
+            cursor.execute('''
+                UPDATE import_jobs
+                SET status = ?,
+                    results = ?,
+                    completed_at = CURRENT_TIMESTAMP,
+                    error_message = ?,
+                    progress_percent = 100
+                WHERE job_id = ?
+            ''', (status, json.dumps(results), error_message, job_id))
+
+    def cancel_import_job(self, job_id: str):
+        """Cancel an import job."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE import_jobs
+                SET status = 'CANCELLED',
+                    cancelled = 1,
+                    completed_at = CURRENT_TIMESTAMP
+                WHERE job_id = ?
+            ''', (job_id,))
+
+    def is_import_job_cancelled(self, job_id: str) -> bool:
+        """Check if an import job has been cancelled."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT cancelled FROM import_jobs WHERE job_id = ?', (job_id,))
+            row = cursor.fetchone()
+            return bool(row['cancelled']) if row else False
+
     def list_all_files_with_stats(
         self,
         file_type: Optional[str] = None,
@@ -2102,6 +2413,8 @@ class Database:
         min_duration: Optional[int] = None,
         max_duration: Optional[int] = None,
         min_transcript_chars: Optional[int] = None,
+        directory_path: Optional[str] = None,
+        include_subdirectories: bool = True,
         sort_by: str = 'uploaded_at',
         sort_order: str = 'desc',
         limit: int = 50,
@@ -2257,6 +2570,27 @@ class Database:
                 query += ' AND f.duration_seconds <= ?'
                 params.append(max_duration)
 
+            # Directory path filter
+            if directory_path:
+                if include_subdirectories:
+                    # Match directory and all subdirectories using LIKE with wildcard
+                    # Normalize path separator for consistency
+                    normalized_path = directory_path.replace('/', '\\')
+                    query += ' AND (f.local_path LIKE ? OR f.local_path LIKE ?)'
+                    # Match exact path and subdirectories
+                    params.append(f'{normalized_path}%')
+                    params.append(f'{normalized_path}\\%')
+                else:
+                    # Match only files directly in this directory (not subdirectories)
+                    # This is more complex - need to ensure no additional path separators after the directory
+                    normalized_path = directory_path.replace('/', '\\')
+                    query += ''' AND (
+                        f.local_path LIKE ?
+                        AND f.local_path NOT LIKE ?
+                    )'''
+                    params.append(f'{normalized_path}\\%')
+                    params.append(f'{normalized_path}\\%\\%')
+
             # Group by file ID to aggregate stats from joined tables
             query += ' GROUP BY f.id'
 
@@ -2305,6 +2639,8 @@ class Database:
         created_to_date: Optional[str] = None,
         min_size: Optional[int] = None,
         max_size: Optional[int] = None,
+        directory_path: Optional[str] = None,
+        include_subdirectories: bool = True,
         min_duration: Optional[int] = None,
         max_duration: Optional[int] = None,
         min_transcript_chars: Optional[int] = None
@@ -2411,6 +2747,22 @@ class Database:
                 query += ' AND f.duration_seconds <= ?'
                 params.append(max_duration)
 
+            # Directory path filter
+            if directory_path:
+                if include_subdirectories:
+                    normalized_path = directory_path.replace('/', '\\')
+                    query += ' AND (f.local_path LIKE ? OR f.local_path LIKE ?)'
+                    params.append(f'{normalized_path}%')
+                    params.append(f'{normalized_path}\\%')
+                else:
+                    normalized_path = directory_path.replace('/', '\\')
+                    query += ''' AND (
+                        f.local_path LIKE ?
+                        AND f.local_path NOT LIKE ?
+                    )'''
+                    params.append(f'{normalized_path}\\%')
+                    params.append(f'{normalized_path}\\%\\%')
+
             if min_transcript_chars is not None:
                 query += ''' AND EXISTS (
                     SELECT 1 FROM transcripts t
@@ -2440,7 +2792,9 @@ class Database:
         max_size: Optional[int] = None,
         min_duration: Optional[int] = None,
         max_duration: Optional[int] = None,
-        min_transcript_chars: Optional[int] = None
+        min_transcript_chars: Optional[int] = None,
+        directory_path: Optional[str] = None,
+        include_subdirectories: bool = True
     ) -> Dict[str, Any]:
         """
         Get summary statistics for all files matching filters.
@@ -2574,6 +2928,22 @@ class Database:
                       AND COALESCE(t.character_count, LENGTH(COALESCE(t.transcript_text, ''))) >= ?
                 )'''
                 params.append(min_transcript_chars)
+
+            # Directory path filter
+            if directory_path:
+                if include_subdirectories:
+                    normalized_path = directory_path.replace('/', '\\')
+                    query += ' AND (f.local_path LIKE ? OR f.local_path LIKE ?)'
+                    params.append(f'{normalized_path}%')
+                    params.append(f'{normalized_path}\\%')
+                else:
+                    normalized_path = directory_path.replace('/', '\\')
+                    query += ''' AND (
+                        f.local_path LIKE ?
+                        AND f.local_path NOT LIKE ?
+                    )'''
+                    params.append(f'{normalized_path}\\%')
+                    params.append(f'{normalized_path}\\%\\%')
 
             cursor.execute(query, params)
             row = cursor.fetchone()

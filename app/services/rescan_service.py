@@ -9,8 +9,10 @@ This service handles:
 """
 import os
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Callable
 from datetime import datetime
+import uuid
+import threading
 
 
 class RescanService:
@@ -395,3 +397,325 @@ class RescanService:
                         })
 
         return results
+
+    def scan_directory_with_progress(self, directory_path: str, recursive: bool = True,
+                                     progress_callback: Optional[Callable] = None,
+                                     job_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Scan directory with progress tracking.
+
+        Args:
+            directory_path: Directory to scan
+            recursive: Whether to scan subdirectories
+            progress_callback: Function to call with progress updates (files_scanned, total_estimate)
+            job_id: Job ID for cancellation check
+
+        Returns:
+            List of file dictionaries with metadata and fingerprints
+        """
+        discovered_files = []
+        directory = Path(directory_path)
+
+        if not directory.exists():
+            raise ValueError(f"Directory does not exist: {directory_path}")
+
+        if not directory.is_dir():
+            raise ValueError(f"Path is not a directory: {directory_path}")
+
+        # Supported video and image extensions
+        video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.flv', '.wmv', '.webm', '.m4v'}
+        image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'}
+        supported_extensions = video_extensions | image_extensions
+
+        # Scan directory
+        pattern = '**/*' if recursive else '*'
+        files_scanned = 0
+
+        for file_path in directory.glob(pattern):
+            # Check for cancellation
+            if job_id and self.db.is_rescan_job_cancelled(job_id):
+                break
+
+            if not file_path.is_file():
+                continue
+
+            # Check if supported file type
+            if file_path.suffix.lower() not in supported_extensions:
+                continue
+
+            try:
+                stat = file_path.stat()
+                discovered_files.append({
+                    'path': str(file_path.absolute()),
+                    'filename': file_path.name,
+                    'size_bytes': stat.st_size,
+                    'mtime': stat.st_mtime,
+                    'fingerprint': self.get_file_fingerprint(
+                        file_path.name,
+                        stat.st_size,
+                        stat.st_mtime
+                    )
+                })
+
+                files_scanned += 1
+
+                # Report progress every 10 files
+                if progress_callback and files_scanned % 10 == 0:
+                    progress_callback(files_scanned, len(discovered_files))
+
+            except (OSError, PermissionError) as e:
+                # Skip files that can't be accessed
+                print(f"Warning: Could not access {file_path}: {e}")
+                continue
+
+        # Final progress update
+        if progress_callback:
+            progress_callback(files_scanned, len(discovered_files))
+
+        return discovered_files
+
+    def reconcile_with_progress(self, directory_path: str, mode: str = 'smart',
+                               progress_callback: Optional[Callable] = None,
+                               job_id: Optional[str] = None) -> Dict[str, List]:
+        """
+        Reconcile with progress tracking.
+
+        Args:
+            directory_path: Directory to rescan
+            mode: 'smart' (fingerprint matching) or 'simple' (delete & reimport)
+            progress_callback: Function to call with progress updates
+            job_id: Job ID for cancellation check
+
+        Returns:
+            Dictionary with categorized file changes
+        """
+        # Update status
+        if job_id and progress_callback:
+            self.db.update_rescan_job(job_id, {
+                'current_operation': 'Scanning filesystem...',
+                'status': 'IN_PROGRESS'
+            })
+
+        # Scan filesystem with progress
+        disk_files = self.scan_directory_with_progress(
+            directory_path,
+            recursive=True,
+            progress_callback=lambda scanned, total: (
+                self.db.update_rescan_job_progress(
+                    job_id,
+                    files_scanned=scanned,
+                    total_files=total,
+                    current_operation='Scanning filesystem...'
+                ) if job_id else None
+            ),
+            job_id=job_id
+        )
+
+        # Check for cancellation
+        if job_id and self.db.is_rescan_job_cancelled(job_id):
+            return {
+                'matched': [],
+                'moved': [],
+                'deleted': [],
+                'new': [],
+                'ambiguous': []
+            }
+
+        # Update status
+        if job_id:
+            self.db.update_rescan_job(job_id, {
+                'current_operation': 'Loading database files...'
+            })
+
+        db_files = self.get_database_files_for_directory(directory_path)
+
+        # Update status
+        if job_id:
+            self.db.update_rescan_job(job_id, {
+                'current_operation': 'Reconciling files...'
+            })
+
+        # Build fingerprint indexes
+        disk_by_fingerprint = {}
+        disk_by_path = {f['path']: f for f in disk_files}
+
+        for f in disk_files:
+            fp = f['fingerprint']
+            if fp not in disk_by_fingerprint:
+                disk_by_fingerprint[fp] = []
+            disk_by_fingerprint[fp].append(f)
+
+        db_by_fingerprint = {}
+        db_by_path = {f['local_path']: f for f in db_files}
+
+        for f in db_files:
+            fp = f['fingerprint']
+            if fp not in db_by_fingerprint:
+                db_by_fingerprint[fp] = []
+            db_by_fingerprint[fp].append(f)
+
+        results = {
+            'matched': [],
+            'moved': [],
+            'deleted': [],
+            'new': [],
+            'ambiguous': []
+        }
+
+        matched_db_ids = set()
+        matched_disk_paths = set()
+
+        # Pass 1: Exact path matches (unchanged files)
+        for db_file in db_files:
+            if db_file['local_path'] in disk_by_path:
+                disk_file = disk_by_path[db_file['local_path']]
+                results['matched'].append((db_file, disk_file))
+                matched_db_ids.add(db_file['id'])
+                matched_disk_paths.add(disk_file['path'])
+
+        # Pass 2: Fingerprint matches (moved files) - only if smart mode
+        if mode == 'smart':
+            for db_file in db_files:
+                if db_file['id'] in matched_db_ids:
+                    continue
+
+                fp = db_file['fingerprint']
+                candidates = [
+                    f for f in disk_by_fingerprint.get(fp, [])
+                    if f['path'] not in matched_disk_paths
+                ]
+
+                if len(candidates) == 1:
+                    # Unique match - file was moved
+                    results['moved'].append((db_file, candidates[0]))
+                    matched_db_ids.add(db_file['id'])
+                    matched_disk_paths.add(candidates[0]['path'])
+                elif len(candidates) > 1:
+                    # Multiple candidates - ambiguous
+                    results['ambiguous'].append((db_file, candidates))
+                    matched_db_ids.add(db_file['id'])
+
+        # Pass 3: Identify deleted files (in DB, not on disk)
+        for db_file in db_files:
+            if db_file['id'] not in matched_db_ids:
+                results['deleted'].append(db_file)
+
+        # Pass 4: Identify new files (on disk, not in DB)
+        for disk_file in disk_files:
+            if disk_file['path'] not in matched_disk_paths:
+                results['new'].append(disk_file)
+
+        return results
+
+    def run_rescan_job_async(self, job_id: str, directory_path: str, recursive: bool = True):
+        """
+        Run rescan job asynchronously in a background thread.
+
+        Args:
+            job_id: Unique job identifier
+            directory_path: Directory to scan
+            recursive: Whether to scan subdirectories
+        """
+        def _run_job():
+            try:
+                # Update job status
+                self.db.update_rescan_job_status(job_id, 'IN_PROGRESS')
+
+                # Run reconciliation with progress tracking
+                results = self.reconcile_with_progress(
+                    directory_path,
+                    mode='smart',
+                    job_id=job_id
+                )
+
+                # Check if cancelled
+                if self.db.is_rescan_job_cancelled(job_id):
+                    return
+
+                # Prepare summary
+                summary = {
+                    'total_on_disk': len(results['matched']) + len(results['moved']) + len(results['new']),
+                    'total_in_database': len(results['matched']) + len(results['moved']) + len(results['deleted']),
+                    'matched': len(results['matched']),
+                    'moved': len(results['moved']),
+                    'deleted': len(results['deleted']),
+                    'new': len(results['new']),
+                    'ambiguous': len(results['ambiguous'])
+                }
+
+                # Store results
+                result_data = {
+                    'summary': summary,
+                    'details': {
+                        'moved': [
+                            {
+                                'db_file': {
+                                    'id': db_file['id'],
+                                    'path': db_file['local_path'],
+                                    'filename': db_file['filename'],
+                                    'has_proxy': db_file['has_proxy'],
+                                    'has_analysis': db_file['has_analysis'],
+                                    'has_transcripts': db_file['has_transcripts']
+                                },
+                                'disk_file': {
+                                    'path': disk_file['path'],
+                                    'filename': disk_file['filename'],
+                                    'size_bytes': disk_file['size_bytes']
+                                }
+                            }
+                            for db_file, disk_file in results['moved']
+                        ],
+                        'deleted': [
+                            {
+                                'id': db_file['id'],
+                                'path': db_file['local_path'],
+                                'filename': db_file['filename'],
+                                'has_proxy': db_file['has_proxy'],
+                                'has_analysis': db_file['has_analysis'],
+                                'has_transcripts': db_file['has_transcripts']
+                            }
+                            for db_file in results['deleted']
+                        ],
+                        'new': [
+                            {
+                                'path': disk_file['path'],
+                                'filename': disk_file['filename'],
+                                'size_bytes': disk_file['size_bytes']
+                            }
+                            for disk_file in results['new']
+                        ],
+                        'ambiguous': [
+                            {
+                                'db_file': {
+                                    'id': db_file['id'],
+                                    'path': db_file['local_path'],
+                                    'filename': db_file['filename']
+                                },
+                                'candidates': [
+                                    {
+                                        'path': c['path'],
+                                        'filename': c['filename']
+                                    }
+                                    for c in candidates
+                                ]
+                            }
+                            for db_file, candidates in results['ambiguous']
+                        ]
+                    }
+                }
+
+                # Mark job as completed
+                self.db.complete_rescan_job(job_id, result_data)
+
+            except Exception as e:
+                # Mark job as failed
+                self.db.complete_rescan_job(job_id, {}, error_message=str(e))
+
+        # Start background thread
+        thread = threading.Thread(target=_run_job, daemon=True)
+        thread.start()
+
+    @staticmethod
+    def generate_job_id() -> str:
+        """Generate a unique job ID."""
+        return f"rescan_{uuid.uuid4().hex[:12]}"
