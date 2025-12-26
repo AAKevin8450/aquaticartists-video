@@ -568,7 +568,8 @@ Spec:
             'model_id': config['id'],
             'runtime_model_id': runtime_model_id,
             'stop_reason': response.get('stopReason', 'end_turn'),
-            'timestamp': datetime.utcnow().isoformat() + 'Z'
+            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'raw_response': json.dumps(response, default=str)  # Store full API response for debugging/auditing
         }
 
     def _build_batch_records(self, s3_key: str, analysis_types: List[str],
@@ -1049,6 +1050,50 @@ Spec:
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError as e:
+            # Check if this is an invalid escape sequence error
+            if 'Invalid \\escape' in str(e) or 'Invalid escape' in str(e):
+                logger.warning(f"Detected invalid escape sequences in Nova response, attempting to fix...")
+
+                # Fix invalid escape sequences by escaping backslashes that aren't part of valid JSON escapes
+                # Valid JSON escape sequences: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+                # Replace any \ that's not followed by these valid characters with \\
+
+                # First, temporarily replace valid escape sequences with placeholders
+                replacements = {
+                    '\\"': '\x00QUOTE\x00',
+                    '\\\\': '\x00BACKSLASH\x00',
+                    '\\/': '\x00SLASH\x00',
+                    '\\b': '\x00BACKSPACE\x00',
+                    '\\f': '\x00FORMFEED\x00',
+                    '\\n': '\x00NEWLINE\x00',
+                    '\\r': '\x00RETURN\x00',
+                    '\\t': '\x00TAB\x00'
+                }
+
+                fixed = cleaned
+                for old, new in replacements.items():
+                    fixed = fixed.replace(old, new)
+
+                # Also handle Unicode escapes \uXXXX
+                fixed = re.sub(r'\\u([0-9a-fA-F]{4})', r'\x00UNICODE\1\x00', fixed)
+
+                # Now escape any remaining backslashes (these are the invalid ones)
+                fixed = fixed.replace('\\', '\\\\')
+
+                # Restore the valid escape sequences
+                for old, new in replacements.items():
+                    fixed = fixed.replace(new, old)
+
+                # Restore Unicode escapes
+                fixed = re.sub(r'\x00UNICODE([0-9a-fA-F]{4})\x00', r'\\u\1', fixed)
+
+                try:
+                    logger.info("Successfully fixed invalid escape sequences in Nova response")
+                    return json.loads(fixed)
+                except json.JSONDecodeError as e2:
+                    logger.error(f"Still failed to parse after fixing escape sequences: {e2}")
+                    # Fall through to original error handling below
+
             # Enhanced error logging for debugging
             logger.error(f"Failed to parse JSON response: {e}")
             logger.error(f"Error at line {e.lineno}, column {e.colno}, position {e.pos}")
@@ -1942,7 +1987,7 @@ Spec:
             'total_tokens': response['tokens_total']
         }
 
-        return self._build_combined_results(
+        results = self._build_combined_results(
             payload=parsed,
             model=model,
             options=options,
@@ -1951,6 +1996,12 @@ Spec:
             processing_time_seconds=response['processing_time_seconds'],
             generated_at=response['timestamp']
         )
+
+        # Add raw response for debugging/auditing (combined analysis uses single API call)
+        if 'raw_response' in response:
+            results['raw_responses'] = {'combined': response['raw_response']}
+
+        return results
 
     def analyze_video(self, s3_key: str, model: str = 'lite',
                      analysis_types: List[str] = None,
@@ -2051,6 +2102,15 @@ Spec:
             total_tokens += classification_result['tokens_used']
             total_cost += classification_result['cost_usd']
             total_processing_time += classification_result['processing_time_seconds']
+
+        # Collect raw responses from all analyses for debugging/auditing
+        raw_responses = {}
+        for analysis_type in ['summary', 'chapters', 'elements', 'waterfall_classification']:
+            if analysis_type in results and 'raw_response' in results[analysis_type]:
+                raw_responses[analysis_type] = results[analysis_type]['raw_response']
+
+        if raw_responses:
+            results['raw_responses'] = raw_responses
 
         # Add totals
         results['totals'] = {
@@ -2162,6 +2222,23 @@ Spec:
             aggregated_results['processing_mode'] = 'realtime'
             aggregated_results['analysis_types'] = analysis_types
 
+            # Collect raw responses from all chunks for debugging/auditing
+            all_raw_responses = []
+            for chunk_idx, chunk_result in enumerate(chunk_results):
+                if 'raw_responses' in chunk_result:
+                    all_raw_responses.append({
+                        'chunk_index': chunk_idx,
+                        'chunk_time_range': f"{chunk_result['chunk']['start']:.1f}s - {chunk_result['chunk']['end']:.1f}s",
+                        'responses': chunk_result['raw_responses']
+                    })
+
+            if all_raw_responses:
+                aggregated_results['raw_responses'] = {
+                    'chunked': True,
+                    'total_chunks': len(all_raw_responses),
+                    'chunks': all_raw_responses
+                }
+
             return aggregated_results
 
         finally:
@@ -2232,6 +2309,16 @@ Spec:
 
         if 'waterfall_classification' in analysis_types:
             result['waterfall_classification'] = self.classify_waterfall(chunk_s3_key, model)
+
+        # Collect raw responses from all analyses in this chunk for debugging/auditing
+        raw_responses = {}
+        for analysis_type in ['summary', 'chapters', 'elements', 'waterfall_classification']:
+            if analysis_type in result and isinstance(result[analysis_type], dict):
+                if 'raw_response' in result[analysis_type]:
+                    raw_responses[analysis_type] = result[analysis_type]['raw_response']
+
+        if raw_responses:
+            result['raw_responses'] = raw_responses
 
         return result
 

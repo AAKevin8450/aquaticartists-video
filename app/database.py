@@ -315,6 +315,11 @@ class Database:
                 ON transcripts(file_name)
             ''')
 
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_transcripts_file_path
+                ON transcripts(file_path)
+            ''')
+
             # Nova jobs table (for Amazon Bedrock Nova intelligent video analysis)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS nova_jobs (
@@ -349,6 +354,10 @@ class Database:
                 pass
             try:
                 cursor.execute('ALTER TABLE nova_jobs ADD COLUMN search_metadata TEXT')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE nova_jobs ADD COLUMN raw_response TEXT')
             except sqlite3.OperationalError:
                 pass
 

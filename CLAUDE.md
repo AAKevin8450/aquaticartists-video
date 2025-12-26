@@ -84,9 +84,9 @@ SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
 
 ## Database Tables
 - **files**: S3-uploaded files with metadata
-- **transcripts**: Text, segments, transcript_summary, video metadata
+- **transcripts**: Text, segments, transcript_summary, video metadata (indexed on file_path for performance)
 - **analysis_jobs/nova_jobs**: Job tracking with cost
-- **nova_jobs**: summary_result, chapters_result, elements_result, waterfall_classification_result, search_metadata
+- **nova_jobs**: summary_result, chapters_result, elements_result, waterfall_classification_result, search_metadata, raw_response (full API responses)
 - **nova_embeddings**: sqlite-vec vectors
 - **rescan_jobs**: Async folder rescan tracking (status, progress, files_scanned, results)
 - **import_jobs**: Async directory import tracking (status, progress, imported/skipped counts, errors)
@@ -104,4 +104,6 @@ SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
 python -m scripts.backfill_embeddings --force --limit 100
 python -m scripts.backfill_transcript_summaries --dry-run
 python -m scripts.reconcile_proxies --no-dry-run --delete-orphans --yes
+python -m scripts.analyze_nova_failures  # Analyze failed Nova jobs using raw responses
+python -m scripts.estimate_chunked_response_size  # Estimate DB size impact of raw storage
 ```
