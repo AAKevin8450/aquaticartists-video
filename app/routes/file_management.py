@@ -2438,6 +2438,11 @@ def _run_batch_transcript_summary(app, job: BatchJob):
                 summary_text = summary_result['summary']
                 db.update_transcript_summary(transcript['id'], summary_text)
 
+                # Track token usage
+                tokens_used = summary_result.get('tokens_total', 0)
+                job.total_tokens += tokens_used
+                job.processed_files_tokens.append(tokens_used)
+
                 job.completed_files += 1
                 job.processed_files_sizes.append(file.get('size_bytes') or 0)
                 job.results.append({
@@ -2445,7 +2450,9 @@ def _run_batch_transcript_summary(app, job: BatchJob):
                     'filename': file['filename'],
                     'transcript_id': transcript['id'],
                     'success': True,
-                    'summary_length': len(summary_text)
+                    'summary_length': len(summary_text),
+                    'tokens': tokens_used,
+                    'was_truncated': summary_result.get('was_truncated', False)
                 })
 
             except Exception as e:
