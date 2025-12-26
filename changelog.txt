@@ -1,3 +1,84 @@
+2025-12-25 22:18:19 - Updated by Claude Code
+
+[Category: Feature / Enhancement / Search Optimization]
+Add context-aware Nova analysis with searchable metadata for project/location/waterfall discovery.
+
+[Purpose]
+Enable Nova combined analysis to leverage filename, file path, and transcript summary as contextual input and return structured, searchable metadata. This provides reliable discovery by waterfall type, customer/project, location, and job-specific details that typically appear in file naming and transcript content.
+
+[Impact]
+- Nova analysis now receives filename, path, and transcript summary context to improve accuracy
+- Combined analysis returns new search_metadata field with project, location, water feature, content type, and extracted entities
+- Waterfall classification enhanced with search_tags, product_keywords, content_type, skill_level, and building_techniques
+- Keyword and semantic search now index enhanced metadata fields for discovery by customer, project, location, waterfall type, and content type
+- File context tokenization extracts searchable tokens from filenames and paths (customer names, project codes, product identifiers)
+- Search results display enhanced metadata including customer, project, location, waterfall tags, products, and techniques
+
+[Files Modified]
+- app/database.py (add search_metadata column to nova_jobs, get_file_with_transcript_summary query, search indexing)
+- app/services/nova_service.py (normalize_file_context, _build_contextual_prompt, enhanced combined/waterfall prompts, context parameter support)
+- app/routes/nova_analysis.py (context gathering, search_metadata storage, enhanced analysis text output)
+- app/routes/search.py (extract and display search_metadata and enhanced waterfall fields in results)
+
+[Technical Details - Context Gathering]
+- Database: New get_file_with_transcript_summary() LEFT JOIN query fetches filename, local_path, duration, transcript_summary
+- Normalization: normalize_file_context() tokenizes filenames/paths, removes noise words, extracts project-like tokens
+- Context flow: Routes gather context → pass to analyze_video() → inject into prompts via _build_contextual_prompt()
+- Prompt wrapper: Prepends FILE CONTEXT and TRANSCRIPT SUMMARY sections with analysis instructions before base prompt
+
+[Technical Details - Enhanced Prompts]
+- Combined prompt: Added search_metadata output schema with project, location, water_feature, content, entities, keywords
+- Waterfall prompt: Added search optimization fields (search_tags, product_keywords, content_type, skill_level, building_techniques)
+- Context injection: Filenames/paths guide product identification and waterfall type hints (kit vs custom, boulder vs no boulder)
+- Evidence tracking: Entities include sources (filename/path/transcript_summary), evidence snippets, and confidence scores
+- Unknown handling: Fields set to "unknown" when evidence is missing to avoid invention
+
+[Technical Details - Search Metadata Schema]
+search_metadata structure:
+- project: customer_name, project_name, project_code, job_number, project_type (residential/commercial/municipal)
+- location: site_name, city, state_region, country, address_fragment
+- water_feature: family, type_keywords, style_keywords
+- content: content_type (product_overview/installation_tutorial/building_demonstration/troubleshooting/comparison/review), skill_level (beginner/intermediate/advanced/professional)
+- entities: [{type, value, normalized, sources, evidence, confidence}] - extracted project/customer/location/product entities
+- keywords: 8-20 lowercase search tags covering product, project, location, techniques
+
+[Technical Details - Waterfall Classification Enhancement]
+New search optimization fields (additive to core 4-dimension classification):
+- search_tags: 5-10 lowercase keywords (product family, type, tier, content type)
+- product_keywords: Exact product names/model numbers from filename and visual elements
+- content_type: Categorizes as product_overview/installation_tutorial/building_demonstration/troubleshooting/comparison/review
+- skill_level: beginner/intermediate/advanced/professional
+- building_techniques: Specific techniques shown (e.g., "bracket mounting", "silicone sealing", "pump sizing")
+
+[Technical Details - Search Indexing]
+- Database: Added search_metadata column to nova_jobs table with ALTER TABLE migration
+- Keyword search: Now searches across search_metadata field in addition to summary/chapters/elements/waterfall
+- Search preview: Extracts and displays customer, project, location, waterfall family, tags, products, and techniques
+- Result text: Analysis text builder includes metadata section with customer, project, location, content type, keywords
+- Waterfall display: Shows search tags, product keywords, and building techniques in result text
+
+[Context Normalization Rules]
+- Tokenization: Split on separators (_-. \/), camelCase, and digit boundaries
+- Noise filtering: Remove common terms (video, videos, mp4, mov, final, v1, v2, copy, edited, training, products)
+- Project detection: Identify tokens with digits or length >4 as potential project/customer identifiers
+- Case normalization: Lowercase all tokens while preserving raw values
+- Output format: {filename_tokens, path_segments, project_like_tokens, raw_filename, raw_path}
+
+[Search Optimization Benefits]
+System now optimized for searching by:
+- Customer name and project identifiers (from filename/path/transcript)
+- Geographic location (city, state, site name)
+- Waterfall type, family, and tier (strict classification + search tags)
+- Product names and model numbers (exact keywords)
+- Video type and content category (tutorial, demo, review, troubleshooting)
+- Building techniques and skill level
+- Job numbers and project codes
+
+[Removed/Deprecated]
+- None - all changes are additive enhancements
+
+---
+
 2025-12-25 20:17:04 - Updated by Claude Code
 
 [Category: Enhancement / Infrastructure]

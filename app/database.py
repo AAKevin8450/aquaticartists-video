@@ -328,6 +328,7 @@ class Database:
                     chapters_result TEXT,
                     elements_result TEXT,
                     waterfall_classification_result TEXT,
+                    search_metadata TEXT,
                     started_at TIMESTAMP,
                     completed_at TIMESTAMP,
                     progress_percent INTEGER DEFAULT 0,
@@ -344,6 +345,10 @@ class Database:
             ''')
             try:
                 cursor.execute('ALTER TABLE nova_jobs ADD COLUMN waterfall_classification_result TEXT')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE nova_jobs ADD COLUMN search_metadata TEXT')
             except sqlite3.OperationalError:
                 pass
 
@@ -452,6 +457,26 @@ class Database:
             if 'metadata' in file:
                 file['metadata'] = self._parse_json_field(file['metadata'], default={})
             return file
+
+    def get_file_with_transcript_summary(self, file_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get file record with associated transcript summary via LEFT JOIN.
+        Matches files to transcripts via local_path.
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT
+                    f.id, f.filename, f.local_path, f.duration_seconds,
+                    t.transcript_summary
+                FROM files f
+                LEFT JOIN transcripts t ON f.local_path = t.file_path
+                WHERE f.id = ?
+            ''', (file_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return dict(row)
 
     def list_files(self, file_type: Optional[str] = None, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """List files with optional type filter."""
@@ -2917,6 +2942,7 @@ class Database:
                         WHEN CAST(nj.chapters_result AS TEXT) LIKE ? THEN 'chapters'
                         WHEN CAST(nj.elements_result AS TEXT) LIKE ? THEN 'elements'
                         WHEN CAST(nj.waterfall_classification_result AS TEXT) LIKE ? THEN 'waterfall_classification'
+                        WHEN CAST(nj.search_metadata AS TEXT) LIKE ? THEN 'search_metadata'
                     END as match_field,
                     f.size_bytes,
                     f.duration_seconds
@@ -2928,10 +2954,11 @@ class Database:
                     CAST(nj.summary_result AS TEXT) LIKE ? OR
                     CAST(nj.chapters_result AS TEXT) LIKE ? OR
                     CAST(nj.elements_result AS TEXT) LIKE ? OR
-                    CAST(nj.waterfall_classification_result AS TEXT) LIKE ?
+                    CAST(nj.waterfall_classification_result AS TEXT) LIKE ? OR
+                    CAST(nj.search_metadata AS TEXT) LIKE ?
                 )
                 '''
-                params.extend([search_pattern] * 8)
+                params.extend([search_pattern] * 10)
 
                 # Add file_type filter if specified
                 if file_type:
@@ -3136,10 +3163,11 @@ class Database:
                     CAST(nj.summary_result AS TEXT) LIKE ? OR
                     CAST(nj.chapters_result AS TEXT) LIKE ? OR
                     CAST(nj.elements_result AS TEXT) LIKE ? OR
-                    CAST(nj.waterfall_classification_result AS TEXT) LIKE ?
+                    CAST(nj.waterfall_classification_result AS TEXT) LIKE ? OR
+                    CAST(nj.search_metadata AS TEXT) LIKE ?
                 )
                 '''
-                params = [search_pattern] * 4
+                params = [search_pattern] * 5
 
                 if file_type:
                     query_str += ' AND f.file_type = ?'

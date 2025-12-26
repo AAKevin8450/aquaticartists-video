@@ -8,6 +8,7 @@ import json
 import boto3
 import time
 import logging
+import re
 from botocore.exceptions import ClientError
 from typing import Dict, Any, Optional, List, Tuple, Callable
 from functools import wraps, lru_cache
@@ -128,6 +129,100 @@ class NovaVideoService:
         logger.info(f"NovaVideoService initialized for bucket: {bucket_name}, region: {region}")
 
     @staticmethod
+    def normalize_file_context(filename: Optional[str], file_path: Optional[str]) -> Dict[str, Any]:
+        """
+        Return normalized tokens and path segments for prompting/search.
+        """
+        if not filename and not file_path:
+            return {}
+
+        def tokenize(text: str) -> List[str]:
+            if not text:
+                return []
+            # Split on common separators
+            tokens = re.split(r'[_\-\.\s\\/]', text)
+            # Split camelCase
+            tokens = [re.sub(r'([a-z])([A-Z])', r'\1 \2', t).split() for t in tokens]
+            # Flatten list
+            tokens = [item for sublist in tokens for item in (sublist if isinstance(sublist, list) else [sublist])]
+            # Clean and filter
+            return [t.lower().strip() for t in tokens if t and t.strip()]
+
+        filename_tokens = tokenize(filename)
+        path_segments = tokenize(file_path)
+
+        # Extract potential project/customer identifiers (heuristic)
+        project_like_tokens = []
+        for t in path_segments:
+            # Look for job numbers or project names (often numeric or mixed)
+            if re.search(r'\d', t) or len(t) > 4:
+                project_like_tokens.append(t)
+
+        # Filter out common noise words
+        noise = {'video', 'videos', 'mp4', 'mov', 'final', 'v1', 'v2', 'copy', 'edited', 'training', 'products'}
+        filename_tokens = [t for t in filename_tokens if t not in noise]
+        path_segments = [t for t in path_segments if t not in noise]
+
+        return {
+            "filename_tokens": filename_tokens,
+            "path_segments": path_segments,
+            "project_like_tokens": project_like_tokens,
+            "raw_filename": filename,
+            "raw_path": file_path
+        }
+
+    @staticmethod
+    def _build_contextual_prompt(
+        base_prompt: str,
+        filename: str = None,
+        file_path: str = None,
+        transcript_summary: str = None,
+        filename_tokens: List[str] = None,
+        path_segments: List[str] = None,
+        project_like_tokens: List[str] = None,
+        duration_seconds: float = None
+    ) -> str:
+        """
+        Wrap base prompt with contextual metadata section.
+        """
+        context_parts = []
+        if filename:
+            context_parts.append(f"Filename: {filename}")
+        if file_path:
+            context_parts.append(f"File Path: {file_path}")
+        if filename_tokens:
+            context_parts.append(f"Filename Tokens: {', '.join(filename_tokens)}")
+        if path_segments:
+            context_parts.append(f"Path Segments: {', '.join(path_segments)}")
+        if project_like_tokens:
+            context_parts.append(f"Project/Customer Tokens: {', '.join(project_like_tokens)}")
+        if duration_seconds:
+            context_parts.append(f"Duration: {duration_seconds} seconds")
+
+        context_section = ""
+        if context_parts:
+            context_section = "=== FILE CONTEXT ===\n" + "\n".join(context_parts) + "\n\n"
+
+        transcript_section = ""
+        if transcript_summary:
+            transcript_section = f"=== TRANSCRIPT SUMMARY ===\n{transcript_summary}\n\n"
+
+        instructions = ""
+        if context_section or transcript_section:
+            instructions = """=== ANALYSIS INSTRUCTIONS ===
+Use the above context to guide your analysis:
+- The filename often contains important keywords about the content
+- The file path may indicate project/category organization
+- The transcript summary provides spoken content context
+- Path segments can encode customer/project/location; treat as hints with source attribution
+- Extract customer, project, and location cues when present
+- Do not invent details; use "unknown" when evidence is missing
+
+"""
+
+        return f"{context_section}{transcript_section}{instructions}{base_prompt}"
+
+    @staticmethod
     @lru_cache(maxsize=1)
     def _load_waterfall_assets() -> Tuple[str, Dict[str, Any]]:
         """Load waterfall classification decision tree and spec from docs."""
@@ -180,6 +275,30 @@ CONFIDENCE & UNKNOWN POLICY:
 - Overall confidence = minimum of all four dimension confidences
 - If there is no waterfall content, set all four dimensions to "Unknown" and explain why
 
+Additionally, for search optimization, provide:
+
+1. "search_tags": Array of 5-10 lowercase keywords for semantic search
+   - Include product family, type, tier variations
+   - Include content type (tutorial, review, demo, etc.)
+
+2. "product_keywords": Array of exact product names/model numbers mentioned
+   - Extract from filename and visual elements
+   - Include brand names and SKUs if visible
+
+3. "content_type": One of:
+   - "product_overview" - General product introduction
+   - "installation_tutorial" - How to install
+   - "building_demonstration" - Waterfall construction
+   - "troubleshooting" - Problem solving
+   - "comparison" - Product comparison
+   - "review" - Product review/opinion
+
+4. "skill_level": One of:
+   - "beginner", "intermediate", "advanced", "professional"
+
+5. "building_techniques": Array of specific techniques shown:
+   - E.g., ["bracket mounting", "silicone sealing", "pump sizing"]
+
 OUTPUT REQUIREMENTS:
 Return ONLY raw JSON - no markdown code fences, no explanatory text.
 Output must be valid JSON parseable by json.loads().
@@ -187,6 +306,7 @@ All four dimensions are required: family, tier_level, functional_type, sub_type.
 Include confidence object with per-dimension scores and overall score.
 Include evidence array with specific cues observed.
 Include unknown_reasons object for any "Unknown" classifications.
+Include the search optimization fields defined above.
 
 Decision Tree:
 {decision_tree}
@@ -1255,7 +1375,7 @@ Return as JSON:
 
 Do NOT include any text outside the JSON structure."""
 
-    def _get_combined_prompt(self, depth: str, language: str) -> str:
+    def _get_combined_prompt(self, depth: str, language: str, context: Optional[Dict[str, Any]] = None) -> str:
         """Build combined analysis prompt for a single-pass output."""
         language_note = ""
         if language != 'auto':
@@ -1272,11 +1392,22 @@ Do NOT include any text outside the JSON structure."""
         decision_tree, spec = self._load_waterfall_assets()
         spec_json = json.dumps(spec, indent=2, ensure_ascii=True)
 
-        return f"""Analyze this video and return a SINGLE JSON object that includes all four analysis sections.
+        # Extract context fields if available
+        context = context or {}
+        filename = context.get('filename')
+        file_path = context.get('file_path')
+        transcript_summary = context.get('transcript_summary')
+        filename_tokens = context.get('filename_tokens')
+        path_segments = context.get('path_segments')
+        project_like_tokens = context.get('project_like_tokens')
+        duration_seconds = context.get('duration_seconds')
+
+        base_prompt = f"""Analyze this video and return a SINGLE JSON object that includes all five analysis sections.
 
 SUMMARY REQUIREMENTS:
 - {summary_guidance}
 - {language_note or "Use the video's original language."}
+- Incorporate insights from the transcript summary if provided.
 
 CHAPTERS REQUIREMENTS:
 - Title (3-8 words), start/end timecodes (MM:SS or HH:MM:SS), summary (2-3 sentences), key points (2-5).
@@ -1291,6 +1422,15 @@ ELEMENTS REQUIREMENTS:
 WATERFALL CLASSIFICATION REQUIREMENTS:
 - Follow the sequential 4-step decision process and spec below.
 - Apply Unknown rules and include confidence, evidence, unknown_reasons.
+- Additionally provide "search_tags", "product_keywords", "content_type", "skill_level", "building_techniques".
+
+SEARCH METADATA REQUIREMENTS (for discovery):
+- Project: customer_name, project_name, job_number/project_code.
+- Location: site_name, city, state/region, country.
+- Water feature: family, type_keywords, style_keywords.
+- Content: content_type, skill_level.
+- Entities: list of extracted entities with sources and evidence.
+- Keywords: 8-20 lowercase search tags.
 
 OUTPUT JSON SCHEMA (return ONLY JSON, no markdown):
 {{
@@ -1356,7 +1496,48 @@ OUTPUT JSON SCHEMA (return ONLY JSON, no markdown):
       "overall": 0.0
     }},
     "evidence": ["..."],
-    "unknown_reasons": {{}}
+    "unknown_reasons": {{}},
+    "search_tags": ["..."],
+    "product_keywords": ["..."],
+    "content_type": "...",
+    "skill_level": "...",
+    "building_techniques": ["..."]
+  }},
+  "search_metadata": {{
+    "project": {{
+      "customer_name": "...",
+      "project_name": "...",
+      "project_code": "...",
+      "job_number": "...",
+      "project_type": "..."
+    }},
+    "location": {{
+      "site_name": "...",
+      "city": "...",
+      "state_region": "...",
+      "country": "...",
+      "address_fragment": "..."
+    }},
+    "water_feature": {{
+      "family": "...",
+      "type_keywords": ["..."],
+      "style_keywords": ["..."]
+    }},
+    "content": {{
+      "content_type": "...",
+      "skill_level": "..."
+    }},
+    "entities": [
+      {{
+        "type": "...",
+        "value": "...",
+        "normalized": "...",
+        "sources": ["filename", "path", "transcript_summary"],
+        "evidence": "...",
+        "confidence": 0.0
+      }}
+    ],
+    "keywords": ["..."]
   }}
 }}
 
@@ -1366,6 +1547,16 @@ Decision Tree:
 Spec:
 {spec_json}
 """
+        return self._build_contextual_prompt(
+            base_prompt,
+            filename=filename,
+            file_path=file_path,
+            transcript_summary=transcript_summary,
+            filename_tokens=filename_tokens,
+            path_segments=path_segments,
+            project_like_tokens=project_like_tokens,
+            duration_seconds=duration_seconds
+        )
 
     def _build_combined_results(
         self,
@@ -1420,6 +1611,10 @@ Spec:
         classification = self._validate_waterfall_classification(
             classification_payload if isinstance(classification_payload, dict) else {}
         )
+
+        search_metadata_payload = payload.get('search_metadata') or {}
+        if not isinstance(search_metadata_payload, dict):
+            search_metadata_payload = {}
 
         summary_result = {
             'text': summary_text,
@@ -1477,6 +1672,7 @@ Spec:
             'chapters': chapters_result,
             'elements': elements_result,
             'waterfall_classification': classification_result,
+            'search_metadata': search_metadata_payload,
             'totals': {
                 'tokens_total': usage['total_tokens'],
                 'cost_total_usd': round(cost_usd, 4),
@@ -1653,7 +1849,8 @@ Spec:
         return classification_result
 
     def analyze_combined(self, s3_key: str, model: str = 'lite',
-                         options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                         options: Optional[Dict[str, Any]] = None,
+                         context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Run a combined Nova analysis in a single call.
 
@@ -1661,6 +1858,7 @@ Spec:
             s3_key: S3 key of the video
             model: Nova model ('lite', 'pro', 'premier')
             options: Dict with options like {'summary_depth': 'standard', 'language': 'auto'}
+            context: Optional dictionary with file context (filename, path, transcript, etc.)
 
         Returns:
             Dict containing summary, chapters, elements, and waterfall classification
@@ -1668,7 +1866,7 @@ Spec:
         options = options or {}
         depth = options.get('summary_depth', 'standard')
         language = options.get('language', 'auto')
-        prompt = self._get_combined_prompt(depth, language)
+        prompt = self._get_combined_prompt(depth, language, context=context)
 
         response = self._invoke_nova(s3_key, model, prompt, max_tokens=4096, temperature=0.2)
         parsed = self._parse_json_response(response['text'])
@@ -1692,6 +1890,7 @@ Spec:
     def analyze_video(self, s3_key: str, model: str = 'lite',
                      analysis_types: List[str] = None,
                      options: Dict[str, Any] = None,
+                     context: Dict[str, Any] = None,
                      progress_callback: Optional[Callable[[int, int, str], None]] = None) -> Dict[str, Any]:
         """
         Comprehensive video analysis with multiple analysis types.
@@ -1702,6 +1901,7 @@ Spec:
             model: Nova model to use
             analysis_types: List of analysis types: ['summary', 'chapters', 'elements', 'waterfall_classification']
             options: Dict with options like {'summary_depth': 'standard', 'language': 'auto'}
+            context: Optional dictionary with file context (filename, path, transcript, etc.)
             progress_callback: Optional callback function(current_chunk, total_chunks, status_message)
 
         Returns:
@@ -1750,7 +1950,7 @@ Spec:
         total_processing_time = 0.0
 
         if use_combined:
-            combined_results = self.analyze_combined(s3_key, model, options)
+            combined_results = self.analyze_combined(s3_key, model, options, context=context)
             results.update(combined_results)
             results['analysis_types'] = requested_types
             results['processing_mode'] = 'realtime'

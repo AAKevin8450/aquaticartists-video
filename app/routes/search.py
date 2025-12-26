@@ -146,7 +146,41 @@ def extract_preview_text(source_type: str, row: Dict[str, Any], query: str, max_
                         tier = classification.get('tier_level', '')
                         functional = classification.get('functional_type', '')
                         subtype = classification.get('sub_type', '')
-                        text = " | ".join([v for v in [family, tier, functional, subtype] if v]) or str(classification)[:max_length]
+                        parts = [v for v in [family, tier, functional, subtype] if v and v != 'Unknown']
+                        
+                        # Add search tags if available
+                        search_tags = classification.get('search_tags', [])
+                        if isinstance(search_tags, list) and search_tags:
+                            parts.append(f"Tags: {', '.join(search_tags[:3])}")
+                            
+                        text = " | ".join(parts) or str(classification)[:max_length]
+                        
+                elif match_field == 'search_metadata' and nova_job.get('search_metadata'):
+                    metadata = nova_job['search_metadata']
+                    if isinstance(metadata, str):
+                        try:
+                            metadata = json.loads(metadata)
+                        except:
+                            text = metadata[:max_length]
+                    if isinstance(metadata, dict):
+                        parts = []
+                        project = metadata.get('project', {})
+                        location = metadata.get('location', {})
+                        water_feature = metadata.get('water_feature', {})
+                        
+                        if project.get('customer_name') and project.get('customer_name') != 'unknown':
+                            parts.append(f"Customer: {project['customer_name']}")
+                        if project.get('project_name') and project.get('project_name') != 'unknown':
+                            parts.append(f"Project: {project['project_name']}")
+                        if location.get('city') and location.get('city') != 'unknown':
+                            loc = location['city']
+                            if location.get('state_region') and location.get('state_region') != 'unknown':
+                                loc += f", {location['state_region']}"
+                            parts.append(f"Loc: {loc}")
+                        if water_feature.get('family') and water_feature.get('family') != 'unknown':
+                            parts.append(f"WF: {water_feature['family']}")
+                            
+                        text = " | ".join(parts) or "Metadata found"
         if not text:
             text = row.get('title', '')
 
