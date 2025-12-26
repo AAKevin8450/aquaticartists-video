@@ -204,6 +204,12 @@ def list_files():
         min_duration = request.args.get('min_duration')
         max_duration = request.args.get('max_duration')
         min_transcript_chars = request.args.get('min_transcript_chars')
+
+        # Directory path filter
+        directory_path = request.args.get('directory_path', '').strip()
+        include_subdirectories_str = request.args.get('include_subdirectories', 'true')
+        include_subdirectories = include_subdirectories_str.lower() in ('true', '1', 'yes')
+
         sort_by = request.args.get('sort_by', 'uploaded_at')
         sort_order = request.args.get('sort_order', 'desc')
         page = int(request.args.get('page', 1))
@@ -259,6 +265,8 @@ def list_files():
             min_duration=min_duration,
             max_duration=max_duration,
             min_transcript_chars=min_transcript_chars,
+            directory_path=directory_path or None,
+            include_subdirectories=include_subdirectories,
             sort_by=sort_by,
             sort_order=sort_order,
             limit=per_page,
@@ -282,7 +290,9 @@ def list_files():
             max_size=max_size,
             min_duration=min_duration,
             max_duration=max_duration,
-            min_transcript_chars=min_transcript_chars
+            min_transcript_chars=min_transcript_chars,
+            directory_path=directory_path or None,
+            include_subdirectories=include_subdirectories
         )
 
         # Get summary statistics
@@ -302,7 +312,9 @@ def list_files():
             max_size=max_size,
             min_duration=min_duration,
             max_duration=max_duration,
-            min_transcript_chars=min_transcript_chars
+            min_transcript_chars=min_transcript_chars,
+            directory_path=directory_path or None,
+            include_subdirectories=include_subdirectories
         )
 
         # Format files for display
@@ -510,15 +522,24 @@ def system_browse_directory():
 @bp.route('/api/files/import-directory', methods=['POST'])
 def import_directory():
     """
-    Import files from a directory into the files table without copying.
+    Start an async import job for a directory.
 
     Expected JSON:
         {
             "directory_path": "E:\\videos",
             "recursive": true
         }
+
+    Response:
+        {
+            "success": true,
+            "job_id": "import_abc123def456",
+            "message": "Import job started"
+        }
     """
     try:
+        from app.services.import_service import ImportService
+
         data = request.get_json() or {}
         directory_path = data.get('directory_path')
         recursive = bool(data.get('recursive', True))
@@ -529,104 +550,96 @@ def import_directory():
         if not os.path.isdir(directory_path):
             return jsonify({'error': f'Directory not found: {directory_path}'}), 404
 
-        allowed_video = current_app.config['ALLOWED_VIDEO_EXTENSIONS']
-        allowed_image = current_app.config['ALLOWED_IMAGE_EXTENSIONS']
-
+        # Create job
         db = get_db()
-        imported = 0
-        skipped_existing = 0
-        skipped_unsupported = 0
-        errors = []
-        scanned = 0
+        job_id = ImportService.generate_job_id()
+        db.create_import_job(job_id, directory_path, recursive)
 
-        def handle_file(file_path: str):
-            nonlocal imported, skipped_existing, skipped_unsupported, scanned
-            scanned += 1
-            abs_path = os.path.abspath(file_path)
-            filename = os.path.basename(abs_path)
-
-            try:
-                file_type = get_file_type(filename, allowed_video, allowed_image)
-            except ValidationError:
-                skipped_unsupported += 1
-                return
-
-            if db.get_file_by_local_path(abs_path):
-                skipped_existing += 1
-                return
-
-            try:
-                file_stat = os.stat(abs_path)
-            except OSError as e:
-                errors.append({'path': abs_path, 'error': str(e)})
-                return
-
-            content_type = mimetypes.guess_type(abs_path)[0] or 'application/octet-stream'
-
-            media_metadata = {}
-            try:
-                media_metadata = extract_media_metadata(abs_path)
-            except MediaMetadataError as e:
-                current_app.logger.warning(f"Failed to extract metadata for {abs_path}: {e}")
-
-            db.create_source_file(
-                filename=filename,
-                s3_key=None,
-                file_type=file_type,
-                size_bytes=file_stat.st_size,
-                content_type=content_type,
-                local_path=abs_path,
-                resolution_width=media_metadata.get('resolution_width'),
-                resolution_height=media_metadata.get('resolution_height'),
-                frame_rate=media_metadata.get('frame_rate'),
-                codec_video=media_metadata.get('codec_video'),
-                codec_audio=media_metadata.get('codec_audio'),
-                duration_seconds=media_metadata.get('duration_seconds'),
-                bitrate=media_metadata.get('bitrate'),
-                metadata={
-                    'imported_from': 'directory',
-                    'source_directory': directory_path,
-                    'original_size_bytes': file_stat.st_size,
-                    'file_mtime': file_stat.st_mtime,
-                    'file_ctime': file_stat.st_ctime
-                }
-            )
-            imported += 1
-
-        if recursive:
-            seen_dirs = set()
-            for root, dirs, files in os.walk(directory_path, followlinks=True):
-                real_root = os.path.realpath(root)
-                if real_root in seen_dirs:
-                    dirs[:] = []
-                    continue
-                seen_dirs.add(real_root)
-
-                pruned_dirs = []
-                for name in dirs:
-                    real_path = os.path.realpath(os.path.join(root, name))
-                    if real_path not in seen_dirs:
-                        pruned_dirs.append(name)
-                dirs[:] = pruned_dirs
-
-                for name in files:
-                    handle_file(os.path.join(root, name))
-        else:
-            for entry in os.scandir(directory_path):
-                if entry.is_file():
-                    handle_file(entry.path)
+        # Start async import
+        import_service = ImportService(db, current_app._get_current_object())
+        import_service.run_import_job_async(job_id, directory_path, recursive)
 
         return jsonify({
-            'scanned': scanned,
-            'imported': imported,
-            'skipped_existing': skipped_existing,
-            'skipped_unsupported': skipped_unsupported,
-            'errors': errors
+            'success': True,
+            'job_id': job_id,
+            'message': 'Import job started'
         }), 200
 
     except Exception as e:
         current_app.logger.error(f"Import directory error: {e}", exc_info=True)
-        return jsonify({'error': 'Failed to import directory'}), 500
+        return jsonify({'error': 'Failed to start import'}), 500
+
+
+@bp.route('/api/files/import-directory/<job_id>/status', methods=['GET'])
+def get_import_status(job_id):
+    """
+    Get status of an import job.
+
+    Response:
+    {
+        "success": true,
+        "job": {
+            "job_id": "import_abc123",
+            "status": "IN_PROGRESS",
+            "progress_percent": 45,
+            "files_scanned": 234,
+            "files_imported": 180,
+            "files_skipped_existing": 40,
+            "files_skipped_unsupported": 14,
+            "total_files": 520,
+            "current_operation": "Importing files...",
+            "results": {...}  // Only present when completed
+        }
+    }
+    """
+    try:
+        db = get_db()
+        job = db.get_import_job(job_id)
+
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        return jsonify({
+            'success': True,
+            'job': job
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Get import status error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/api/files/import-directory/<job_id>/cancel', methods=['POST'])
+def cancel_import_job(job_id):
+    """
+    Cancel a running import job.
+
+    Response:
+    {
+        "success": true,
+        "message": "Job cancelled"
+    }
+    """
+    try:
+        db = get_db()
+        job = db.get_import_job(job_id)
+
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        if job['status'] in ('SUCCEEDED', 'FAILED', 'CANCELLED'):
+            return jsonify({'error': 'Job already completed'}), 400
+
+        db.cancel_import_job(job_id)
+
+        return jsonify({
+            'success': True,
+            'message': 'Job cancelled'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Cancel import job error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
 
 @bp.route('/api/files/<int:file_id>', methods=['GET'])
@@ -777,6 +790,86 @@ def get_file_s3_files(file_id):
     except Exception as e:
         current_app.logger.error(f"Get S3 files error: {e}", exc_info=True)
         return jsonify({'error': 'Failed to get S3 files'}), 500
+
+
+@bp.route('/api/files/<int:file_id>/nova-analyses', methods=['GET'])
+def get_file_nova_analyses(file_id):
+    """
+    Get all Nova analyses for a file.
+
+    Returns:
+        {
+            "nova_analyses": [
+                {
+                    "id": 1,
+                    "analysis_job_id": 123,
+                    "job_id": "nova-123456789",
+                    "model": "lite",
+                    "analysis_types": ["summary", "chapters"],
+                    "status": "COMPLETED",
+                    "created_at": "2025-12-25T10:30:00Z",
+                    "completed_at": "2025-12-25T10:32:00Z",
+                    "cost_usd": 0.05,
+                    "processing_mode": "realtime"
+                }
+            ]
+        }
+    """
+    try:
+        db = get_db()
+        file = db.get_file(file_id)
+
+        if not file:
+            return jsonify({'error': 'File not found'}), 404
+
+        # Get all Nova jobs for this file with analysis_jobs.job_id
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT
+                    nj.*,
+                    aj.job_id as analysis_job_job_id
+                FROM nova_jobs nj
+                JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id
+                WHERE aj.file_id = ?
+                ORDER BY nj.created_at DESC
+            ''', (file_id,))
+
+            nova_jobs = []
+            for row in cursor.fetchall():
+                job = dict(row)
+                # Parse JSON fields
+                if job.get('analysis_types'):
+                    import json
+                    job['analysis_types'] = json.loads(job['analysis_types'])
+                nova_jobs.append(job)
+
+        formatted_jobs = []
+        for job in nova_jobs:
+            formatted_jobs.append({
+                'id': job['id'],
+                'analysis_job_id': job['analysis_job_id'],
+                'job_id': job.get('analysis_job_job_id'),  # This is the job_id from analysis_jobs table
+                'model': job['model'],
+                'analysis_types': job.get('analysis_types', []),
+                'status': job['status'],
+                'created_at': format_timestamp(job['created_at']),
+                'started_at': format_timestamp(job.get('started_at')),
+                'completed_at': format_timestamp(job.get('completed_at')),
+                'cost_usd': job.get('cost_usd'),
+                'tokens_total': job.get('tokens_total'),
+                'processing_time_seconds': job.get('processing_time_seconds'),
+                'processing_mode': 'batch' if job.get('batch_mode') else 'realtime',
+                'error_message': job.get('error_message')
+            })
+
+        return jsonify({
+            'nova_analyses': formatted_jobs
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Get Nova analyses error: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to get Nova analyses'}), 500
 
 
 @bp.route('/api/files/<int:file_id>/create-proxy', methods=['POST'])
@@ -1920,7 +2013,7 @@ def cancel_batch_job(job_id: str):
 @bp.route('/api/files/rescan', methods=['POST'])
 def rescan_directory():
     """
-    Rescan a directory and return detected changes.
+    Start an async rescan job for a directory.
 
     Request body:
     {
@@ -1931,21 +2024,8 @@ def rescan_directory():
     Response:
     {
         "success": true,
-        "summary": {
-            "total_on_disk": 150,
-            "total_in_database": 145,
-            "matched": 140,
-            "moved": 3,
-            "deleted": 2,
-            "new": 7,
-            "ambiguous": 0
-        },
-        "details": {
-            "moved": [...],
-            "deleted": [...],
-            "new": [...],
-            "ambiguous": [...]
-        }
+        "job_id": "rescan_abc123def456",
+        "message": "Rescan job started"
     }
     """
     try:
@@ -1966,83 +2046,94 @@ def rescan_directory():
         if not dir_path.is_dir():
             return jsonify({'error': 'Path is not a directory'}), 400
 
-        # Create rescan service and perform reconciliation
+        # Create job
         db = get_db()
+        job_id = RescanService.generate_job_id()
+        db.create_rescan_job(job_id, directory_path, recursive)
+
+        # Start async rescan
         rescan_service = RescanService(db)
-        results = rescan_service.reconcile(directory_path, mode='smart')
-
-        # Build summary
-        summary = {
-            'total_on_disk': len(rescan_service.scan_directory(directory_path, recursive)),
-            'total_in_database': len(rescan_service.get_database_files_for_directory(directory_path)),
-            'matched': len(results['matched']),
-            'moved': len(results['moved']),
-            'deleted': len(results['deleted']),
-            'new': len(results['new']),
-            'ambiguous': len(results['ambiguous'])
-        }
-
-        # Build details
-        details = {
-            'moved': [
-                {
-                    'id': db_file['id'],
-                    'old_path': db_file['local_path'],
-                    'new_path': disk_file['path'],
-                    'filename': db_file['filename'],
-                    'size_bytes': db_file['size_bytes'],
-                    'has_proxy': db_file['has_proxy'],
-                    'has_analysis': db_file['has_analysis'],
-                    'has_transcripts': db_file['has_transcripts']
-                }
-                for db_file, disk_file in results['moved']
-            ],
-            'deleted': [
-                {
-                    'id': db_file['id'],
-                    'path': db_file['local_path'],
-                    'filename': db_file['filename'],
-                    'size_bytes': db_file['size_bytes'],
-                    'has_proxy': db_file['has_proxy'],
-                    'has_analysis': db_file['has_analysis'],
-                    'has_transcripts': db_file['has_transcripts']
-                }
-                for db_file in results['deleted']
-            ],
-            'new': [
-                {
-                    'path': disk_file['path'],
-                    'filename': disk_file['filename'],
-                    'size_bytes': disk_file['size_bytes']
-                }
-                for disk_file in results['new']
-            ],
-            'ambiguous': [
-                {
-                    'id': db_file['id'],
-                    'old_path': db_file['local_path'],
-                    'candidates': [
-                        {
-                            'path': candidate['path'],
-                            'size_bytes': candidate['size_bytes']
-                        }
-                        for candidate in candidates
-                    ]
-                }
-                for db_file, candidates in results['ambiguous']
-            ]
-        }
+        rescan_service.run_rescan_job_async(job_id, directory_path, recursive)
 
         return jsonify({
             'success': True,
-            'summary': summary,
-            'details': details
+            'job_id': job_id,
+            'message': 'Rescan job started'
         }), 200
 
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         current_app.logger.error(f"Rescan error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/api/files/rescan/<job_id>/status', methods=['GET'])
+def get_rescan_status(job_id):
+    """
+    Get status of a rescan job.
+
+    Response:
+    {
+        "success": true,
+        "job": {
+            "job_id": "rescan_abc123",
+            "status": "IN_PROGRESS",
+            "progress_percent": 45,
+            "files_scanned": 234,
+            "total_files": 520,
+            "current_operation": "Scanning filesystem...",
+            "results": {...}  // Only present when completed
+        }
+    }
+    """
+    try:
+        db = get_db()
+        job = db.get_rescan_job(job_id)
+
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        return jsonify({
+            'success': True,
+            'job': job
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Get rescan status error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/api/files/rescan/<job_id>/cancel', methods=['POST'])
+def cancel_rescan_job(job_id):
+    """
+    Cancel a running rescan job.
+
+    Response:
+    {
+        "success": true,
+        "message": "Job cancelled"
+    }
+    """
+    try:
+        db = get_db()
+        job = db.get_rescan_job(job_id)
+
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        if job['status'] in ('SUCCEEDED', 'FAILED', 'CANCELLED'):
+            return jsonify({'error': 'Job already completed'}), 400
+
+        db.cancel_rescan_job(job_id)
+
+        return jsonify({
+            'success': True,
+            'message': 'Job cancelled'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Cancel rescan job error: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 

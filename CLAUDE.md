@@ -37,13 +37,14 @@ SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
 | nova_transcript_summary_service.py | Nova 2 Lite transcript summaries (<=1000 chars) |
 | nova_embeddings_service.py | Semantic search vectors (1024 dim) |
 | face_collection_service.py | Face collection management |
-| rescan_service.py | Folder rescan with fingerprint matching |
+| rescan_service.py | Async folder rescan with progress tracking |
+| import_service.py | Async directory import with progress tracking |
 
 ### Key Routes (app/routes/)
 | Route | Key Endpoints |
 |-------|---------------|
 | nova_analysis.py | /api/nova/analyze, /status, /results, /models |
-| file_management.py | /api/files, /api/batch/*, /api/files/rescan |
+| file_management.py | /api/files, /api/batch/*, /api/files/rescan, /api/files/import-directory |
 | search.py | /api/search?semantic=true |
 | transcription.py | /api/scan, /api/start-batch |
 
@@ -57,10 +58,17 @@ SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
 - Fetch all filtered files (500/request), real-time progress with ETA
 - Action types: proxy, transcribe, transcript-summary, nova, rekognition
 
-### Folder Rescan
+### Folder Rescan (Async with Progress)
 - Fingerprint matching (filename + size + mtime) preserves analysis data for moved files
-- Two-step: scan → review → apply
-- Endpoints: POST /api/files/rescan, /api/files/rescan/apply, /api/files/system-browse
+- Real-time progress: "Scanning filesystem... (234 / 1,247 files) - ~45s remaining"
+- Two-step: async scan → review → apply
+- Endpoints: POST /api/files/rescan → job_id, GET /status, POST /cancel, POST /apply
+
+### Directory Import (Async with Progress)
+- Import local files without S3 upload, preserving metadata
+- Real-time stats: "Importing... (180 imported, 40 existing, 14 unsupported)"
+- Progress bar with ETA, cancellation support
+- Endpoints: POST /api/files/import-directory → job_id, GET /status, POST /cancel
 
 ### Search
 - **Keyword**: UNION across files, transcripts, Rekognition, Nova (summary/chapters/elements/waterfall/search_metadata), collections
@@ -80,6 +88,8 @@ SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
 - **analysis_jobs/nova_jobs**: Job tracking with cost
 - **nova_jobs**: summary_result, chapters_result, elements_result, waterfall_classification_result, search_metadata
 - **nova_embeddings**: sqlite-vec vectors
+- **rescan_jobs**: Async folder rescan tracking (status, progress, files_scanned, results)
+- **import_jobs**: Async directory import tracking (status, progress, imported/skipped counts, errors)
 
 ## Constraints
 - Video: Max 10GB (MP4, MOV, AVI, MKV) | Image: Max 15MB (JPEG, PNG)

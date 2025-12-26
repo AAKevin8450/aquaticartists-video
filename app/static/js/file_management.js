@@ -21,6 +21,8 @@ let currentFilters = {
     min_duration: '',
     max_duration: '',
     min_transcript_chars: '',
+    directory_path: '',
+    include_subdirectories: true,
     sort_by: 'uploaded_at',
     sort_order: 'desc',
     page: 1,
@@ -36,6 +38,8 @@ let currentTranscriptId = null;
 let s3FilesLoaded = false;
 let importBrowsingPath = '';
 let importBrowserParentPath = null;
+let filterBrowsingPath = '';
+let filterBrowserParentPath = null;
 let currentBatchActionType = null;  // Track current batch action type
 
 // ============================================================================
@@ -165,6 +169,59 @@ function initializeEventListeners() {
         });
     }
 
+    // Filter directory browser
+    const filterBrowseBtn = document.getElementById('filterBrowseBtn');
+    if (filterBrowseBtn) {
+        filterBrowseBtn.addEventListener('click', openFilterFolderBrowser);
+    }
+
+    const clearDirectoryBtn = document.getElementById('clearDirectoryBtn');
+    if (clearDirectoryBtn) {
+        clearDirectoryBtn.addEventListener('click', () => {
+            document.getElementById('directoryPathFilter').value = '';
+            currentFilters.directory_path = '';
+            currentFilters.page = 1;
+            loadFiles();
+        });
+    }
+
+    const filterFolderModal = document.getElementById('filterFolderBrowserModal');
+    if (filterFolderModal) {
+        filterFolderModal.addEventListener('show.bs.modal', () => {
+            const existingPath = document.getElementById('directoryPathFilter').value.trim();
+            filterBrowseTo(existingPath || '');
+        });
+    }
+
+    const filterGoUpBtn = document.getElementById('filterGoUpBtn');
+    if (filterGoUpBtn) {
+        filterGoUpBtn.addEventListener('click', () => {
+            if (filterBrowserParentPath) {
+                filterBrowseTo(filterBrowserParentPath);
+            }
+        });
+    }
+
+    const filterGoToPathBtn = document.getElementById('filterGoToPathBtn');
+    if (filterGoToPathBtn) {
+        filterGoToPathBtn.addEventListener('click', () => {
+            const pathInput = document.getElementById('filterCurrentBrowsePath').value.trim();
+            if (pathInput) {
+                filterBrowseTo(pathInput);
+            }
+        });
+    }
+
+    const filterSelectFolderBtn = document.getElementById('filterSelectFolderBtn');
+    if (filterSelectFolderBtn) {
+        filterSelectFolderBtn.addEventListener('click', () => {
+            if (!filterBrowsingPath) return;
+            document.getElementById('directoryPathFilter').value = filterBrowsingPath;
+            const modal = bootstrap.Modal.getInstance(filterFolderModal);
+            if (modal) modal.hide();
+        });
+    }
+
     initializeBatchOptionsModal();
     initializeSingleOptionsModal();
 
@@ -228,6 +285,10 @@ function applyFilters() {
     // Transcript character count filter
     currentFilters.min_transcript_chars = document.getElementById('minTranscriptChars').value;
 
+    // Directory path filter
+    currentFilters.directory_path = document.getElementById('directoryPathFilter').value.trim();
+    currentFilters.include_subdirectories = document.getElementById('includeSubdirectories').checked;
+
     currentFilters.page = 1;
     loadFiles();
 }
@@ -250,6 +311,8 @@ function resetFilters() {
     document.getElementById('minDuration').value = '';
     document.getElementById('maxDuration').value = '';
     document.getElementById('minTranscriptChars').value = '';
+    document.getElementById('directoryPathFilter').value = '';
+    document.getElementById('includeSubdirectories').checked = true;
 
     // Reset state
     currentFilters = {
@@ -269,6 +332,8 @@ function resetFilters() {
         min_duration: '',
         max_duration: '',
         min_transcript_chars: '',
+        directory_path: '',
+        include_subdirectories: true,
         sort_by: 'uploaded_at',
         sort_order: 'desc',
         page: 1,
@@ -333,6 +398,8 @@ function applyFiltersToInputs() {
     document.getElementById('minDuration').value = currentFilters.min_duration || '';
     document.getElementById('maxDuration').value = currentFilters.max_duration || '';
     document.getElementById('minTranscriptChars').value = currentFilters.min_transcript_chars || '';
+    document.getElementById('directoryPathFilter').value = currentFilters.directory_path || '';
+    document.getElementById('includeSubdirectories').checked = currentFilters.include_subdirectories !== false;
 }
 
 function normalizeTriState(value) {
@@ -432,6 +499,9 @@ async function importBrowseTo(path) {
     }
 }
 
+let importJobId = null;
+let importPollInterval = null;
+
 async function importDirectory() {
     const directoryPath = document.getElementById('importDirectoryPath').value.trim();
     const recursive = document.getElementById('importRecursive').checked;
@@ -442,11 +512,14 @@ async function importDirectory() {
     }
 
     const importButton = document.getElementById('importDirectoryBtn');
+    const progressDiv = document.getElementById('importProgress');
+
     importButton.disabled = true;
+    progressDiv.style.display = 'block';
+    progressDiv.innerHTML = '<div class="spinner-border spinner-border-sm me-2" role="status"></div><span>Starting import...</span>';
 
     try {
-        showAlert('Importing files...', 'info');
-
+        // Start async import job
         const response = await fetch('/api/files/import-directory', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -458,25 +531,255 @@ async function importDirectory() {
 
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.error || 'Failed to import directory');
+            throw new Error(error.error || 'Failed to start import');
         }
 
         const result = await response.json();
-        const message = `Imported ${result.imported} file(s) (scanned ${result.scanned}, ` +
-            `skipped existing ${result.skipped_existing}, unsupported ${result.skipped_unsupported})`;
-        showAlert(message, result.errors && result.errors.length > 0 ? 'warning' : 'success');
+        importJobId = result.job_id;
 
-        if (result.errors && result.errors.length > 0) {
-            console.warn('Import errors:', result.errors);
-        }
-
-        loadFiles();
+        // Start polling for progress
+        pollImportProgress();
 
     } catch (error) {
         console.error('Import error:', error);
         showAlert(`Import failed: ${error.message}`, 'danger');
-    } finally {
         importButton.disabled = false;
+        progressDiv.style.display = 'none';
+    }
+}
+
+async function pollImportProgress() {
+    if (!importJobId) return;
+
+    try {
+        const response = await fetch(`/api/files/import-directory/${importJobId}/status`);
+
+        if (!response.ok) {
+            throw new Error('Failed to get job status');
+        }
+
+        const data = await response.json();
+        const job = data.job;
+
+        // Update progress display
+        updateImportProgress(job);
+
+        // Check if job is complete
+        if (job.status === 'SUCCEEDED') {
+            clearInterval(importPollInterval);
+            importPollInterval = null;
+
+            const result = job.results;
+            const message = `Imported ${result.imported} file(s) (scanned ${result.scanned}, ` +
+                `skipped existing ${result.skipped_existing}, unsupported ${result.skipped_unsupported})`;
+            showAlert(message, result.errors && result.errors.length > 0 ? 'warning' : 'success');
+
+            if (result.errors && result.errors.length > 0) {
+                console.warn('Import errors:', result.errors);
+            }
+
+            loadFiles();
+
+            document.getElementById('importDirectoryBtn').disabled = false;
+            document.getElementById('importProgress').style.display = 'none';
+
+        } else if (job.status === 'FAILED') {
+            clearInterval(importPollInterval);
+            importPollInterval = null;
+
+            showAlert(`Import failed: ${job.error_message || 'Unknown error'}`, 'danger');
+            document.getElementById('importDirectoryBtn').disabled = false;
+            document.getElementById('importProgress').style.display = 'none';
+
+        } else if (job.status === 'CANCELLED') {
+            clearInterval(importPollInterval);
+            importPollInterval = null;
+
+            showAlert('Import was cancelled', 'info');
+            document.getElementById('importDirectoryBtn').disabled = false;
+            document.getElementById('importProgress').style.display = 'none';
+
+        } else {
+            // Job still in progress, schedule next poll
+            if (!importPollInterval) {
+                importPollInterval = setInterval(pollImportProgress, 500);
+            }
+        }
+
+    } catch (error) {
+        console.error('Poll import progress error:', error);
+        clearInterval(importPollInterval);
+        importPollInterval = null;
+
+        showAlert(`Failed to get import progress: ${error.message}`, 'danger');
+        document.getElementById('importDirectoryBtn').disabled = false;
+        document.getElementById('importProgress').style.display = 'none';
+    }
+}
+
+function updateImportProgress(job) {
+    const progressDiv = document.getElementById('importProgress');
+
+    // Build progress text
+    let progressText = job.current_operation || 'Importing files...';
+
+    if (job.total_files > 0) {
+        progressText += ` (${job.files_scanned} / ${job.total_files} files)`;
+    }
+
+    // Add detailed stats
+    let statsText = '';
+    if (job.files_imported > 0 || job.files_skipped_existing > 0 || job.files_skipped_unsupported > 0) {
+        statsText = `<div class="small text-muted mt-1">`;
+        statsText += `Imported: ${job.files_imported || 0} | `;
+        statsText += `Existing: ${job.files_skipped_existing || 0} | `;
+        statsText += `Unsupported: ${job.files_skipped_unsupported || 0}`;
+        statsText += `</div>`;
+    }
+
+    // Calculate ETA
+    let etaText = '';
+    if (job.total_files > 0 && job.files_scanned > 0 && job.files_scanned < job.total_files) {
+        const elapsed = new Date() - new Date(job.started_at);
+        const rate = job.files_scanned / (elapsed / 1000); // files per second
+        const remaining = job.total_files - job.files_scanned;
+        const etaSeconds = remaining / rate;
+
+        if (etaSeconds < 60) {
+            etaText = ` - ~${Math.ceil(etaSeconds)}s remaining`;
+        } else {
+            etaText = ` - ~${Math.ceil(etaSeconds / 60)}m remaining`;
+        }
+    }
+
+    // Update the progress display
+    progressDiv.innerHTML = `
+        <div class="spinner-border spinner-border-sm me-2" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <span>${progressText}${etaText}</span>
+        ${statsText}
+        <div class="progress mt-2" style="height: 20px;">
+            <div class="progress-bar progress-bar-striped progress-bar-animated"
+                 role="progressbar"
+                 style="width: ${job.progress_percent || 0}%"
+                 aria-valuenow="${job.progress_percent || 0}"
+                 aria-valuemin="0"
+                 aria-valuemax="100">
+                ${job.progress_percent || 0}%
+            </div>
+        </div>
+        <button class="btn btn-sm btn-outline-danger mt-2" onclick="cancelImportJob()">
+            Cancel
+        </button>
+    `;
+}
+
+async function cancelImportJob() {
+    if (!importJobId) return;
+
+    try {
+        const response = await fetch(`/api/files/import-directory/${importJobId}/cancel`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to cancel job');
+        }
+
+        showAlert('Import cancelled', 'info');
+
+    } catch (error) {
+        console.error('Cancel error:', error);
+        showAlert(`Failed to cancel: ${error.message}`, 'danger');
+    }
+}
+
+// ============================================================================
+// DIRECTORY FILTER BROWSER
+// ============================================================================
+
+function openFilterFolderBrowser() {
+    const modal = new bootstrap.Modal(document.getElementById('filterFolderBrowserModal'));
+    modal.show();
+}
+
+async function filterBrowseTo(path) {
+    const folderList = document.getElementById('filterFolderList');
+    folderList.innerHTML = `
+        <div class="text-center p-4">
+            <div class="spinner-border" role="status"></div>
+            <p class="mt-2 mb-0">Loading folders...</p>
+        </div>
+    `;
+
+    try {
+        const response = await fetch('/api/files/browse', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: path })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to browse directory');
+        }
+
+        const data = await response.json();
+        filterBrowsingPath = data.current_path;
+        filterBrowserParentPath = data.parent_path;
+
+        document.getElementById('filterCurrentBrowsePath').value = data.current_path;
+        document.getElementById('filterGoUpBtn').disabled = !data.parent_path;
+
+        if (data.drives && data.drives.length > 0) {
+            document.getElementById('filterDriveSelector').style.display = 'block';
+            const driveButtons = document.getElementById('filterDriveButtons');
+            driveButtons.innerHTML = data.drives.map(drive =>
+                `<button type="button" class="btn btn-sm btn-outline-primary filter-drive-btn" data-path="${drive}">
+                    <i class="bi bi-hdd"></i> ${drive}
+                </button>`
+            ).join('');
+
+            driveButtons.querySelectorAll('.filter-drive-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    filterBrowseTo(btn.dataset.path);
+                });
+            });
+        } else {
+            document.getElementById('filterDriveSelector').style.display = 'none';
+        }
+
+        if (!data.directories || data.directories.length === 0) {
+            folderList.innerHTML = `
+                <div class="text-center p-4 text-muted">
+                    <i class="bi bi-folder-x fs-3"></i>
+                    <p class="mt-2 mb-0">No subfolders found</p>
+                </div>
+            `;
+        } else {
+            folderList.innerHTML = data.directories.map(dir =>
+                `<button type="button" class="list-group-item list-group-item-action filter-folder-item" data-path="${dir.path}">
+                    <i class="bi bi-folder"></i> ${dir.name}
+                </button>`
+            ).join('');
+
+            folderList.querySelectorAll('.filter-folder-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    filterBrowseTo(item.dataset.path);
+                });
+            });
+        }
+
+    } catch (error) {
+        console.error('Filter browse error:', error);
+        folderList.innerHTML = `
+            <div class="text-center p-4 text-danger">
+                <i class="bi bi-exclamation-triangle fs-3"></i>
+                <p class="mt-2 mb-0">Error: ${error.message}</p>
+            </div>
+        `;
     }
 }
 
@@ -1369,42 +1672,143 @@ async function openTranscriptDetails(transcriptId) {
 
 async function openLatestNovaAnalysis(fileId) {
     try {
-        const response = await fetch(`/api/files/${fileId}`);
+        const response = await fetch(`/api/files/${fileId}/nova-analyses`);
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.error || 'Failed to load file details');
+            throw new Error(error.error || 'Failed to load Nova analyses');
         }
 
         const data = await response.json();
-        const analysisJobs = data.analysis_jobs || [];
-        const novaJobs = analysisJobs.filter(job =>
-            job.analysis_type === 'nova' && (job.status === 'SUCCEEDED' || job.status === 'COMPLETED')
+        const novaAnalyses = data.nova_analyses || [];
+        const completedAnalyses = novaAnalyses.filter(job =>
+            job.status === 'SUCCEEDED' || job.status === 'COMPLETED'
         );
 
-        if (novaJobs.length === 0) {
+        if (completedAnalyses.length === 0) {
             showAlert('No completed Nova analyses found for this file.', 'warning');
             return;
         }
 
-        novaJobs.sort((a, b) => {
-            const aDate = new Date(a.completed_at || a.started_at || 0).getTime();
-            const bDate = new Date(b.completed_at || b.started_at || 0).getTime();
-            return bDate - aDate;
-        });
-
-        const job = novaJobs[0];
-        const jobId = job.job_id || job.id;
-        if (!jobId) {
-            showAlert('Nova analysis job id missing.', 'warning');
+        // If only one completed analysis, go directly to it
+        if (completedAnalyses.length === 1) {
+            const job = completedAnalyses[0];
+            const jobId = job.job_id;
+            if (!jobId) {
+                showAlert('Nova analysis job id missing.', 'warning');
+                return;
+            }
+            saveFileManagementState();
+            window.location.href = `/dashboard/${jobId}`;
             return;
         }
 
-        saveFileManagementState();
-        window.location.href = `/dashboard/${jobId}`;
+        // Multiple analyses - show selection modal
+        showNovaAnalysisSelectionModal(fileId, completedAnalyses);
     } catch (error) {
         console.error('Open Nova analysis error:', error);
         showAlert(`Failed to open Nova analysis: ${error.message}`, 'danger');
     }
+}
+
+function showNovaAnalysisSelectionModal(fileId, analyses) {
+    // Sort analyses by completed date (most recent first)
+    analyses.sort((a, b) => {
+        const aDate = new Date(a.completed_at || a.started_at || a.created_at || 0).getTime();
+        const bDate = new Date(b.completed_at || b.started_at || b.created_at || 0).getTime();
+        return bDate - aDate;
+    });
+
+    // Get modal elements
+    const modal = new bootstrap.Modal(document.getElementById('selectNovaAnalysisModal'));
+    const container = document.getElementById('novaAnalysesContainer');
+    const loadingDiv = document.getElementById('novaAnalysesLoading');
+    const listDiv = document.getElementById('novaAnalysesList');
+    const errorDiv = document.getElementById('novaAnalysesError');
+
+    // Reset modal state
+    loadingDiv.style.display = 'none';
+    listDiv.style.display = 'block';
+    errorDiv.style.display = 'none';
+    container.innerHTML = '';
+
+    // Populate analyses list
+    analyses.forEach((analysis, index) => {
+        const item = document.createElement('a');
+        item.href = '#';
+        item.className = 'list-group-item list-group-item-action';
+
+        // Build analysis types display
+        const analysisTypes = Array.isArray(analysis.analysis_types)
+            ? analysis.analysis_types.join(', ')
+            : 'N/A';
+
+        // Build status badge
+        let statusBadge = '';
+        if (analysis.status === 'COMPLETED') {
+            statusBadge = '<span class="badge bg-success">Completed</span>';
+        } else if (analysis.status === 'SUCCEEDED') {
+            statusBadge = '<span class="badge bg-success">Succeeded</span>';
+        }
+
+        // Format cost
+        const costDisplay = analysis.cost_usd !== null && analysis.cost_usd !== undefined
+            ? `$${analysis.cost_usd.toFixed(4)}`
+            : 'N/A';
+
+        // Format processing time
+        const timeDisplay = analysis.processing_time_seconds
+            ? `${analysis.processing_time_seconds.toFixed(1)}s`
+            : 'N/A';
+
+        // Most recent badge
+        const recentBadge = index === 0
+            ? '<span class="badge bg-primary ms-2">Most Recent</span>'
+            : '';
+
+        item.innerHTML = `
+            <div class="d-flex w-100 justify-content-between align-items-start">
+                <div class="flex-grow-1">
+                    <h6 class="mb-1">
+                        <i class="bi bi-stars"></i>
+                        ${analysis.model.charAt(0).toUpperCase() + analysis.model.slice(1)} Model
+                        ${recentBadge}
+                    </h6>
+                    <p class="mb-1 text-muted small">
+                        <strong>Analysis Types:</strong> ${analysisTypes}
+                    </p>
+                    <p class="mb-1 text-muted small">
+                        <strong>Completed:</strong> ${analysis.completed_at || 'N/A'}
+                        &nbsp;|&nbsp;
+                        <strong>Cost:</strong> ${costDisplay}
+                        &nbsp;|&nbsp;
+                        <strong>Time:</strong> ${timeDisplay}
+                        &nbsp;|&nbsp;
+                        <strong>Mode:</strong> ${analysis.processing_mode}
+                    </p>
+                </div>
+                <div class="ms-3">
+                    ${statusBadge}
+                </div>
+            </div>
+        `;
+
+        item.addEventListener('click', (e) => {
+            e.preventDefault();
+            const jobId = analysis.job_id;
+            if (jobId) {
+                modal.hide();
+                saveFileManagementState();
+                window.location.href = `/dashboard/${jobId}`;
+            } else {
+                showAlert('Nova analysis job id missing.', 'warning');
+            }
+        });
+
+        container.appendChild(item);
+    });
+
+    // Show modal
+    modal.show();
 }
 
 async function startTranscription(fileId) {
@@ -2906,6 +3310,8 @@ async function findAndShowFileByNovaId(novaId) {
 // ============================================================================
 
 let rescanResults = null;
+let rescanJobId = null;
+let rescanPollInterval = null;
 
 function openRescanModal() {
     const modal = new bootstrap.Modal(document.getElementById('rescanModal'));
@@ -2967,6 +3373,7 @@ async function performRescan() {
     document.getElementById('rescanLoading').style.display = 'block';
 
     try {
+        // Start async rescan job
         const response = await fetch('/api/files/rescan', {
             method: 'POST',
             headers: {
@@ -2980,24 +3387,155 @@ async function performRescan() {
 
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.error || 'Failed to scan directory');
+            throw new Error(error.error || 'Failed to start scan');
         }
 
         const data = await response.json();
-        rescanResults = data;
+        rescanJobId = data.job_id;
 
-        // Hide loading, show results
-        document.getElementById('rescanLoading').style.display = 'none';
-        renderRescanResults(data);
-        document.getElementById('rescanStep2').style.display = 'block';
+        // Start polling for progress
+        pollRescanProgress();
 
     } catch (error) {
         console.error('Rescan error:', error);
-        showAlert(`Failed to scan directory: ${error.message}`, 'danger');
+        showAlert(`Failed to start scan: ${error.message}`, 'danger');
 
         // Go back to step 1
         document.getElementById('rescanLoading').style.display = 'none';
         document.getElementById('rescanStep1').style.display = 'block';
+    }
+}
+
+async function pollRescanProgress() {
+    if (!rescanJobId) return;
+
+    try {
+        const response = await fetch(`/api/files/rescan/${rescanJobId}/status`);
+
+        if (!response.ok) {
+            throw new Error('Failed to get job status');
+        }
+
+        const data = await response.json();
+        const job = data.job;
+
+        // Update progress display
+        updateRescanProgress(job);
+
+        // Check if job is complete
+        if (job.status === 'SUCCEEDED') {
+            clearInterval(rescanPollInterval);
+            rescanPollInterval = null;
+
+            // Extract results from job
+            rescanResults = job.results;
+
+            // Hide loading, show results
+            document.getElementById('rescanLoading').style.display = 'none';
+            renderRescanResults(job.results);
+            document.getElementById('rescanStep2').style.display = 'block';
+
+        } else if (job.status === 'FAILED') {
+            clearInterval(rescanPollInterval);
+            rescanPollInterval = null;
+
+            throw new Error(job.error_message || 'Scan failed');
+
+        } else if (job.status === 'CANCELLED') {
+            clearInterval(rescanPollInterval);
+            rescanPollInterval = null;
+
+            showAlert('Scan was cancelled', 'info');
+            document.getElementById('rescanLoading').style.display = 'none';
+            document.getElementById('rescanStep1').style.display = 'block';
+
+        } else {
+            // Job still in progress, schedule next poll
+            if (!rescanPollInterval) {
+                rescanPollInterval = setInterval(pollRescanProgress, 500);
+            }
+        }
+
+    } catch (error) {
+        console.error('Poll progress error:', error);
+        clearInterval(rescanPollInterval);
+        rescanPollInterval = null;
+
+        showAlert(`Failed to get scan progress: ${error.message}`, 'danger');
+        document.getElementById('rescanLoading').style.display = 'none';
+        document.getElementById('rescanStep1').style.display = 'block';
+    }
+}
+
+function updateRescanProgress(job) {
+    const loadingDiv = document.getElementById('rescanLoading');
+
+    // Update progress text
+    let progressText = '';
+    if (job.current_operation) {
+        progressText = job.current_operation;
+    }
+
+    if (job.total_files > 0) {
+        progressText += ` (${job.files_scanned} / ${job.total_files} files)`;
+    }
+
+    // Calculate ETA
+    let etaText = '';
+    if (job.total_files > 0 && job.files_scanned > 0 && job.files_scanned < job.total_files) {
+        // Estimate based on elapsed time
+        const elapsed = new Date() - new Date(job.started_at);
+        const rate = job.files_scanned / (elapsed / 1000); // files per second
+        const remaining = job.total_files - job.files_scanned;
+        const etaSeconds = remaining / rate;
+
+        if (etaSeconds < 60) {
+            etaText = ` - ~${Math.ceil(etaSeconds)}s remaining`;
+        } else {
+            etaText = ` - ~${Math.ceil(etaSeconds / 60)}m remaining`;
+        }
+    }
+
+    // Update the loading message
+    loadingDiv.innerHTML = `
+        <div class="spinner-border spinner-border-sm me-2" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <span>${progressText}${etaText}</span>
+        <div class="progress mt-3" style="height: 25px;">
+            <div class="progress-bar progress-bar-striped progress-bar-animated"
+                 role="progressbar"
+                 style="width: ${job.progress_percent || 0}%"
+                 aria-valuenow="${job.progress_percent || 0}"
+                 aria-valuemin="0"
+                 aria-valuemax="100">
+                ${job.progress_percent || 0}%
+            </div>
+        </div>
+        <button class="btn btn-sm btn-outline-danger mt-3" onclick="cancelRescanJob()">
+            Cancel
+        </button>
+    `;
+}
+
+async function cancelRescanJob() {
+    if (!rescanJobId) return;
+
+    try {
+        const response = await fetch(`/api/files/rescan/${rescanJobId}/cancel`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to cancel job');
+        }
+
+        showAlert('Scan cancelled', 'info');
+
+    } catch (error) {
+        console.error('Cancel error:', error);
+        showAlert(`Failed to cancel: ${error.message}`, 'danger');
     }
 }
 
@@ -3022,31 +3560,35 @@ function renderRescanResults(data) {
     if (details.moved.length > 0) {
         movedSection.style.display = 'block';
         movedBadge.textContent = details.moved.length;
-        movedList.innerHTML = details.moved.map(file => `
+        movedList.innerHTML = details.moved.map(item => {
+            const dbFile = item.db_file;
+            const diskFile = item.disk_file;
+            return `
             <div class="list-group-item">
                 <div class="form-check">
                     <input class="form-check-input rescan-moved-checkbox" type="checkbox"
-                           value="${file.id}" id="moved-${file.id}" checked>
-                    <label class="form-check-label w-100" for="moved-${file.id}">
+                           value="${dbFile.id}" id="moved-${dbFile.id}" checked>
+                    <label class="form-check-label w-100" for="moved-${dbFile.id}">
                         <div class="d-flex justify-content-between align-items-start">
                             <div class="flex-grow-1">
-                                <strong>${file.filename}</strong>
+                                <strong>${dbFile.filename}</strong>
                                 <div class="small text-muted">
-                                    <div><strong>Old:</strong> ${file.old_path}</div>
-                                    <div><strong>New:</strong> ${file.new_path}</div>
+                                    <div><strong>Old:</strong> ${dbFile.path}</div>
+                                    <div><strong>New:</strong> ${diskFile.path}</div>
                                 </div>
                                 <div class="mt-1">
-                                    ${file.has_proxy ? '<span class="badge bg-secondary me-1">Proxy</span>' : ''}
-                                    ${file.has_analysis ? '<span class="badge bg-info me-1">Analysis</span>' : ''}
-                                    ${file.has_transcripts ? '<span class="badge bg-success me-1">Transcript</span>' : ''}
+                                    ${dbFile.has_proxy ? '<span class="badge bg-secondary me-1">Proxy</span>' : ''}
+                                    ${dbFile.has_analysis ? '<span class="badge bg-info me-1">Analysis</span>' : ''}
+                                    ${dbFile.has_transcripts ? '<span class="badge bg-success me-1">Transcript</span>' : ''}
                                 </div>
                             </div>
-                            <span class="badge bg-light text-dark">${formatFileSize(file.size_bytes)}</span>
+                            <span class="badge bg-light text-dark">${formatFileSize(diskFile.size_bytes)}</span>
                         </div>
                     </label>
                 </div>
             </div>
-        `).join('');
+            `;
+        }).join('');
     } else {
         movedSection.style.display = 'none';
     }
@@ -3118,10 +3660,10 @@ function renderRescanResults(data) {
         ambiguousBadge.textContent = details.ambiguous.length;
         ambiguousList.innerHTML = details.ambiguous.map(item => `
             <div class="list-group-item">
-                <div><strong>Database file:</strong> ${item.old_path}</div>
+                <div><strong>Database file:</strong> ${item.db_file.path}</div>
                 <div class="small text-muted mt-2"><strong>Possible matches:</strong></div>
                 <ul class="small">
-                    ${item.candidates.map(c => `<li>${c.path} (${formatFileSize(c.size_bytes)})</li>`).join('')}
+                    ${item.candidates.map(c => `<li>${c.path} (${formatFileSize(c.size_bytes || 0)})</li>`).join('')}
                 </ul>
             </div>
         `).join('');

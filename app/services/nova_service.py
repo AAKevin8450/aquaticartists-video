@@ -1253,23 +1253,59 @@ Spec:
 Focus on what the video is about and its primary objective. Keep it under 50 words.""",
 
             'standard': """Analyze this video and provide a comprehensive summary including:
-1. Main topic and purpose of the video
-2. Key points and important information discussed
-3. Notable takeaways or conclusions
 
-Provide the summary in 1-2 well-structured paragraphs (approximately 150 words).
-Be specific and informative while remaining concise.""",
+1. **Context & Purpose**: What this video is about, who it's for, and why it was created
+2. **Main Topics**: The primary subjects and themes covered
+3. **Key Information**: Important details, facts, techniques, or concepts presented
+4. **Visual & Audio Elements**: Notable demonstrations, equipment shown, or speaker insights
+5. **Conclusions & Takeaways**: What viewers should understand or be able to do after watching
 
-            'detailed': """Analyze this video thoroughly and provide a detailed summary including:
+Provide 2-4 well-structured paragraphs (approximately 250-350 words).
+Be specific and informative, including:
+- Concrete examples and specific details mentioned in the video
+- Any technical specifications, product names, or model numbers discussed
+- Key visual demonstrations or on-screen elements
+- Relevant timestamps for important sections (e.g., "At 2:15, the presenter demonstrates...")""",
 
-1. **Overview**: Context and purpose of the video, intended audience, and overall structure
-2. **Main Topics**: Primary themes and subjects covered throughout
-3. **Key Points**: Important details, facts, demonstrations, or arguments presented
-4. **Notable Events**: Significant moments, transitions, or highlights
-5. **Conclusions**: Takeaways, recommendations, or closing thoughts
+            'detailed': """Analyze this video thoroughly and provide an in-depth, comprehensive summary including:
 
-Provide 3-5 comprehensive paragraphs with rich detail (approximately 400 words).
-Include specific examples and timestamps where relevant."""
+1. **Opening & Context** (1 paragraph):
+   - How the video begins and sets context
+   - Purpose, intended audience, and production quality
+   - Overall tone and presentation style
+
+2. **Content Structure & Flow** (1-2 paragraphs):
+   - How the video is organized and structured
+   - Major sections and transitions
+   - Teaching or presentation methodology used
+
+3. **Detailed Topic Coverage** (2-3 paragraphs):
+   - In-depth exploration of each major topic covered
+   - Specific techniques, processes, or concepts explained
+   - Technical details, specifications, measurements, or data presented
+   - Equipment, tools, materials, or products featured (include brands/models)
+   - Step-by-step procedures or demonstrations shown
+
+4. **Visual & Audio Analysis** (1 paragraph):
+   - Key visual elements: camera angles, graphics, on-screen text, product shots
+   - Speaker delivery: expertise level, presentation quality, multiple speakers
+   - Audio quality and background elements
+
+5. **Critical Moments & Highlights** (1 paragraph):
+   - Most important or impactful moments with timestamps
+   - Before/after comparisons or results shown
+   - Common mistakes addressed or troubleshooting tips
+   - Expert tips, pro advice, or insider knowledge shared
+
+6. **Conclusions & Practical Applications** (1 paragraph):
+   - Final recommendations or summary by presenter
+   - Practical takeaways viewers can implement
+   - Resources mentioned or next steps suggested
+   - Overall value and who would benefit most
+
+Provide 6-10 comprehensive, detailed paragraphs (approximately 600-900 words).
+Include specific examples, exact quotes when relevant, and precise timestamps for key moments.
+Extract and mention any: product names, model numbers, measurements, prices, locations, dates, or technical specifications."""
         }
 
         prompt = prompts.get(depth, prompts['standard'])
@@ -1284,11 +1320,19 @@ Include specific examples and timestamps where relevant."""
         return """Analyze this video and identify logical chapters based on content transitions and topic changes.
 
 For each chapter, provide:
-1. A descriptive title (3-8 words) that clearly indicates the chapter's content
-2. Start timestamp (MM:SS or HH:MM:SS if duration exceeds 59:59)
-3. End timestamp (MM:SS or HH:MM:SS if duration exceeds 59:59)
-4. A brief summary (2-3 sentences) of what happens in that chapter
-5. Key points covered (bullet list, 2-5 points)
+1. **Title** (3-8 words): A clear, descriptive title that indicates the chapter's content
+2. **Start timestamp** (MM:SS or HH:MM:SS if duration exceeds 59:59)
+3. **End timestamp** (MM:SS or HH:MM:SS if duration exceeds 59:59)
+4. **Brief summary** (2-3 sentences): A concise overview of what happens in that chapter
+5. **Detailed summary** (4-8 sentences, 100-200 words): An in-depth description including:
+   - Specific actions, demonstrations, or explanations shown
+   - Technical details, measurements, or specifications mentioned
+   - Equipment, tools, or products featured
+   - Key visual elements or camera shots
+   - Important dialogue, quotes, or narrator insights
+   - Techniques or processes demonstrated step-by-step
+   - Any problems solved or challenges addressed
+6. **Key points** (3-8 bullet points): Specific, actionable takeaways from this chapter
 
 Return the results in this exact JSON format:
 {
@@ -1298,14 +1342,22 @@ Return the results in this exact JSON format:
       "title": "...",
       "start_time": "00:00",
       "end_time": "03:00",
-      "summary": "...",
-      "key_points": ["point1", "point2"]
+      "summary": "Brief 2-3 sentence overview...",
+      "detailed_summary": "Comprehensive 4-8 sentence description with specific details, timestamps, technical information, and exact procedures shown...",
+      "key_points": ["Specific point 1", "Specific point 2", "Specific point 3"]
     }
   ]
 }
 
-Create chapters that align with natural content divisions. Aim for chapters between 2-10 minutes in length where appropriate.
-Use contiguous chapters that cover the full video without gaps when possible.
+IMPORTANT GUIDELINES:
+- Create chapters that align with natural content divisions (topic changes, scene transitions, new demonstrations)
+- Aim for chapters between 1-10 minutes in length where appropriate
+- Use contiguous chapters that cover the full video without gaps when possible
+- In detailed_summary, be VERY specific: mention exact products, measurements, techniques, and visual demonstrations
+- Include relevant sub-timestamps within detailed_summary (e.g., "At 2:35 within this section, the installer...")
+- Make key_points concrete and actionable, not vague generalizations
+- Extract any product names, model numbers, measurements, or technical specifications mentioned
+
 Do NOT include any text outside the JSON structure."""
 
     def _get_elements_prompt(self) -> str:
@@ -1383,9 +1435,9 @@ Do NOT include any text outside the JSON structure."""
 
         depth_guidance = {
             'brief': "2-3 sentences, under 50 words.",
-            'standard': "1-2 paragraphs, around 150 words, include main topic, key points, takeaways.",
-            'detailed': ("3-5 paragraphs, around 400 words, include overview, main topics, key points, "
-                         "notable events, conclusions, and timestamps when relevant.")
+            'standard': "2-4 paragraphs, 250-350 words, include context, main topics, key information, visual elements, and conclusions with specific details.",
+            'detailed': ("6-10 paragraphs, 600-900 words, include opening context, content structure, detailed topic coverage, "
+                         "visual/audio analysis, critical moments with timestamps, and practical applications.")
         }
         summary_guidance = depth_guidance.get(depth, depth_guidance['standard'])
 
@@ -1408,9 +1460,21 @@ SUMMARY REQUIREMENTS:
 - {summary_guidance}
 - {language_note or "Use the video's original language."}
 - Incorporate insights from the transcript summary if provided.
+- Include specific examples, product names, technical details, and timestamps.
 
 CHAPTERS REQUIREMENTS:
-- Title (3-8 words), start/end timecodes (MM:SS or HH:MM:SS), summary (2-3 sentences), key points (2-5).
+- Title (3-8 words): Clear, descriptive chapter title
+- Start/end timecodes (MM:SS or HH:MM:SS)
+- Summary (2-3 sentences): Brief overview of the chapter
+- Detailed_summary (4-8 sentences, 100-200 words): In-depth description including:
+  * Specific actions, demonstrations, or explanations shown
+  * Technical details, measurements, specifications mentioned
+  * Equipment, tools, or products featured with brands/models
+  * Key visual elements and camera work
+  * Important dialogue or narrator insights
+  * Step-by-step techniques or processes
+  * Problems solved or challenges addressed
+- Key_points (3-8 bullets): Specific, actionable takeaways
 - Chapters should be contiguous and cover the full video without gaps when possible.
 
 ELEMENTS REQUIREMENTS:
@@ -1446,8 +1510,9 @@ OUTPUT JSON SCHEMA (return ONLY JSON, no markdown):
         "title": "...",
         "start_time": "00:00",
         "end_time": "03:00",
-        "summary": "...",
-        "key_points": ["point1", "point2"]
+        "summary": "Brief 2-3 sentence overview...",
+        "detailed_summary": "Comprehensive 4-8 sentence description with specific details, technical information, exact procedures, and visual demonstrations shown...",
+        "key_points": ["Specific point 1", "Specific point 2", "Specific point 3"]
       }}
     ]
   }},
