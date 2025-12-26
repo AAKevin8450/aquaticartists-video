@@ -1,3 +1,33 @@
+2025-12-25 20:17:04 - Updated by Claude Code
+
+[Category: Enhancement / Infrastructure]
+Improve transcript summary service with better prompts, validation, and backfill tooling.
+
+[Purpose]
+Enhance transcript summary generation with smarter truncation, input validation, token tracking, and provide scripts for backfilling existing transcripts.
+
+[Impact]
+- Improved prompt prioritizes key information (subject → people → events → locations)
+- Smart truncation at word boundaries with "..." indicator instead of mid-word cutoff
+- Input validation for empty/whitespace transcripts and very long inputs (>500k chars)
+- Token usage tracking in batch jobs for monitoring costs
+- New backfill script for processing existing transcripts with summaries
+- New view script for auditing transcript summary status
+- CLAUDE.md consolidated by 53% (7.4KB → 3.5KB)
+
+[Files Modified]
+- app/services/nova_transcript_summary_service.py (enhanced validation, truncation, prompt)
+- app/routes/file_management.py (token tracking in batch transcript summary jobs)
+- scripts/backfill_transcript_summaries.py (NEW - batch backfill with dry-run mode)
+- scripts/view_transcript_summaries.py (NEW - audit/view transcript summaries)
+- CLAUDE.md (consolidated, added nova_transcript_summary_service reference)
+
+[Technical Details]
+- Truncation now finds word boundary near limit, preserves >90% content when possible
+- Returns was_truncated flag for tracking truncation events
+- Batch job tracks total_tokens and processed_files_tokens like Nova analysis
+- Backfill script supports --force, --limit, --dry-run options
+
 2025-12-25 18:37:48 - Updated by Codex
 
 [Category: Feature / API / Database / Documentation]
