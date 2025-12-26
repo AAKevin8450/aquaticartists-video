@@ -419,6 +419,10 @@ def start_nova_analysis_internal(
         if 'search_metadata' in results:
             update_data['search_metadata'] = json.dumps(results['search_metadata'])
 
+        # Store raw API responses for debugging/auditing
+        if 'raw_responses' in results:
+            update_data['raw_response'] = json.dumps(results['raw_responses'])
+
         # Update database
         db.update_nova_job(nova_job_id, update_data)
         db.update_nova_job_completed_at(nova_job_id)
@@ -630,6 +634,10 @@ def get_nova_status(nova_job_id):
 
                 if 'waterfall_classification' in results:
                     update_data['waterfall_classification_result'] = json.dumps(results['waterfall_classification'])
+
+                # Store raw API responses for debugging/auditing
+                if 'raw_responses' in results:
+                    update_data['raw_response'] = json.dumps(results['raw_responses'])
 
                 db.update_nova_job(nova_job_id, update_data)
                 db.update_nova_job_completed_at(nova_job_id)

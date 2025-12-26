@@ -1,3 +1,66 @@
+2025-12-26 21:36:29 - Updated by Claude Code
+
+[Category: Performance / Bug Fix / Infrastructure]
+Optimize Nova Analysis performance, fix JSON parsing errors, enhance debugging capabilities, and improve cost visibility in batch operations.
+
+[Purpose]
+Fix critical performance bottleneck causing slow Nova Analysis filtering by adding missing database index. Resolve JSON parsing failures from Nova API responses with invalid escape sequences. Add comprehensive raw response storage for debugging and auditing. Improve user visibility of costs and remaining work during batch operations.
+
+[Impact]
+- Nova Analysis filtering performance dramatically improved with new transcripts.file_path index
+- JSON parsing no longer fails on Nova responses containing invalid escape sequences (e.g., \w, \d in regex patterns)
+- All Nova API responses now stored in raw_response column for debugging failed analyses
+- Batch operation status popup shows ETA and Remaining Items instead of token counts for better UX
+- Cost precision increased to 4 decimal places for better tracking of small per-file costs
+- Raw responses stored for both single-API-call and chunked analyses (all video lengths)
+
+[Files Modified]
+- app/database.py (added idx_transcripts_file_path index, raw_response column to nova_jobs table)
+- app/services/nova_service.py (invalid escape sequence handling in _parse_json_response, raw_response storage throughout analysis pipeline)
+- app/routes/nova_analysis.py (raw_response persistence for completed jobs)
+- app/routes/file_management.py (4-decimal cost precision for avg_cost_per_file)
+- app/static/js/file_management.js (updated Nova batch progress to show ETA/Remaining Items instead of tokens)
+
+[Technical Details - Database]
+Added index for faster Nova Analysis filtering:
+- CREATE INDEX idx_transcripts_file_path ON transcripts(file_path)
+- Significantly speeds up queries filtering by file path in Nova batch operations
+
+Added nova_jobs.raw_response column (TEXT):
+- Stores full JSON of API responses for all analysis types
+- Enables post-mortem debugging of failed analyses
+- Format for single analyses: {"combined": {...}} or {"summary": {...}, "chapters": {...}}
+- Format for chunked analyses: {"chunked": true, "total_chunks": 5, "chunks": [{chunk_index, time_range, responses}]}
+
+[Technical Details - JSON Parsing Fix]
+Enhanced _parse_json_response() to handle invalid escape sequences from Nova API:
+1. Temporarily replace valid JSON escapes (\", \\, \/, \b, \f, \n, \r, \t, \uXXXX) with placeholders
+2. Escape remaining backslashes (these are the invalid ones like \w, \d, \s)
+3. Restore valid escape sequences
+4. Retry JSON parsing after cleanup
+Prevents JSONDecodeError: Invalid \escape errors without losing data
+
+[Technical Details - Raw Response Storage]
+Modified analysis pipeline to capture and store raw API responses:
+- _analyze_video_realtime(): Adds raw_response to result dict
+- _analyze_video_chunk(): Collects raw_responses from all analysis types in chunk
+- analyze_video(): Aggregates raw_responses across all chunks with metadata
+- analyze_video_combined(): Stores single combined response
+- nova_analysis.py routes: Persist raw_responses to database via update_data['raw_response']
+
+[Technical Details - UI Improvements]
+Nova batch progress popup changes:
+- "Total Tokens" → "Remaining Items" (total_files - completed_files - failed_files)
+- "Avg Tokens/File" → "ETA" (formatted time_remaining_seconds)
+- "Avg Cost/File" precision: 2 decimals → 4 decimals ($0.0234 instead of $0.02)
+- Provides clearer actionable information during long-running Nova analyses
+
+[Scripts Added]
+- scripts/add_transcripts_file_path_index.py (migration script for new index)
+- scripts/add_nova_raw_response_column.py (migration script for raw_response column)
+- scripts/analyze_nova_failures.py (NEW - analyze failed Nova jobs using stored raw responses)
+- scripts/estimate_chunked_response_size.py (NEW - estimate database size impact of raw response storage)
+
 2025-12-26 00:59:01 - Updated by Claude Code
 
 [Category: Feature / Infrastructure / User Experience]

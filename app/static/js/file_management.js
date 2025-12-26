@@ -3042,10 +3042,10 @@ function updateBatchProgress(data) {
             document.getElementById('batchLabel1').title = 'Estimated total cost for processed files';
             document.getElementById('batchLabel2').textContent = 'Avg Cost/File';
             document.getElementById('batchLabel2').title = 'Estimated average cost per processed file';
-            document.getElementById('batchLabel3').textContent = 'Total Tokens';
-            document.getElementById('batchLabel3').title = 'Total tokens processed across all files';
-            document.getElementById('batchLabel4').textContent = 'Avg Tokens/File';
-            document.getElementById('batchLabel4').title = 'Average tokens per processed file';
+            document.getElementById('batchLabel3').textContent = 'Remaining Items';
+            document.getElementById('batchLabel3').title = 'Number of files remaining to be processed';
+            document.getElementById('batchLabel4').textContent = 'ETA';
+            document.getElementById('batchLabel4').title = 'Estimated time remaining';
 
             // Total cost
             if (data.total_cost_usd !== undefined && data.total_cost_usd !== null) {
@@ -3054,23 +3054,24 @@ function updateBatchProgress(data) {
                 document.getElementById('batchAvgSizeTotal').textContent = '$0.00';
             }
 
-            // Average cost per file
+            // Average cost per file (4 decimal places)
             if (data.avg_cost_per_file !== undefined && data.avg_cost_per_file !== null) {
-                document.getElementById('batchAvgSizeProcessed').textContent = `$${data.avg_cost_per_file.toFixed(2)}`;
+                document.getElementById('batchAvgSizeProcessed').textContent = `$${data.avg_cost_per_file.toFixed(4)}`;
             } else {
                 document.getElementById('batchAvgSizeProcessed').textContent = '-';
             }
 
-            // Total tokens
-            if (data.total_tokens !== undefined && data.total_tokens !== null) {
-                document.getElementById('batchAvgTime').textContent = data.total_tokens.toLocaleString();
+            // Remaining items
+            const remainingFiles = data.total_files - data.completed_files - data.failed_files;
+            if (remainingFiles >= 0) {
+                document.getElementById('batchAvgTime').textContent = remainingFiles.toLocaleString();
             } else {
                 document.getElementById('batchAvgTime').textContent = '0';
             }
 
-            // Average tokens per file
-            if (data.avg_tokens_per_file !== undefined && data.avg_tokens_per_file !== null) {
-                document.getElementById('batchETA').textContent = data.avg_tokens_per_file.toLocaleString();
+            // ETA (from backend calculation)
+            if (data.time_remaining_seconds !== undefined && data.time_remaining_seconds !== null && data.status === 'RUNNING') {
+                document.getElementById('batchETA').textContent = formatDuration(data.time_remaining_seconds);
             } else {
                 document.getElementById('batchETA').textContent = '-';
             }

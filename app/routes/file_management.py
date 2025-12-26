@@ -103,7 +103,7 @@ class BatchJob:
             'total_tokens': self.total_tokens,
             'avg_tokens_per_file': round(avg_tokens_per_file, 1) if avg_tokens_per_file is not None else None,
             'total_cost_usd': round(self.total_cost_usd, 2) if self.total_cost_usd is not None else None,
-            'avg_cost_per_file': round(avg_cost_per_file, 2) if avg_cost_per_file is not None else None,
+            'avg_cost_per_file': round(avg_cost_per_file, 4) if avg_cost_per_file is not None else None,
             'errors': self.errors,
             'results': self.results
         }
