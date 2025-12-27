@@ -1058,8 +1058,36 @@ Spec:
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError as e:
+            error_msg = str(e)
+
+            # Check if this is an unterminated string error (often caused by max_tokens truncation)
+            if 'Unterminated string' in error_msg:
+                logger.warning(f"Detected unterminated string in Nova response at position {e.pos}, attempting to fix...")
+
+                # Try to fix by closing the string and completing the JSON
+                fixed = cleaned
+
+                # Find the position of the error and add a closing quote
+                if e.pos and e.pos > 0 and e.pos <= len(fixed):
+                    # Add closing quote at error position
+                    fixed = fixed[:e.pos] + '"' + fixed[e.pos:]
+
+                    # Count open braces/brackets to determine what needs closing
+                    open_braces = fixed.count('{') - fixed.count('}')
+                    open_brackets = fixed.count('[') - fixed.count(']')
+
+                    # Add missing closing characters
+                    fixed = fixed + (']' * open_brackets) + ('}' * open_braces)
+
+                    try:
+                        logger.info("Successfully fixed unterminated string in Nova response")
+                        return json.loads(fixed)
+                    except json.JSONDecodeError as e2:
+                        logger.error(f"Still failed to parse after fixing unterminated string: {e2}")
+                        # Fall through to other fixes below
+
             # Check if this is an invalid escape sequence error
-            if 'Invalid \\escape' in str(e) or 'Invalid escape' in str(e) or 'bad escape' in str(e):
+            if 'Invalid \\escape' in error_msg or 'Invalid escape' in error_msg or 'bad escape' in error_msg:
                 logger.warning(f"Detected invalid escape sequences in Nova response, attempting to fix...")
 
                 # Fix invalid escape sequences by escaping backslashes that aren't part of valid JSON escapes
