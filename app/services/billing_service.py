@@ -39,6 +39,92 @@ SERVICE_NAME_MAP = {
     'AmazonSQS': 'Amazon SQS',
 }
 
+# Operation-level name mapping for detailed drill-down
+OPERATION_NAME_MAP = {
+    # Bedrock operations
+    'Bedrock.ModelInvocation.Lite': 'Nova Lite Invocation',
+    'Bedrock.ModelInvocation.Pro': 'Nova Pro Invocation',
+    'Bedrock.ModelInvocation.Premier': 'Nova Premier Invocation',
+    'Bedrock.Embeddings': 'Embeddings Generation',
+
+    # Rekognition operations
+    'RekognitionVideo.DetectLabels': 'Video Label Detection',
+    'RekognitionVideo.DetectText': 'Video Text Detection',
+    'RekognitionVideo.DetectFaces': 'Video Face Detection',
+    'RekognitionVideo.RecognizeCelebrities': 'Celebrity Recognition',
+    'RekognitionImage.DetectLabels': 'Image Label Detection',
+    'RekognitionImage.DetectText': 'Image Text Detection',
+    'RekognitionImage.DetectFaces': 'Image Face Detection',
+
+    # S3 operations
+    'PutObject': 'S3 Upload',
+    'GetObject': 'S3 Download',
+    'ListBucket': 'S3 List',
+    'DeleteObject': 'S3 Delete',
+}
+
+
+def get_operation_display_name(operation: str, service_code: str = None, usage_type: str = None) -> str:
+    """
+    Get human-readable operation name.
+
+    Args:
+        operation: Raw operation string (e.g., "InvokeModelInference")
+        service_code: Optional service code for context
+        usage_type: Optional usage type (e.g., "USE1-Nova2.0Lite-input-tokens")
+
+    Returns:
+        Human-readable operation name
+    """
+    # For Bedrock, extract model name from usage_type
+    if service_code == 'AmazonBedrock' and usage_type:
+        # Parse model from usage type
+        # Nova 2 Lite: "USE1-Nova2.0Lite-input-tokens" or "USE1-Nova2Lite-input-tokens"
+        # Nova Pro: "USE1-NovaPro-input-tokens" (version 1, no "2.0")
+        # Nova Premier: "USE1-NovaPremier-input-tokens" (version 1, no "2.0")
+
+        if 'Nova2.0Lite' in usage_type or 'Nova2Lite' in usage_type:
+            # Nova 2 Lite (version 2)
+            if 'input-tokens' in usage_type:
+                return 'Nova 2 Lite (Input Tokens)'
+            elif 'output-tokens' in usage_type:
+                return 'Nova 2 Lite (Output Tokens)'
+            else:
+                return 'Nova 2 Lite'
+        elif 'NovaPro' in usage_type and 'Nova2' not in usage_type:
+            # Nova Pro (version 1)
+            if 'input-tokens' in usage_type:
+                return 'Nova Pro (Input Tokens)'
+            elif 'output-tokens' in usage_type:
+                return 'Nova Pro (Output Tokens)'
+            else:
+                return 'Nova Pro'
+        elif 'NovaPremier' in usage_type and 'Nova2' not in usage_type:
+            # Nova Premier (version 1)
+            if 'input-tokens' in usage_type:
+                return 'Nova Premier (Input Tokens)'
+            elif 'output-tokens' in usage_type:
+                return 'Nova Premier (Output Tokens)'
+            else:
+                return 'Nova Premier'
+        elif 'NovaMultiModalEmbeddings' in usage_type or 'NovaEmbeddings' in usage_type:
+            return 'Nova Embeddings'
+        elif 'Nova' in usage_type:
+            # Generic Nova fallback
+            return f'Nova ({operation})'
+
+    # Check exact match first
+    if operation in OPERATION_NAME_MAP:
+        return OPERATION_NAME_MAP[operation]
+
+    # Fallback: Clean up operation string
+    # "Bedrock.ModelInvocation.Lite" → "Model Invocation Lite"
+    if '.' in operation:
+        parts = operation.split('.')
+        return ' '.join(parts[1:]).replace('_', ' ').title()
+
+    return operation.replace('_', ' ').title()
+
 
 class BillingService:
     """Service for AWS CUR data retrieval and processing."""
@@ -189,6 +275,11 @@ class BillingService:
                     cost = float(df_dict.get('line_item_blended_cost', [0] * num_rows)[i] or 0)
                     usage_date_obj = df_dict.get('line_item_usage_start_date', [None] * num_rows)[i]
 
+                    # Extract operation details for granular breakdown
+                    operation = df_dict.get('line_item_operation', [None] * num_rows)[i] or ''
+                    usage_type = df_dict.get('line_item_usage_type', [None] * num_rows)[i] or ''
+                    usage_amount = float(df_dict.get('line_item_usage_amount', [0] * num_rows)[i] or 0)
+
                     # Parse usage date
                     if usage_date_obj:
                         # Convert to string date
@@ -207,6 +298,9 @@ class BillingService:
                         'service_code': service_code,
                         'cost': cost,
                         'usage_date': usage_date,
+                        'operation': operation,
+                        'usage_type': usage_type,
+                        'usage_amount': usage_amount,
                     })
 
                 except (ValueError, KeyError, IndexError) as e:
@@ -318,6 +412,71 @@ class BillingService:
         logger.info(f"Aggregated by service and date: {len(service_date_costs)} services")
         return dict(service_date_costs)
 
+    def aggregate_by_operation(self, rows: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Aggregate cost data by service and operation.
+
+        Args:
+            rows: List of parsed CUR rows
+
+        Returns:
+            Dict mapping service_code -> list of operation dicts
+        """
+        from collections import defaultdict
+
+        # Group by service → operation → usage_type
+        service_operations = defaultdict(lambda: defaultdict(lambda: {
+            'cost': 0.0,
+            'usage_amount': 0.0,
+            'usage_type': '',
+            'operation': ''
+        }))
+
+        for row in rows:
+            service_code = row['service_code']
+            operation = row.get('operation', 'Unknown')
+            usage_type = row.get('usage_type', 'Unknown')
+            cost = row['cost']
+            usage_amount = row.get('usage_amount', 0)
+
+            # Create unique key for operation + usage_type combination
+            key = f"{operation}|{usage_type}"
+
+            service_operations[service_code][key]['operation'] = operation
+            service_operations[service_code][key]['usage_type'] = usage_type
+            service_operations[service_code][key]['cost'] += cost
+            service_operations[service_code][key]['usage_amount'] += usage_amount
+
+        # Convert to structured format
+        result = {}
+        for service_code, operations in service_operations.items():
+            service_total = sum(op['cost'] for op in operations.values())
+
+            ops_list = []
+            for op_data in operations.values():
+                operation_name = get_operation_display_name(
+                    op_data['operation'],
+                    service_code,
+                    op_data['usage_type']
+                )
+                percent = (op_data['cost'] / service_total * 100) if service_total > 0 else 0
+
+                ops_list.append({
+                    'operation': op_data['operation'],
+                    'operation_name': operation_name,
+                    'usage_type': op_data['usage_type'],
+                    'usage_amount': op_data['usage_amount'],
+                    'cost': op_data['cost'],
+                    'percent': percent
+                })
+
+            # Sort by cost descending
+            ops_list.sort(key=lambda x: x['cost'], reverse=True)
+            result[service_code] = ops_list
+
+        logger.info(f"Aggregated operations for {len(result)} services")
+        return result
+
     def fetch_cur_data(self, start_date: str, end_date: str) -> Dict[str, Any]:
         """
         Fetch and aggregate CUR data for date range.
@@ -378,12 +537,14 @@ class BillingService:
         services = self.aggregate_by_service(all_rows)
         daily = self.calculate_daily_costs(all_rows, start_date, end_date)
         service_by_date = self.aggregate_by_service_and_date(all_rows)
+        operations_by_service = self.aggregate_by_operation(all_rows)
         total_cost = sum(s['cost'] for s in services)
 
         return {
             'services': services,
             'daily': daily,
             'service_by_date': service_by_date,  # Add detailed breakdown
+            'operations_by_service': operations_by_service,  # Operation-level detail
             'total_cost': total_cost,
             'rows_processed': len(all_rows)
         }

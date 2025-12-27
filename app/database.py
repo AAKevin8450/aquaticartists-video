@@ -3744,6 +3744,94 @@ class Database:
                 # Clear all
                 cursor.execute('DELETE FROM billing_cache')
 
+    def cache_billing_detail(self, service_code: str, operation: str,
+                            usage_type: str, usage_date: str,
+                            usage_amount: float, cost_usd: float):
+        """
+        Cache detailed billing data for a service operation.
+
+        Args:
+            service_code: AWS service code
+            operation: Operation name (e.g., "Bedrock.ModelInvocation.Lite")
+            usage_type: Usage type (e.g., "Tokens", "Requests")
+            usage_date: Date in YYYY-MM-DD format
+            usage_amount: Quantity of usage
+            cost_usd: Cost in USD
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO billing_cache_details
+                (service_code, operation, usage_type, usage_date,
+                 usage_amount, cost_usd, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (service_code, operation, usage_type, usage_date,
+                  usage_amount, cost_usd))
+
+    def get_cached_billing_details(self, start_date: str, end_date: str) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Get cached detailed billing data grouped by service.
+
+        Args:
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+
+        Returns:
+            Dict mapping service_code -> list of operation details
+        """
+        from collections import defaultdict
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT
+                    service_code,
+                    operation,
+                    usage_type,
+                    SUM(usage_amount) as usage_amount,
+                    SUM(cost_usd) as cost
+                FROM billing_cache_details
+                WHERE usage_date >= ? AND usage_date <= ?
+                GROUP BY service_code, operation, usage_type
+                ORDER BY service_code, cost DESC
+            ''', (start_date, end_date))
+
+            # Group by service
+            result = defaultdict(list)
+            for row in cursor.fetchall():
+                row_dict = dict(row)
+                service_code = row_dict.pop('service_code')
+                result[service_code].append(row_dict)
+
+            return dict(result)
+
+    def clear_billing_details(self, start_date: Optional[str] = None,
+                             end_date: Optional[str] = None):
+        """
+        Clear detailed billing cache entries.
+
+        Args:
+            start_date: Optional start date
+            end_date: Optional end date
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if start_date and end_date:
+                cursor.execute('''
+                    DELETE FROM billing_cache_details
+                    WHERE usage_date >= ? AND usage_date <= ?
+                ''', (start_date, end_date))
+            elif start_date:
+                cursor.execute('''
+                    DELETE FROM billing_cache_details WHERE usage_date >= ?
+                ''', (start_date,))
+            elif end_date:
+                cursor.execute('''
+                    DELETE FROM billing_cache_details WHERE usage_date <= ?
+                ''', (end_date,))
+            else:
+                cursor.execute('DELETE FROM billing_cache_details')
+
     def create_billing_sync_log(self, start_date: str, end_date: str) -> int:
         """
         Create a new billing sync log entry.

@@ -4,6 +4,7 @@
     const form = document.getElementById('reportFilters');
     const quickButtons = document.querySelectorAll('[data-range]');
     const rangeLabel = document.getElementById('reportRangeLabel');
+    const expandedServices = new Set();  // Track which services are expanded
 
     const numberFormatter = new Intl.NumberFormat();
     const currencyFormatter = new Intl.NumberFormat(undefined, {
@@ -36,6 +37,39 @@
         const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
         const i = Math.floor(Math.log(value) / Math.log(k));
         return `${(value / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+    };
+
+    const formatUsageAmount = (amount, usageType) => {
+        if (!amount || amount === 0) return '0';
+
+        const amt = Number(amount);
+        const type = (usageType || '').toLowerCase();
+
+        // Token formatting
+        if (type.includes('token')) {
+            if (amt >= 1000000) return `${(amt / 1000000).toFixed(2)}M tokens`;
+            if (amt >= 1000) return `${(amt / 1000).toFixed(1)}K tokens`;
+            return `${Math.round(amt)} tokens`;
+        }
+
+        // Request formatting
+        if (type.includes('request')) {
+            if (amt >= 1000) return `${(amt / 1000).toFixed(1)}K requests`;
+            return `${Math.round(amt)} requests`;
+        }
+
+        // Storage formatting
+        if (type.includes('gb')) {
+            return `${amt.toFixed(2)} GB`;
+        }
+
+        // Byte formatting
+        if (type.includes('byte')) {
+            return formatBytes(amt);
+        }
+
+        // Generic fallback
+        return formatNumber(amt);
     };
 
     const toDateInputValue = (date) => {
@@ -162,17 +196,94 @@
             }).format(value || 0);
         };
 
-        // Render service breakdown table
-        fillTable(
-            'billingServiceRows',
-            data.services || [],
-            [
-                { key: 'service_name' },
-                { key: 'cost', align: 'end', format: formatBillingCurrency },
-                { key: 'percent', align: 'end', format: (v) => `${v.toFixed(1)}%` }
-            ],
-            'No billing data available'
-        );
+        // Render service breakdown table with expandable rows
+        const tbody = document.getElementById('billingServiceRows');
+        tbody.innerHTML = '';
+
+        if (!data.services || data.services.length === 0) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.colSpan = 3;
+            cell.className = 'text-center reports-muted';
+            cell.textContent = 'No billing data available';
+            row.appendChild(cell);
+            tbody.appendChild(row);
+        } else {
+            data.services.forEach((service) => {
+                // Main service row
+                const row = document.createElement('tr');
+                row.style.cursor = 'pointer';
+                row.dataset.serviceCode = service.service_code;
+
+                // Expand/collapse indicator
+                const nameCell = document.createElement('td');
+                const hasOperations = service.operations && service.operations.length > 0;
+                if (hasOperations) {
+                    const icon = document.createElement('i');
+                    icon.className = 'bi bi-chevron-right me-2';
+                    icon.style.transition = 'transform 0.2s';
+                    icon.dataset.expandIcon = service.service_code;
+                    nameCell.appendChild(icon);
+                }
+                nameCell.appendChild(document.createTextNode(service.service_name));
+                nameCell.style.fontWeight = '600';
+
+                const costCell = document.createElement('td');
+                costCell.className = 'text-end';
+                costCell.textContent = formatBillingCurrency(service.cost);
+
+                const percentCell = document.createElement('td');
+                percentCell.className = 'text-end';
+                percentCell.textContent = `${service.percent.toFixed(1)}%`;
+
+                row.appendChild(nameCell);
+                row.appendChild(costCell);
+                row.appendChild(percentCell);
+
+                // Click handler for expand/collapse
+                if (hasOperations) {
+                    row.addEventListener('click', () => {
+                        toggleServiceExpanded(service.service_code);
+                    });
+                }
+
+                tbody.appendChild(row);
+
+                // Operations detail rows (initially hidden)
+                if (hasOperations) {
+                    service.operations.forEach((op) => {
+                        const opRow = document.createElement('tr');
+                        opRow.className = 'billing-operation-row';
+                        opRow.dataset.parentService = service.service_code;
+                        opRow.style.display = 'none';
+                        opRow.style.backgroundColor = '#f9fafb';
+
+                        const opNameCell = document.createElement('td');
+                        opNameCell.style.paddingLeft = '2rem';
+                        opNameCell.innerHTML = `
+                            <div style="font-size: 0.9rem;">${op.operation_name}</div>
+                            <div style="font-size: 0.75rem; color: #6b7280;">
+                                ${formatUsageAmount(op.usage_amount, op.usage_type)}
+                            </div>
+                        `;
+
+                        const opCostCell = document.createElement('td');
+                        opCostCell.className = 'text-end';
+                        opCostCell.textContent = formatBillingCurrency(op.cost);
+
+                        const opPercentCell = document.createElement('td');
+                        opPercentCell.className = 'text-end';
+                        opPercentCell.innerHTML = `<span style="font-size: 0.85rem; color: #6b7280;">${op.percent.toFixed(1)}%</span>`;
+
+                        opRow.appendChild(opNameCell);
+                        opRow.appendChild(opCostCell);
+                        opRow.appendChild(opPercentCell);
+
+                        tbody.appendChild(opRow);
+                    });
+                }
+            });
+        }
 
         // Update subtitle with total cost
         const subtitle = document.getElementById('billingSubtitle');
@@ -378,6 +489,32 @@
         );
     };
 
+    const toggleServiceExpanded = (serviceCode) => {
+        const isExpanded = expandedServices.has(serviceCode);
+        const icon = document.querySelector(`[data-expand-icon="${serviceCode}"]`);
+        const operationRows = document.querySelectorAll(`[data-parent-service="${serviceCode}"]`);
+
+        if (isExpanded) {
+            // Collapse
+            expandedServices.delete(serviceCode);
+            if (icon) {
+                icon.style.transform = 'rotate(0deg)';
+            }
+            operationRows.forEach(row => {
+                row.style.display = 'none';
+            });
+        } else {
+            // Expand
+            expandedServices.add(serviceCode);
+            if (icon) {
+                icon.style.transform = 'rotate(90deg)';
+            }
+            operationRows.forEach(row => {
+                row.style.display = 'table-row';
+            });
+        }
+    };
+
     const loadReport = async () => {
         updateRangeLabel();
         const start = startInput.value;
@@ -424,6 +561,48 @@
     if (refreshBillingBtn) {
         refreshBillingBtn.addEventListener('click', async () => {
             await loadBillingData(startInput.value, endInput.value, true);
+        });
+    }
+
+    // Zero-cost filter toggle
+    const hideZeroCostToggle = document.getElementById('hideZeroCostToggle');
+    if (hideZeroCostToggle) {
+        hideZeroCostToggle.addEventListener('change', (e) => {
+            const hide = e.target.checked;
+            const tbody = document.getElementById('billingServiceRows');
+            const rows = tbody.querySelectorAll('tr');
+
+            rows.forEach((row) => {
+                // Skip operation detail rows (let parent control them)
+                if (row.classList.contains('billing-operation-row')) {
+                    return;
+                }
+
+                // Check if this service row has zero cost
+                const costCell = row.querySelector('td:nth-child(2)');
+                if (costCell) {
+                    const costText = costCell.textContent;
+                    const cost = parseFloat(costText.replace(/[$,]/g, ''));
+
+                    if (hide && cost === 0) {
+                        row.style.display = 'none';
+                        // Also hide its operation rows
+                        const serviceCode = row.dataset.serviceCode;
+                        if (serviceCode) {
+                            const opRows = tbody.querySelectorAll(`[data-parent-service="${serviceCode}"]`);
+                            opRows.forEach(opRow => opRow.style.display = 'none');
+                        }
+                    } else {
+                        row.style.display = 'table-row';
+                        // Restore operation rows if parent was expanded
+                        const serviceCode = row.dataset.serviceCode;
+                        if (serviceCode && expandedServices.has(serviceCode)) {
+                            const opRows = tbody.querySelectorAll(`[data-parent-service="${serviceCode}"]`);
+                            opRows.forEach(opRow => opRow.style.display = 'table-row');
+                        }
+                    }
+                }
+            });
         });
     }
 

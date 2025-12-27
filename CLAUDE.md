@@ -91,6 +91,10 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 ### AWS Billing Reports
 - Real-time cost data from AWS CUR Parquet files in S3
 - Service breakdown with 4-decimal precision ($4.0100)
+- **Operation-level detail**: Expandable rows showing granular costs (click service to expand)
+- **Model-specific breakdowns**: Bedrock costs separated by model (Nova 2 Lite, Nova Pro, Nova Premier) and token direction (input/output)
+- **Usage quantities**: Context-aware display (1.2M tokens, 450 requests, 12.5 GB)
+- **Zero-cost filter**: Toggle to hide services with $0 cost
 - Daily cost chart with labels, grid lines, and date markers
 - Cached for fast queries (<50ms), manual refresh from S3
 - Only uses latest CUR file per month (cumulative data, avoids 7x duplicate counting bug)
@@ -103,6 +107,7 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - **nova_jobs**: summary_result, chapters_result, elements_result, waterfall_classification_result, search_metadata, raw_response (full API responses)
 - **nova_embeddings**: sqlite-vec vectors
 - **billing_cache**: Pre-aggregated costs by service + date, unique index on (service_code, usage_date)
+- **billing_cache_details**: Operation-level costs (service_code, operation, usage_type, usage_date, usage_amount, cost_usd)
 - **billing_sync_log**: S3 sync tracking (status, records_processed, error_message)
 - **rescan_jobs**: Async folder rescan tracking (status, progress, files_scanned, results)
 - **import_jobs**: Async directory import tracking (status, progress, imported/skipped counts, errors)
@@ -114,6 +119,9 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 
 ## Known Issues
 - Rekognition Person Tracking: AccessDeniedException (AWS account restriction)
+
+## Recently Added
+- **ADDED (2025-12-27)**: AWS billing operation-level detail - Expandable service breakdown with model-specific costs (Nova 2 Lite input/output tokens), usage quantities (1.2M tokens, 450 requests), zero-cost filter (migrations/009, billing_service.py, reports.py/js/html)
 
 ## Recently Fixed
 - **FIXED (2025-12-27)**: Nova timeout failures - Extended Bedrock read timeout from 60s to 600s with retry logic to handle large videos (nova_service.py:99-112)

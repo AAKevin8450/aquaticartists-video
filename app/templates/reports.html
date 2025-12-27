@@ -456,9 +456,18 @@
                             <h3 class="h5 mb-1">AWS Costs by Service</h3>
                             <div class="reports-muted" id="billingSubtitle">Total AWS costs</div>
                         </div>
-                        <button class="btn btn-sm btn-outline-secondary" id="refreshBillingBtn">
-                            <i class="bi bi-arrow-clockwise"></i> Refresh
-                        </button>
+                        <div class="d-flex gap-2 align-items-center">
+                            <!-- Zero-cost filter toggle -->
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="hideZeroCostToggle">
+                                <label class="form-check-label" for="hideZeroCostToggle" style="font-size: 0.85rem;">
+                                    Hide $0 services
+                                </label>
+                            </div>
+                            <button class="btn btn-sm btn-outline-secondary" id="refreshBillingBtn">
+                                <i class="bi bi-arrow-clockwise"></i> Refresh
+                            </button>
+                        </div>
                     </div>
                     <div class="table-responsive">
                         <table class="table table-sm report-table mb-0">

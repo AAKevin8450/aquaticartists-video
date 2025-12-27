@@ -262,7 +262,7 @@ def billing_summary():
             'last_sync': '2025-01-15T10:30:00Z'
         }
     """
-    from app.services.billing_service import get_billing_service, BillingError
+    from app.services.billing_service import get_billing_service, BillingError, get_operation_display_name
     from app.database import get_db
     from datetime import datetime, timedelta
     from collections import defaultdict
@@ -333,6 +333,26 @@ def billing_summary():
             # Sort by cost descending
             services.sort(key=lambda x: x['cost'], reverse=True)
 
+            # Get detailed operations from cache
+            cached_details = db.get_cached_billing_details(start_date, end_date)
+
+            # Enhance services list with operations
+            for service in services:
+                service_code = service['service_code']
+                operations = cached_details.get(service_code, [])
+
+                # Calculate percentages for operations
+                service_total = service['cost']
+                for op in operations:
+                    op['operation_name'] = get_operation_display_name(
+                        op['operation'],
+                        service_code,
+                        op.get('usage_type')
+                    )
+                    op['percent'] = (op['cost'] / service_total * 100) if service_total > 0 else 0
+
+                service['operations'] = operations
+
             # Build daily list with zero-filling
             daily = []
             current = start_dt
@@ -370,6 +390,7 @@ def billing_summary():
 
                 # Clear existing cache for this date range
                 db.clear_billing_cache(start_date, end_date)
+                db.clear_billing_details(start_date, end_date)
 
                 # Cache the data using the detailed service_by_date breakdown
                 service_by_date = billing_data.get('service_by_date', {})
@@ -384,6 +405,37 @@ def billing_summary():
                             date,
                             cost
                         )
+
+                # Cache detailed operations
+                operations_by_service = billing_data.get('operations_by_service', {})
+                for service_code, operations in operations_by_service.items():
+                    for op in operations:
+                        # Need to distribute costs across dates proportionally
+                        # Get this service's daily costs from service_by_date
+                        service_daily = service_by_date.get(service_code, {})
+                        total_service_cost = sum(service_daily.values())
+
+                        # Calculate operation's share
+                        op_share = op['cost'] / total_service_cost if total_service_cost > 0 else 0
+
+                        # Distribute across dates
+                        for date, daily_cost in service_daily.items():
+                            op_cost_for_date = daily_cost * op_share
+                            op_usage_for_date = op['usage_amount'] * op_share  # Approximate
+
+                            db.cache_billing_detail(
+                                service_code,
+                                op['operation'],
+                                op['usage_type'],
+                                date,
+                                op_usage_for_date,
+                                op_cost_for_date
+                            )
+
+                # Enhance services with operations before returning
+                for service in billing_data['services']:
+                    service_code = service['service_code']
+                    service['operations'] = operations_by_service.get(service_code, [])
 
                 # Update sync log
                 db.update_billing_sync_log(
