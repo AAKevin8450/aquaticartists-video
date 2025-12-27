@@ -112,6 +112,7 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 
 ## Known Issues
 - Rekognition Person Tracking: AccessDeniedException (AWS account restriction)
+- **FIXED (2025-12-27)**: Nova batch failures with Windows paths - regex pattern bug in escape sequence fixing logic caused 14% failure rate. Fixed by changing regex replacement strings from raw to regular strings in `nova_service.py:1078-1089`.
 
 ## Debug Commands
 ```bash
