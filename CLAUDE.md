@@ -86,6 +86,7 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - Videos < 30 min supported
 - Context-aware: Uses filename, path, transcript summary to enhance analysis accuracy
 - Returns search_metadata (project/location/customer/content type/entities/keywords) for discovery
+- **Timeout Configuration**: Extended to 600s (10 min) read timeout with 3 retries to handle large videos (180MB+ files taking 2-5+ min to process)
 
 ### AWS Billing Reports
 - Real-time cost data from AWS CUR Parquet files in S3
@@ -95,7 +96,8 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - Only uses latest CUR file per month (cumulative data, avoids 7x duplicate counting bug)
 
 ## Database Tables
-- **files**: S3-uploaded files with metadata
+- **files**: S3-uploaded files with metadata (duration_seconds, resolution_width/height, frame_rate, codec_video/audio, bitrate)
+  - All 13,617 video files have complete metadata (285.88 hours total content)
 - **transcripts**: Text, segments, transcript_summary, video metadata (indexed on file_path for performance)
 - **analysis_jobs/nova_jobs**: Job tracking with cost
 - **nova_jobs**: summary_result, chapters_result, elements_result, waterfall_classification_result, search_metadata, raw_response (full API responses)
@@ -112,6 +114,10 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 
 ## Known Issues
 - Rekognition Person Tracking: AccessDeniedException (AWS account restriction)
+
+## Recently Fixed
+- **FIXED (2025-12-27)**: Nova timeout failures - Extended Bedrock read timeout from 60s to 600s with retry logic to handle large videos (nova_service.py:99-112)
+- **FIXED (2025-12-27)**: Missing video metadata - Repaired 5,415 files with NULL duration/codecs, improved FFprobe fallback in upload.py to prevent future metadata loss
 - **FIXED (2025-12-27)**: Nova batch failures with Windows paths - regex pattern bug in escape sequence fixing logic caused 14% failure rate. Fixed by changing regex replacement strings from raw to regular strings in `nova_service.py:1078-1089`.
 
 ## Debug Commands
