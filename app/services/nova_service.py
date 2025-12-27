@@ -1051,7 +1051,7 @@ Spec:
             return json.loads(cleaned)
         except json.JSONDecodeError as e:
             # Check if this is an invalid escape sequence error
-            if 'Invalid \\escape' in str(e) or 'Invalid escape' in str(e):
+            if 'Invalid \\escape' in str(e) or 'Invalid escape' in str(e) or 'bad escape' in str(e):
                 logger.warning(f"Detected invalid escape sequences in Nova response, attempting to fix...")
 
                 # Fix invalid escape sequences by escaping backslashes that aren't part of valid JSON escapes
@@ -1075,7 +1075,8 @@ Spec:
                     fixed = fixed.replace(old, new)
 
                 # Also handle Unicode escapes \uXXXX
-                fixed = re.sub(r'\\u([0-9a-fA-F]{4})', r'\x00UNICODE\1\x00', fixed)
+                # Use a safe placeholder that doesn't contain problematic escape sequences
+                fixed = re.sub(r'\\u([0-9a-fA-F]{4})', '\x00UNICODE\\1\x00', fixed)
 
                 # Now escape any remaining backslashes (these are the invalid ones)
                 fixed = fixed.replace('\\', '\\\\')
@@ -1085,7 +1086,7 @@ Spec:
                     fixed = fixed.replace(new, old)
 
                 # Restore Unicode escapes
-                fixed = re.sub(r'\x00UNICODE([0-9a-fA-F]{4})\x00', r'\\u\1', fixed)
+                fixed = re.sub('\x00UNICODE([0-9a-fA-F]{4})\x00', r'\\u\1', fixed)
 
                 try:
                     logger.info("Successfully fixed invalid escape sequences in Nova response")
