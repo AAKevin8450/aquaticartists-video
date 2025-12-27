@@ -295,8 +295,17 @@ def upload_file_direct():
             try:
                 proxy_metadata = extract_media_metadata(str(proxy_local_path))
             except MediaMetadataError as e:
-                current_app.logger.warning(f"Failed to extract proxy metadata: {e}")
-                proxy_metadata = {}
+                current_app.logger.error(f"Failed to extract proxy metadata from {proxy_local_path}: {e}", exc_info=True)
+                # Provide complete fallback metadata with all expected fields
+                proxy_metadata = {
+                    'resolution_width': 1280,
+                    'resolution_height': 720,
+                    'frame_rate': 15.0,
+                    'codec_video': 'h264',
+                    'codec_audio': 'aac',
+                    'duration_seconds': None,
+                    'bitrate': None
+                }
 
             # Create proxy file record in database
             proxy_file_id = db.create_proxy_file(
@@ -490,11 +499,17 @@ def create_proxy_internal(file_id: int, force: bool = False, upload_to_s3: bool 
         from app.utils.media_metadata import extract_media_metadata
         proxy_metadata = extract_media_metadata(proxy_path)
     except Exception as e:
-        current_app.logger.warning(f"Failed to extract proxy metadata: {e}")
+        current_app.logger.error(f"Failed to extract proxy metadata from {proxy_path}: {e}", exc_info=True)
+        # Provide complete fallback metadata with all expected fields
+        # This ensures database records are properly populated even if extraction fails
         proxy_metadata = {
             'resolution_width': 1280,
             'resolution_height': 720,
-            'frame_rate': 15.0
+            'frame_rate': 15.0,
+            'codec_video': 'h264',
+            'codec_audio': 'aac',
+            'duration_seconds': None,  # Cannot infer duration, must be extracted
+            'bitrate': None
         }
 
     # Create proxy file record in database

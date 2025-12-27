@@ -9,6 +9,7 @@ import boto3
 import time
 import logging
 import re
+from botocore.config import Config
 from botocore.exceptions import ClientError
 from typing import Dict, Any, Optional, List, Tuple, Callable
 from functools import wraps, lru_cache
@@ -95,13 +96,20 @@ class NovaVideoService:
         self.bucket_name = bucket_name
         self.region = region
 
-        # Initialize Bedrock Runtime client
+        # Initialize Bedrock Runtime client with extended timeouts for large video processing
+        # Nova can take 2-5+ minutes for large videos, default 60s timeout is insufficient
+        bedrock_config = Config(
+            read_timeout=600,      # 10 minutes for read operations
+            connect_timeout=60,    # 60 seconds for initial connection
+            retries={'max_attempts': 3, 'mode': 'standard'}
+        )
+
         session_kwargs = {'region_name': region}
         if aws_access_key and aws_secret_key:
             session_kwargs['aws_access_key_id'] = aws_access_key
             session_kwargs['aws_secret_access_key'] = aws_secret_key
 
-        self.client = boto3.client('bedrock-runtime', **session_kwargs)
+        self.client = boto3.client('bedrock-runtime', config=bedrock_config, **session_kwargs)
         try:
             self.batch_client = boto3.client('bedrock', **session_kwargs)
         except Exception as e:
