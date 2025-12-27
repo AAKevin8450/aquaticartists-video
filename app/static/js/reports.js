@@ -120,6 +120,159 @@
         trendTotal.textContent = `${formatNumber(totalTokens)} total`;
     };
 
+    // ============================================================================
+    // BILLING DATA FUNCTIONS
+    // ============================================================================
+
+    const loadBillingData = async (start, end, refresh = false) => {
+        try {
+            const url = new URL('/reports/api/billing/summary', window.location.origin);
+            if (start) url.searchParams.set('start', start);
+            if (end) url.searchParams.set('end', end);
+            if (refresh) url.searchParams.set('refresh', 'true');
+
+            const response = await fetch(url);
+
+            if (!response.ok) {
+                if (response.status === 503) {
+                    showBillingError('AWS billing bucket not configured. Add BILLING_BUCKET_NAME to .env');
+                    return;
+                }
+                throw new Error('Failed to load billing data');
+            }
+
+            const data = await response.json();
+            renderBillingData(data);
+            document.getElementById('billingSection').style.display = 'block';
+            document.getElementById('billingError').style.display = 'none';
+        } catch (error) {
+            console.error('Billing error:', error);
+            showBillingError(error.message);
+        }
+    };
+
+    const renderBillingData = (data) => {
+        // Format currency with 4 decimal places for billing
+        const formatBillingCurrency = (value) => {
+            return new Intl.NumberFormat(undefined, {
+                style: 'currency',
+                currency: 'USD',
+                minimumFractionDigits: 4,
+                maximumFractionDigits: 4
+            }).format(value || 0);
+        };
+
+        // Render service breakdown table
+        fillTable(
+            'billingServiceRows',
+            data.services || [],
+            [
+                { key: 'service_name' },
+                { key: 'cost', align: 'end', format: formatBillingCurrency },
+                { key: 'percent', align: 'end', format: (v) => `${v.toFixed(1)}%` }
+            ],
+            'No billing data available'
+        );
+
+        // Update subtitle with total cost
+        const subtitle = document.getElementById('billingSubtitle');
+        subtitle.textContent = `${formatCurrency(data.total_cost)} total AWS costs`;
+
+        // Render daily bars with date labels and cost amounts
+        const costs = (data.daily || []).map(d => d.cost);
+        const maxCost = Math.max(...costs, 0);
+        const floor = maxCost === 0 ? 8 : 2;
+
+        const container = document.getElementById('billingBarsContainer');
+        container.innerHTML = '';
+        container.style.display = 'flex';
+        container.style.gap = '4px';
+        container.style.alignItems = 'stretch';
+        container.style.height = '250px';
+        container.style.position = 'relative';
+        container.style.backgroundImage = 'linear-gradient(to bottom, transparent 0%, transparent calc(100% - 1px), #e5e7eb calc(100% - 1px), #e5e7eb 100%)';
+        container.style.backgroundSize = '100% 25%';
+
+        data.daily.forEach((item) => {
+            // Create wrapper for bar + labels
+            const wrapper = document.createElement('div');
+            wrapper.style.flex = '1';
+            wrapper.style.display = 'flex';
+            wrapper.style.flexDirection = 'column';
+            wrapper.style.alignItems = 'center';
+            wrapper.style.justifyContent = 'flex-end';
+            wrapper.style.minWidth = '0';
+            wrapper.style.position = 'relative';
+
+            // Create bar container (to control bar height)
+            const barContainer = document.createElement('div');
+            barContainer.style.width = '100%';
+            barContainer.style.display = 'flex';
+            barContainer.style.flexDirection = 'column';
+            barContainer.style.alignItems = 'center';
+            barContainer.style.flex = '1';
+            barContainer.style.justifyContent = 'flex-end';
+            barContainer.style.position = 'relative';
+
+            // Create cost label (above bar)
+            const costLabel = document.createElement('span');
+            costLabel.textContent = `$${item.cost.toFixed(2)}`;
+            costLabel.style.fontSize = '9px';
+            costLabel.style.color = '#374151';
+            costLabel.style.fontWeight = '600';
+            costLabel.style.marginBottom = '2px';
+            costLabel.style.whiteSpace = 'nowrap';
+            costLabel.style.userSelect = 'none';
+
+            // Create bar
+            const bar = document.createElement('span');
+            bar.style.width = '100%';
+            bar.style.backgroundColor = '#f97316';
+            bar.style.borderRadius = '2px 2px 0 0';
+            bar.style.transition = 'all 0.2s';
+            bar.style.cursor = 'pointer';
+            const height = maxCost ? Math.max(floor, Math.round((item.cost / maxCost) * 100)) : floor;
+            bar.style.height = `${height}%`;
+            bar.title = `${item.day}: ${formatCurrency(item.cost)}`;
+
+            // Add hover effect
+            bar.addEventListener('mouseenter', () => {
+                bar.style.backgroundColor = '#ea580c';
+            });
+            bar.addEventListener('mouseleave', () => {
+                bar.style.backgroundColor = '#f97316';
+            });
+
+            // Create date label (format: MM/DD)
+            const dateLabel = document.createElement('span');
+            const dateParts = item.day.split('-');
+            dateLabel.textContent = `${dateParts[1]}/${dateParts[2]}`;
+            dateLabel.style.fontSize = '10px';
+            dateLabel.style.color = '#6b7280';
+            dateLabel.style.marginTop = '4px';
+            dateLabel.style.transform = 'rotate(-45deg)';
+            dateLabel.style.transformOrigin = 'center';
+            dateLabel.style.whiteSpace = 'nowrap';
+            dateLabel.style.userSelect = 'none';
+            dateLabel.style.height = '20px';
+            dateLabel.style.display = 'flex';
+            dateLabel.style.alignItems = 'center';
+            dateLabel.style.justifyContent = 'center';
+
+            barContainer.appendChild(costLabel);
+            barContainer.appendChild(bar);
+            wrapper.appendChild(barContainer);
+            wrapper.appendChild(dateLabel);
+            container.appendChild(wrapper);
+        });
+    };
+
+    const showBillingError = (message) => {
+        document.getElementById('billingSection').style.display = 'none';
+        document.getElementById('billingError').style.display = 'block';
+        document.getElementById('billingErrorMessage').textContent = message;
+    };
+
     const renderDailyTable = (daily) => {
         fillTable(
             'dailyRows',
@@ -242,6 +395,9 @@
 
         const data = await response.json();
         renderReport(data);
+
+        // Load billing data after main report
+        loadBillingData(start, end);
     };
 
     form.addEventListener('submit', (event) => {
@@ -262,6 +418,14 @@
             }
         });
     });
+
+    // Add refresh button handler
+    const refreshBillingBtn = document.getElementById('refreshBillingBtn');
+    if (refreshBillingBtn) {
+        refreshBillingBtn.addEventListener('click', async () => {
+            await loadBillingData(startInput.value, endInput.value, true);
+        });
+    }
 
     // Default to last week
     setQuickRange(7, 'week');

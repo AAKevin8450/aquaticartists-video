@@ -3672,6 +3672,144 @@ class Database:
                     cursor.execute('''
                         UPDATE analysis_jobs SET status = ? WHERE job_id = ?
                     ''', (normalized_status, job_id))
+    # ============================================================================
+    # BILLING CACHE OPERATIONS
+    # ============================================================================
+
+    def cache_billing_data(self, service_code: str, service_name: str,
+                          usage_date: str, cost_usd: float):
+        """
+        Cache billing data for a service and date.
+        Uses INSERT OR REPLACE for upserts based on unique index.
+
+        Args:
+            service_code: AWS service code (e.g., "AmazonS3")
+            service_name: Human-readable service name
+            usage_date: Date in YYYY-MM-DD format
+            cost_usd: Cost in USD
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO billing_cache
+                (service_code, service_name, usage_date, cost_usd, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (service_code, service_name, usage_date, cost_usd))
+
+    def get_cached_billing_data(self, start_date: str, end_date: str) -> List[Dict[str, Any]]:
+        """
+        Get cached billing data for date range.
+
+        Args:
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+
+        Returns:
+            List of billing cache records
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM billing_cache
+                WHERE usage_date >= ? AND usage_date <= ?
+                ORDER BY usage_date, service_code
+            ''', (start_date, end_date))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def clear_billing_cache(self, start_date: Optional[str] = None,
+                           end_date: Optional[str] = None):
+        """
+        Clear billing cache entries.
+
+        Args:
+            start_date: Optional start date to clear from
+            end_date: Optional end date to clear until
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if start_date and end_date:
+                cursor.execute('''
+                    DELETE FROM billing_cache
+                    WHERE usage_date >= ? AND usage_date <= ?
+                ''', (start_date, end_date))
+            elif start_date:
+                cursor.execute('''
+                    DELETE FROM billing_cache WHERE usage_date >= ?
+                ''', (start_date,))
+            elif end_date:
+                cursor.execute('''
+                    DELETE FROM billing_cache WHERE usage_date <= ?
+                ''', (end_date,))
+            else:
+                # Clear all
+                cursor.execute('DELETE FROM billing_cache')
+
+    def create_billing_sync_log(self, start_date: str, end_date: str) -> int:
+        """
+        Create a new billing sync log entry.
+
+        Args:
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+
+        Returns:
+            Sync log ID
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO billing_sync_log
+                (sync_started_at, date_range_start, date_range_end, status)
+                VALUES (CURRENT_TIMESTAMP, ?, ?, 'IN_PROGRESS')
+            ''', (start_date, end_date))
+            return cursor.lastrowid
+
+    def update_billing_sync_log(self, log_id: int, status: str,
+                                records_processed: int,
+                                error_message: Optional[str] = None):
+        """
+        Update billing sync log entry.
+
+        Args:
+            log_id: Sync log ID
+            status: Status (IN_PROGRESS, COMPLETED, FAILED)
+            records_processed: Number of records processed
+            error_message: Optional error message
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if status in ('COMPLETED', 'FAILED'):
+                cursor.execute('''
+                    UPDATE billing_sync_log
+                    SET status = ?,
+                        records_processed = ?,
+                        error_message = ?,
+                        sync_completed_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (status, records_processed, error_message, log_id))
+            else:
+                cursor.execute('''
+                    UPDATE billing_sync_log
+                    SET status = ?, records_processed = ?, error_message = ?
+                    WHERE id = ?
+                ''', (status, records_processed, error_message, log_id))
+
+    def get_latest_billing_sync(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the most recent billing sync log entry.
+
+        Returns:
+            Sync log record or None
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM billing_sync_log
+                ORDER BY sync_started_at DESC
+                LIMIT 1
+            ''')
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
 
 # Global database instance (will be initialized in app factory)

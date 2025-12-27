@@ -236,3 +236,181 @@ def reports_summary():
     except Exception as exc:
         current_app.logger.error(f"Reports summary error: {exc}", exc_info=True)
         return jsonify({'error': 'failed to load report summary'}), 500
+
+
+@bp.route('/api/billing/summary')
+def billing_summary():
+    """
+    Get AWS billing summary from Cost and Usage Reports.
+
+    Query params:
+        - start: Start date (YYYY-MM-DD), defaults to 7 days ago
+        - end: End date (YYYY-MM-DD), defaults to today
+        - refresh: Force refresh from S3 (true/false), defaults to false
+
+    Returns:
+        {
+            'range': {'start': '2025-01-01', 'end': '2025-01-31', 'days': 31},
+            'total_cost': 123.45,
+            'services': [
+                {'service_code': 'AmazonS3', 'service_name': 'Amazon S3',
+                 'cost': 45.67, 'percent': 37.0},
+                ...
+            ],
+            'daily': [{'day': '2025-01-01', 'cost': 4.12}, ...],
+            'cached': true,
+            'last_sync': '2025-01-15T10:30:00Z'
+        }
+    """
+    from app.services.billing_service import get_billing_service, BillingError
+    from app.database import get_db
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+
+    try:
+        # Get billing service
+        billing_service = get_billing_service(current_app)
+        if not billing_service:
+            return jsonify({'error': 'Billing not configured. Set BILLING_BUCKET_NAME in .env'}), 503
+
+        db = get_db()
+
+        # Parse date range
+        start_date = request.args.get('start')
+        end_date = request.args.get('end')
+        refresh = request.args.get('refresh', '').lower() == 'true'
+
+        if not start_date or not end_date:
+            # Default to last 7 days
+            end = datetime.now()
+            start = end - timedelta(days=7)
+            start_date = start.strftime('%Y-%m-%d')
+            end_date = end.strftime('%Y-%m-%d')
+
+        # Validate date format
+        try:
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+            if start_dt > end_dt:
+                return jsonify({'error': 'start_date must be before end_date'}), 400
+        except ValueError as e:
+            return jsonify({'error': f'Invalid date format: {e}'}), 400
+
+        # Calculate days in range
+        days = (end_dt - start_dt).days + 1
+
+        # Check cache first unless refresh requested
+        cached_data = db.get_cached_billing_data(start_date, end_date) if not refresh else []
+        last_sync = db.get_latest_billing_sync()
+
+        if cached_data and not refresh:
+            # Use cached data
+            # Aggregate by service
+            service_costs = defaultdict(float)
+            daily_costs = defaultdict(float)
+
+            for row in cached_data:
+                service_costs[row['service_code']] += row['cost_usd']
+                daily_costs[row['usage_date']] += row['cost_usd']
+
+            # Build service list
+            total_cost = sum(service_costs.values())
+            services = []
+            for service_code, cost in service_costs.items():
+                # Get service name from cached_data
+                service_name = next(
+                    (r['service_name'] for r in cached_data if r['service_code'] == service_code),
+                    service_code
+                )
+                percent = (cost / total_cost * 100) if total_cost > 0 else 0
+                services.append({
+                    'service_code': service_code,
+                    'service_name': service_name,
+                    'cost': cost,
+                    'percent': percent
+                })
+
+            # Sort by cost descending
+            services.sort(key=lambda x: x['cost'], reverse=True)
+
+            # Build daily list with zero-filling
+            daily = []
+            current = start_dt
+            while current <= end_dt:
+                day_str = current.strftime('%Y-%m-%d')
+                daily.append({
+                    'day': day_str,
+                    'cost': daily_costs.get(day_str, 0.0)
+                })
+                current += timedelta(days=1)
+
+            return jsonify({
+                'range': {
+                    'start': start_date,
+                    'end': end_date,
+                    'days': days
+                },
+                'total_cost': total_cost,
+                'services': services,
+                'daily': daily,
+                'cached': True,
+                'last_sync': last_sync['sync_completed_at'] if last_sync else None
+            })
+
+        else:
+            # Fetch from S3 and cache
+            current_app.logger.info(f"Fetching billing data from S3 for {start_date} to {end_date}")
+
+            # Create sync log
+            sync_id = db.create_billing_sync_log(start_date, end_date)
+
+            try:
+                # Fetch from S3
+                billing_data = billing_service.fetch_cur_data(start_date, end_date)
+
+                # Clear existing cache for this date range
+                db.clear_billing_cache(start_date, end_date)
+
+                # Cache the data using the detailed service_by_date breakdown
+                service_by_date = billing_data.get('service_by_date', {})
+                service_names = {s['service_code']: s['service_name'] for s in billing_data['services']}
+
+                for service_code, date_costs in service_by_date.items():
+                    service_name = service_names.get(service_code, service_code)
+                    for date, cost in date_costs.items():
+                        db.cache_billing_data(
+                            service_code,
+                            service_name,
+                            date,
+                            cost
+                        )
+
+                # Update sync log
+                db.update_billing_sync_log(
+                    sync_id,
+                    'COMPLETED',
+                    billing_data['rows_processed']
+                )
+
+                return jsonify({
+                    'range': {
+                        'start': start_date,
+                        'end': end_date,
+                        'days': days
+                    },
+                    'total_cost': billing_data['total_cost'],
+                    'services': billing_data['services'],
+                    'daily': billing_data['daily'],
+                    'cached': False,
+                    'last_sync': datetime.now().isoformat()
+                })
+
+            except BillingError as e:
+                # Update sync log with error
+                db.update_billing_sync_log(sync_id, 'FAILED', 0, str(e))
+                current_app.logger.error(f"Billing fetch error: {e}")
+                return jsonify({'error': str(e)}), 500
+
+    except Exception as e:
+        current_app.logger.error(f"Billing summary error: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to load billing summary'}), 500
