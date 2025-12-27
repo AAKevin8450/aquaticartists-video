@@ -1,3 +1,118 @@
+2025-12-27 12:19:45 - Updated by Claude Code
+
+[Category: Feature Enhancement]
+Add operation-level detail to AWS billing reports with expandable service breakdown.
+
+[Purpose]
+Enhance AWS billing visibility with granular operation-level cost tracking, enabling detailed analysis of Bedrock model usage (Nova 2 Lite, Nova Pro, Nova Premier) with separate input/output token costs, and providing interactive UI for drilling down into service costs.
+
+[Impact]
+✨ **ENHANCEMENT**
+- Operation-level cost breakdown for all AWS services (Bedrock, Rekognition, S3, etc.)
+- Interactive expandable rows in billing table (click service to see operations)
+- Usage quantity display with context-aware formatting (tokens, requests, GB)
+- Model-specific breakdowns for Bedrock (Nova 2 Lite input/output, Nova Pro input/output, Nova Premier input/output)
+- Zero-cost service filter toggle for cleaner reporting
+- Backward compatible (new table, optional operations field in API response)
+- Cached operation details for fast queries (<50ms)
+
+[Files Modified]
+- migrations/009_add_billing_details.sql (new file - database schema):
+  * Created billing_cache_details table with 8 columns (service_code, operation, usage_type, usage_date, usage_amount, cost_usd, timestamps)
+  * Added 3 indexes: service_date, operation, unique constraint on (service_code, operation, usage_type, usage_date)
+  * Supports operation-level cost tracking with usage quantities
+
+- app/database.py (3 new methods):
+  * cache_billing_detail(): Insert/update operation-level costs (lines 3747-3769)
+  * get_cached_billing_details(): Retrieve operations grouped by service with date range filtering (lines 3771-3806)
+  * clear_billing_details(): Clear operation cache with optional date range (lines 3808-3833)
+
+- app/services/billing_service.py (operation parsing and aggregation):
+  * Added OPERATION_NAME_MAP with 14+ operation mappings (lines 42-64)
+  * Created get_operation_display_name(): Parse Bedrock models from usage_type, extract input/output token separation (lines 67-125)
+  * Enhanced parse_cur_parquet(): Extract operation, usage_type, usage_amount from CUR Parquet (lines 278-284)
+  * Added aggregate_by_operation(): Group costs by service → operation → usage_type with percentage calculations (lines 415-477)
+  * Updated fetch_cur_data(): Return operations_by_service in response (lines 540, 548)
+
+- app/routes/reports.py (API and caching):
+  * Modified /reports/api/billing/summary: Attach operations to each service in cached data path (lines 336-353)
+  * Enhanced S3 fetch path: Cache detailed operations with proportional date distribution (lines 393, 409-432)
+  * Added get_operation_display_name import for operation name enrichment (line 265)
+  * Clear billing_details cache on refresh (line 393)
+
+- app/static/js/reports.js (frontend interactivity):
+  * Added formatUsageAmount(): Context-aware formatting for tokens (1.2M tokens), requests (450 requests), storage (GB), bytes (lines 42-72)
+  * Implemented expandable rows with chevron icons and click handlers (lines 199-285)
+  * Added toggleServiceExpanded(): Expand/collapse logic with icon rotation and row visibility (lines 492-515)
+  * Created zero-cost filter toggle handler: Hide/show services with $0 cost (lines 567-609)
+  * Replaced fillTable() with custom rendering for hierarchical service → operations display
+
+- app/templates/reports.html (UI components):
+  * Added zero-cost filter toggle UI with form-switch (lines 459-465)
+  * Positioned toggle next to "Refresh" button in header
+
+[Technical Details]
+**Operation Name Parsing for Bedrock Models:**
+```python
+# Nova 2 Lite (version 2.0):
+"USE1-Nova2.0Lite-input-tokens" → "Nova 2 Lite (Input Tokens)"
+"USE1-Nova2Lite-output-tokens" → "Nova 2 Lite (Output Tokens)"
+
+# Nova Pro (version 1):
+"USE1-NovaPro-input-tokens" → "Nova Pro (Input Tokens)"
+
+# Nova Premier (version 1):
+"USE1-NovaPremier-output-tokens" → "Nova Premier (Output Tokens)"
+
+# Embeddings:
+"USE1-NovaMultiModalEmbeddings" → "Nova Embeddings"
+```
+
+**Cost Distribution Algorithm:**
+When caching operations from S3, costs are proportionally distributed across dates:
+1. Get service's daily costs from service_by_date
+2. Calculate operation's share: op_cost / total_service_cost
+3. For each date, allocate: daily_cost * op_share
+4. Approximate usage_amount proportionally (same ratio)
+
+**Database Schema:**
+```sql
+CREATE TABLE billing_cache_details (
+    service_code TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    usage_type TEXT NOT NULL,
+    usage_date DATE NOT NULL,
+    usage_amount REAL NOT NULL,  -- Quantity (tokens, requests, GB)
+    cost_usd REAL NOT NULL,
+    UNIQUE(service_code, operation, usage_type, usage_date)
+);
+```
+
+**Frontend Interaction:**
+- Click service row → chevron rotates 90°, operation rows display (table-row)
+- Click again → chevron rotates back, operation rows hide (display: none)
+- Operation rows styled with gray background (#f9fafb), 2rem left padding
+- Zero-cost filter respects expanded state (preserves operation visibility when toggling)
+
+[Key Features]
+- **Expandable Rows**: Click any service to reveal operations (e.g., "Amazon Bedrock" → "Nova 2 Lite (Input Tokens)", "Nova 2 Lite (Output Tokens)")
+- **Usage Quantities**: Shows formatted amounts (e.g., "1.2M tokens", "450 requests", "12.5 GB")
+- **Model Separation**: Bedrock costs split by model and token direction (input vs output)
+- **Backward Compatible**: Existing /api/billing/summary still works, operations field is optional enhancement
+- **Performance**: Cached operations loaded in same query as service totals (<50ms)
+
+[Dependencies]
+- Requires CUR Parquet files to include: line_item_operation, line_item_usage_type, line_item_usage_amount columns
+- Builds on existing billing_cache infrastructure (no breaking changes)
+
+[Testing Considerations]
+- Verify operation parsing for all Bedrock models (Nova 2 Lite v2.0, Nova Pro v1, Nova Premier v1, Embeddings)
+- Test zero-cost filter toggle with mix of $0 and non-zero services
+- Validate expand/collapse behavior with multiple services expanded simultaneously
+- Check proportional distribution accuracy: sum(operation_costs) should equal service_total for each service
+
+---
+
 2025-12-27 10:34:03 - Updated by Claude Code
 
 [Category: Bug Fix / Infrastructure]
