@@ -17,6 +17,8 @@ cd E:\coding\video && .\.venv\Scripts\activate && python run.py
 AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION=us-east-1
 S3_BUCKET_NAME, FLASK_SECRET_KEY, DATABASE_PATH=data/app.db
 SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
+BILLING_BUCKET_NAME=aquaticartists-billing-reports (optional)
+BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 ```
 
 ## Architecture
@@ -36,6 +38,7 @@ SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
 | nova_service.py | Bedrock video analysis (summary/chapters/elements/waterfall) |
 | nova_transcript_summary_service.py | Nova 2 Lite transcript summaries (<=1000 chars) |
 | nova_embeddings_service.py | Semantic search vectors (1024 dim) |
+| billing_service.py | AWS CUR Parquet parsing, cost aggregation by service/date |
 | face_collection_service.py | Face collection management |
 | rescan_service.py | Async folder rescan with progress tracking |
 | import_service.py | Async directory import with progress tracking |
@@ -47,10 +50,12 @@ SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
 | file_management.py | /api/files, /api/batch/*, /api/files/rescan, /api/files/import-directory |
 | search.py | /api/search?semantic=true |
 | transcription.py | /api/scan, /api/start-batch |
+| reports.py | /reports/api/summary, /api/billing/summary |
 
 ### Frontend
 - **Primary UI**: file_management.html (unified file browser with batch operations)
-- **JS**: file_management.js, search.js, dashboard.js (Chart.js)
+- **JS**: file_management.js, search.js, dashboard.js (Chart.js), reports.js
+- **Reports**: reports.html (Nova costs + AWS billing breakdown)
 
 ## Key Features
 
@@ -82,12 +87,21 @@ SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
 - Context-aware: Uses filename, path, transcript summary to enhance analysis accuracy
 - Returns search_metadata (project/location/customer/content type/entities/keywords) for discovery
 
+### AWS Billing Reports
+- Real-time cost data from AWS CUR Parquet files in S3
+- Service breakdown with 4-decimal precision ($4.0100)
+- Daily cost chart with labels, grid lines, and date markers
+- Cached for fast queries (<50ms), manual refresh from S3
+- Only uses latest CUR file per month (cumulative data, avoids 7x duplicate counting bug)
+
 ## Database Tables
 - **files**: S3-uploaded files with metadata
 - **transcripts**: Text, segments, transcript_summary, video metadata (indexed on file_path for performance)
 - **analysis_jobs/nova_jobs**: Job tracking with cost
 - **nova_jobs**: summary_result, chapters_result, elements_result, waterfall_classification_result, search_metadata, raw_response (full API responses)
 - **nova_embeddings**: sqlite-vec vectors
+- **billing_cache**: Pre-aggregated costs by service + date, unique index on (service_code, usage_date)
+- **billing_sync_log**: S3 sync tracking (status, records_processed, error_message)
 - **rescan_jobs**: Async folder rescan tracking (status, progress, files_scanned, results)
 - **import_jobs**: Async directory import tracking (status, progress, imported/skipped counts, errors)
 

@@ -36,6 +36,10 @@ class Config:
     NOVA_EMBED_REQUEST_FORMAT = os.getenv('NOVA_EMBED_REQUEST_FORMAT', 'input')
     SQLITE_VEC_PATH = os.getenv('SQLITE_VEC_PATH')
 
+    # Billing settings (optional)
+    BILLING_BUCKET_NAME = os.getenv('BILLING_BUCKET_NAME')
+    BILLING_CUR_PREFIX = os.getenv('BILLING_CUR_PREFIX', 'hourly_reports/')
+
     # Database settings
     DATABASE_PATH = BASE_DIR / os.getenv('DATABASE_PATH', 'data/app.db')
 

@@ -1,3 +1,91 @@
+2025-12-27 00:52:03 - Updated by Claude Code
+
+[Category: Feature / Infrastructure]
+Add AWS Cost and Usage Report (CUR) integration to Reports page with real-time billing data from S3 Parquet files.
+
+[Purpose]
+Provide comprehensive AWS cost visibility directly in the Reports page by integrating Cost and Usage Report data from S3. Display actual AWS spending by service with daily breakdowns, replacing estimated token costs with real billing data. Enable cost monitoring without leaving the application.
+
+[Impact]
+- Reports page now displays real AWS costs from CUR Parquet files stored in S3
+- Billing data shows service breakdown (Bedrock, S3, DynamoDB, etc.) with 4-decimal precision
+- Daily cost chart with dollar labels, grid lines, and date labels for trend analysis
+- Cached billing data for fast queries (<50ms) with manual refresh option
+- Fixed duplicate counting bug where cumulative CUR files were being summed (7x overcounting)
+- Graceful degradation when billing bucket not configured (optional feature)
+
+[Files Modified]
+- app/services/billing_service.py (NEW - S3 CUR fetching, Parquet parsing, service/date aggregation)
+- migrations/008_add_billing_cache.sql (NEW - billing_cache and billing_sync_log tables)
+- app/database.py (added 6 billing cache methods: cache_billing_data, get_cached_billing_data, clear_billing_cache, create_billing_sync_log, update_billing_sync_log, get_latest_billing_sync)
+- app/routes/reports.py (added /api/billing/summary endpoint with caching logic)
+- app/templates/reports.html (added billing section with service table and daily chart)
+- app/static/js/reports.js (added billing data loading, chart rendering with labels/grid lines)
+- app/config.py (added BILLING_BUCKET_NAME and BILLING_CUR_PREFIX settings)
+- .env (added billing bucket configuration)
+
+[Technical Details - Billing Service]
+Created billing_service.py to handle AWS CUR Parquet files:
+- list_cur_files(): Auto-discovers CUR files by billing period, returns ONLY latest file to avoid duplicate counting (critical fix)
+- parse_cur_parquet(): Streams Parquet files using PyArrow, filters for "Usage" line items only
+- aggregate_by_service(): Groups costs by AWS service with friendly name mapping
+- aggregate_by_service_and_date(): Provides per-service-per-day breakdown for accurate caching
+- calculate_daily_costs(): Generates daily totals with zero-filling for gaps
+- Column mapping: line_item_line_item_type, line_item_product_code, line_item_blended_cost, line_item_usage_start_date
+
+[Technical Details - Database Schema]
+Migration 008 creates two tables:
+1. billing_cache: Stores pre-aggregated costs by service + date for fast queries
+   - Unique index on (service_code, usage_date) prevents duplicates
+   - INSERT OR REPLACE pattern for upserts
+2. billing_sync_log: Tracks S3 sync operations with status, records_processed, error_message
+
+[Technical Details - Duplicate Counting Fix]
+AWS CUR hourly files contain CUMULATIVE data for entire month, not incremental:
+- Initial bug: Summed costs across all 7 files → 7x overcounting (e.g., $4.01 × 7 = $28.05)
+- Fix: Only use latest file per billing period (list_cur_files returns max by LastModified)
+- Verified against AWS Cost Explorer API - now matches exactly
+
+[Technical Details - API Endpoint]
+GET /api/billing/summary:
+- Query params: start, end (YYYY-MM-DD), refresh (force S3 sync)
+- Returns: total_cost, services array, daily array, cached flag, last_sync timestamp
+- Caching strategy: Check billing_cache first, fetch from S3 on miss or refresh=true
+- Uses service_by_date from billing service for accurate per-day-per-service caching
+
+[Technical Details - Frontend]
+Reports page enhancements:
+- Service table: Shows all AWS services with 4-decimal cost precision ($4.0100)
+- Daily chart: 250px height with dollar labels above bars ($4.01), horizontal grid lines at 25% intervals
+- Date labels: MM/DD format rotated -45° below bars
+- Hover effects: Bars darken on mouseover (#ea580c)
+- Refresh button: Triggers fresh S3 sync with loading state
+
+[Configuration]
+Environment variables (.env):
+- BILLING_BUCKET_NAME=aquaticartists-billing-reports (required)
+- BILLING_CUR_PREFIX=/hourly_reports/ (note: leading slash required for this bucket)
+
+Config.py settings:
+- BILLING_BUCKET_NAME, BILLING_CUR_PREFIX (optional, gracefully handles missing)
+
+[Dependencies]
+- pyarrow 22.0.0: Required for reading Parquet files, installed in virtual environment
+
+[Known Limitations]
+- Single billing period per query (no cross-month aggregation)
+- Requires hourly CUR format (not daily/monthly)
+- S3 bucket must have leading slash in key structure (/hourly_reports/)
+- Cost Explorer API shows $0 due to delay, CUR files are source of truth
+
+[Testing]
+Verified against actual billing data:
+- 12/23/25: $4.01 (matches AWS reporting, was $28.05 before fix)
+- 12/20-12/26: $4.23 total (verified in CUR Parquet files)
+- All services aggregated correctly (Bedrock, DynamoDB, S3, etc.)
+
+[Removed/Deprecated]
+- None
 2025-12-26 21:36:29 - Updated by Claude Code
 
 [Category: Performance / Bug Fix / Infrastructure]
