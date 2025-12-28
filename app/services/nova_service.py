@@ -219,12 +219,22 @@ class NovaVideoService:
         if context_section or transcript_section:
             instructions = """=== ANALYSIS INSTRUCTIONS ===
 Use the above context to guide your analysis:
+
+CRITICAL EXTRACTION TARGETS:
+1. RECORDING DATE: Look for dates in file path (YYYYMMDD, YYYY-MM-DD, MM-DD-YYYY patterns),
+   filename, transcript ("today is...", "recorded on..."), or visual timestamps. Output as YYYY-MM-DD.
+2. CUSTOMER/PROJECT NAME (synonymous): Check file path (first segment after drive is often customer),
+   filename (e.g., "Smith_Pool.mp4"), and transcript (property owner names, client mentions).
+3. LOCATION: Check path for city/state names, transcript for "here in [city]" or address mentions,
+   and video for visible addresses, business signs, or license plates indicating state.
+
+GENERAL GUIDANCE:
 - The filename often contains important keywords about the content
 - The file path may indicate project/category organization
 - The transcript summary provides spoken content context
 - Path segments can encode customer/project/location; treat as hints with source attribution
-- Extract customer, project, and location cues when present
-- Do not invent details; use "unknown" when evidence is missing
+- Always include the source (path, filename, transcript, visual) for extracted entities
+- Do not invent details; use null when evidence is missing
 
 """
 
@@ -1571,11 +1581,34 @@ WATERFALL CLASSIFICATION REQUIREMENTS:
 - Additionally provide "search_tags", "product_keywords", "content_type", "skill_level", "building_techniques".
 
 SEARCH METADATA REQUIREMENTS (for discovery):
-- Project: customer_name, project_name, job_number/project_code.
-- Location: site_name, city, state/region, country.
+
+DATE EXTRACTION (CRITICAL - check all sources):
+- File path patterns: YYYYMMDD, YYYY-MM-DD, YYYY_MM_DD, MM-DD-YYYY, MMDDYYYY
+- Example paths: "2024-03-15_Johnson_Pool" → recording_date: "2024-03-15"
+- Transcript mentions: "today is March 15th", "recorded on...", "this was filmed in June 2023"
+- Visual cues: on-screen dates, timestamps, calendars visible
+- If multiple dates found, prefer the one closest to the start of the path/filename
+- Output as ISO format YYYY-MM-DD when possible; null if no date evidence
+
+CUSTOMER/PROJECT NAME EXTRACTION (these are synonymous - check all sources):
+- File path: First segment after drive/root is often the customer (e.g., "E:/videos/Johnson Family/..." → "Johnson Family")
+- Filename: May contain customer name directly (e.g., "Smith_Pool_Installation.mp4" → "Smith")
+- Transcript: "Mr. Johnson", "the Smith residence", "working for ABC Pools", "this is the Martinez project"
+- Look for proper nouns, family names, business names in any source
+- Cross-reference across sources for higher confidence (e.g., path says "Johnson" and transcript mentions "Mr. Johnson")
+
+LOCATION EXTRACTION (multiple sources):
+- File path: city names, state abbreviations, addresses in folder names
+- Transcript: "here in Phoenix", "this property in Scottsdale", "Arizona weather", street addresses
+- Visual: address signs, business names with locations, license plates (state), landmarks
+- Normalize to: city, state_region, country when identifiable
+
+STANDARD FIELDS:
+- Project: customer_name, project_name, job_number/project_code, project_type.
+- Location: site_name, city, state_region, country, address_fragment.
 - Water feature: family, type_keywords, style_keywords.
 - Content: content_type, skill_level.
-- Entities: list of extracted entities with sources and evidence.
+- Entities: list of ALL extracted entities (dates, names, locations, etc.) with sources and evidence.
 - Keywords: 8-20 lowercase search tags.
 
 OUTPUT JSON SCHEMA (return ONLY JSON, no markdown):
@@ -1651,19 +1684,29 @@ OUTPUT JSON SCHEMA (return ONLY JSON, no markdown):
     "building_techniques": ["..."]
   }},
   "search_metadata": {{
+    "recording_date": {{
+      "date": "YYYY-MM-DD or null if unknown",
+      "date_source": "path|filename|transcript|visual|unknown",
+      "confidence": 0.0,
+      "raw_date_string": "original text/pattern found (e.g., '20240315', 'March 15th')"
+    }},
     "project": {{
-      "customer_name": "...",
-      "project_name": "...",
-      "project_code": "...",
-      "job_number": "...",
+      "customer_name": "extracted customer/client/project name or null (synonymous with project_name)",
+      "project_name": "same as customer_name - use identical value",
+      "name_source": "path|filename|transcript|unknown",
+      "name_confidence": 0.0,
+      "project_code": "any project/job code found or null",
+      "job_number": "any job number found or null",
       "project_type": "..."
     }},
     "location": {{
       "site_name": "...",
-      "city": "...",
-      "state_region": "...",
-      "country": "...",
-      "address_fragment": "..."
+      "city": "extracted city name or null",
+      "state_region": "extracted state/region or null",
+      "country": "USA if US state detected, else extracted or null",
+      "address_fragment": "any partial address found",
+      "location_source": "path|transcript|visual|unknown",
+      "location_confidence": 0.0
     }},
     "water_feature": {{
       "family": "...",

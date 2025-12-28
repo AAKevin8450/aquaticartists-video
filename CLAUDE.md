@@ -17,16 +17,15 @@ cd E:\coding\video && .\.venv\Scripts\activate && python run.py
 AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION=us-east-1
 S3_BUCKET_NAME, FLASK_SECRET_KEY, DATABASE_PATH=data/app.db
 SQLITE_VEC_PATH=path\to\vec0.dll, NOVA_EMBED_DIMENSION=1024
-BILLING_BUCKET_NAME=aquaticartists-billing-reports (optional)
-BILLING_CUR_PREFIX=/hourly_reports/ (optional)
+BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 ```
 
 ## Architecture
 
 ### Stack
-- **Database**: SQLite (data/app.db), foreign keys enabled, LEFT JOIN optimized
+- **Database**: SQLite (data/app.db), foreign keys enabled
 - **Storage**: AWS S3 (presigned URLs)
-- **Proxy**: NVENC GPU encoding, stored in proxy_video/{name}_{source_file_id}_720p15.{ext}
+- **Proxy**: NVENC GPU encoding → proxy_video/{name}_{source_file_id}_720p15.{ext}
 
 ### Key Services (app/services/)
 | Service | Purpose |
@@ -36,12 +35,8 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 | rekognition_image.py | Sync image analysis (8 types) |
 | transcription_service.py | Local faster-whisper (6 models) |
 | nova_service.py | Bedrock video analysis (summary/chapters/elements/waterfall) |
-| nova_transcript_summary_service.py | Nova 2 Lite transcript summaries (<=1000 chars) |
 | nova_embeddings_service.py | Semantic search vectors (1024 dim) |
-| billing_service.py | AWS CUR Parquet parsing, cost aggregation by service/date |
-| face_collection_service.py | Face collection management |
-| rescan_service.py | Async folder rescan with progress tracking |
-| import_service.py | Async directory import with progress tracking |
+| billing_service.py | AWS CUR Parquet parsing, cost aggregation |
 
 ### Key Routes (app/routes/)
 | Route | Key Endpoints |
@@ -49,12 +44,11 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 | nova_analysis.py | /api/nova/analyze, /status, /results, /models |
 | file_management.py | /api/files, /api/batch/*, /api/files/rescan, /api/files/import-directory |
 | search.py | /api/search?semantic=true |
-| transcription.py | /api/scan, /api/start-batch |
 | reports.py | /reports/api/summary, /api/billing/summary |
 
 ### Frontend
 - **Primary UI**: file_management.html (unified file browser with batch operations)
-- **JS**: file_management.js, search.js, dashboard.js (Chart.js), reports.js
+- **JS**: file_management.js, search.js, dashboard.js, reports.js
 - **Reports**: reports.html (Nova costs + AWS billing breakdown)
 
 ## Key Features
@@ -63,78 +57,47 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - Fetch all filtered files (500/request), real-time progress with ETA
 - Action types: proxy, transcribe, transcript-summary, nova, rekognition
 
-### Folder Rescan (Async with Progress)
-- Fingerprint matching (filename + size + mtime) preserves analysis data for moved files
-- Real-time progress: "Scanning filesystem... (234 / 1,247 files) - ~45s remaining"
-- Two-step: async scan → review → apply
-- Endpoints: POST /api/files/rescan → job_id, GET /status, POST /cancel, POST /apply
-
-### Directory Import (Async with Progress)
-- Import local files without S3 upload, preserving metadata
-- Real-time stats: "Importing... (180 imported, 40 existing, 14 unsupported)"
-- Progress bar with ETA, cancellation support
-- Endpoints: POST /api/files/import-directory → job_id, GET /status, POST /cancel
+### Folder Rescan & Directory Import
+- Async operations with progress tracking, ETA, cancellation
+- Fingerprint matching preserves analysis data for moved files
+- Endpoints: POST → job_id, GET /status, POST /cancel, POST /apply
 
 ### Search
-- **Keyword**: UNION across files, transcripts, Rekognition, Nova (summary/chapters/elements/waterfall/search_metadata), collections
+- **Keyword**: UNION across files, transcripts, Rekognition, Nova results, collections
 - **Semantic**: Nova Embeddings with sqlite-vec KNN (sub-500ms)
-- **Optimized for**: Customer/project names, location (city/state/site), waterfall type/family/tier, product names, video type (tutorial/demo/review), building techniques, job codes
 
 ### Nova Analysis
 - 4 types: summary, chapters, elements, waterfall_classification
-- 3 models: Lite ($0.06/1K), Pro ($0.80/1K), Premier ($2.00/1K)
-- Videos < 30 min supported
-- Context-aware: Uses filename, path, transcript summary to enhance analysis accuracy
-- Returns search_metadata (project/location/customer/content type/entities/keywords) for discovery
-- **Timeout Configuration**: Extended to 600s (10 min) read timeout with 3 retries to handle large videos (180MB+ files taking 2-5+ min to process)
+- 3 models: Lite, Pro, Premier | Videos < 30 min
+- Extended timeout: 600s read with 3 retries for large videos
+- **Metadata extraction**: Recording date, customer/project name, location from file paths, filenames, transcripts, and visual content
+- **Source attribution**: All extracted metadata includes source (path/filename/transcript/visual) and confidence scores
 
 ### AWS Billing Reports
-- Real-time cost data from AWS CUR Parquet files in S3
-- Service breakdown with 4-decimal precision ($4.0100)
-- **Operation-level detail**: Expandable rows showing granular costs (click service to expand)
-- **Model-specific breakdowns**: Bedrock costs separated by model (Nova 2 Lite, Nova Pro, Nova Premier) and token direction (input/output)
-- **Usage quantities**: Context-aware display (29.7M tokens, 450 requests, 12.5 GB)
-- **Dual filter toggles**: "Hide $0 cost" and "Hide 0 usage" (works on both service and operation rows)
-- Daily cost chart with labels, grid lines, and date markers
-- Cached for fast queries (<50ms), manual refresh from S3
-- **CUR data handling**: Uses latest date only per service/operation (AWS CUR is cumulative month-to-date)
-- **Token conversion**: AWS stores in thousands, display multiplies by 1000 for actual count
+- Real-time CUR data with expandable operation-level detail
+- Model-specific Bedrock breakdowns (input/output tokens)
+- Dual filter toggles: "Hide $0 cost" / "Hide 0 usage"
+- **Note**: CUR is cumulative month-to-date; uses latest date only. Token units stored in thousands (× 1000 for display)
 
 ## Database Tables
-- **files**: S3-uploaded files with metadata (duration_seconds, resolution_width/height, frame_rate, codec_video/audio, bitrate)
-  - All 13,617 video files have complete metadata (285.88 hours total content)
-- **transcripts**: Text, segments, transcript_summary, video metadata (indexed on file_path for performance)
-- **analysis_jobs/nova_jobs**: Job tracking with cost
-- **nova_jobs**: summary_result, chapters_result, elements_result, waterfall_classification_result, search_metadata, raw_response (full API responses)
+- **files**: Metadata (duration, resolution, codec, bitrate)
+- **transcripts**: Text, segments, transcript_summary
+- **nova_jobs**: Results (summary/chapters/elements/waterfall), search_metadata, raw_response
 - **nova_embeddings**: sqlite-vec vectors
-- **billing_cache**: Pre-aggregated costs by service + date, unique index on (service_code, usage_date)
-- **billing_cache_details**: Operation-level costs (service_code, operation, usage_type, usage_date, usage_amount, cost_usd)
-- **billing_sync_log**: S3 sync tracking (status, records_processed, error_message)
-- **rescan_jobs**: Async folder rescan tracking (status, progress, files_scanned, results)
-- **import_jobs**: Async directory import tracking (status, progress, imported/skipped counts, errors)
+- **billing_cache/billing_cache_details**: Cost aggregation by service/operation/date
+- **rescan_jobs/import_jobs**: Async job tracking
 
 ## Constraints
 - Video: Max 10GB (MP4, MOV, AVI, MKV) | Image: Max 15MB (JPEG, PNG)
-- Region: us-east-1 only
-- FFmpeg required (NVENC for GPU proxy)
+- Region: us-east-1 only | FFmpeg required (NVENC for GPU proxy)
 
 ## Known Issues
 - Rekognition Person Tracking: AccessDeniedException (AWS account restriction)
-
-## Recently Added
-- **ADDED (2025-12-27)**: AWS billing operation-level detail - Expandable service breakdown with model-specific costs (Nova 2 Lite input/output tokens), usage quantities (1.2M tokens, 450 requests), zero-cost filter (migrations/009, billing_service.py, reports.py/js/html)
-
-## Recently Fixed
-- **FIXED (2025-12-28)**: AWS billing token discrepancy - Fixed cumulative CUR data triple-counting (database.py ROW_NUMBER query) and token unit conversion (reports.js × 1000 multiplier). AWS billing now correctly shows 29.7M input tokens vs program's 23.9M (was showing 89K due to bugs). Added dual filter toggles for $0 cost and 0 usage at service/operation level.
-- **FIXED (2025-12-27)**: Nova timeout failures - Extended Bedrock read timeout from 60s to 600s with retry logic to handle large videos (nova_service.py:99-112)
-- **FIXED (2025-12-27)**: Missing video metadata - Repaired 5,415 files with NULL duration/codecs, improved FFprobe fallback in upload.py to prevent future metadata loss
-- **FIXED (2025-12-27)**: Nova batch failures with Windows paths - regex pattern bug in escape sequence fixing logic caused 14% failure rate. Fixed by changing regex replacement strings from raw to regular strings in `nova_service.py:1078-1089`.
 
 ## Debug Commands
 ```bash
 python -m scripts.backfill_embeddings --force --limit 100
 python -m scripts.backfill_transcript_summaries --dry-run
 python -m scripts.reconcile_proxies --no-dry-run --delete-orphans --yes
-python -m scripts.analyze_nova_failures  # Analyze failed Nova jobs using raw responses
-python -m scripts.estimate_chunked_response_size  # Estimate DB size impact of raw storage
+python -m scripts.analyze_nova_failures
 ```

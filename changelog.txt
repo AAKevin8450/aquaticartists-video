@@ -1,3 +1,72 @@
+2025-12-28 12:57:31 - Updated by Claude Code
+
+[Category: Feature Enhancement]
+Enhance Nova Analysis with date, customer, and location extraction from file paths, filenames, and transcripts.
+
+[Purpose]
+Improve Nova video analysis metadata extraction by specifically identifying recording dates, customer/project names, and location information from multiple sources (file paths, filenames, transcripts, and visual content). This enhancement enables better searchability and discovery of videos by date, customer, and location.
+
+[Impact]
+✨ **ENHANCEMENT**
+- Added recording_date extraction with support for multiple date formats (YYYYMMDD, YYYY-MM-DD, MM-DD-YYYY, etc.)
+- Enhanced customer/project name extraction from file paths, filenames, and transcripts
+- Improved location extraction from paths, transcripts, and visual cues
+- Added source attribution and confidence scoring for all extracted metadata
+- Enables better search and filtering by date, customer, and location
+- Customer name and project name now treated as synonymous fields
+
+[Technical Details]
+**Nova Prompt Enhancements:**
+- Added CRITICAL EXTRACTION TARGETS section to contextual prompt instructions (nova_service.py:223-229)
+- Added detailed DATE EXTRACTION requirements with pattern examples (lines 1575-1581)
+- Added CUSTOMER/PROJECT NAME EXTRACTION with multi-source guidance (lines 1593-1598)
+- Added LOCATION EXTRACTION with multi-source guidance (lines 1600-1603)
+
+**New JSON Schema Fields:**
+- search_metadata.recording_date object with date, date_source, confidence, raw_date_string
+- search_metadata.project enhanced with name_source, name_confidence fields
+- search_metadata.project.customer_name and project_name now documented as synonymous
+- search_metadata.location enhanced with location_source, location_confidence fields
+
+**Extraction Logic:**
+- Date patterns: YYYYMMDD, YYYY-MM-DD, YYYY_MM_DD, MM-DD-YYYY, MMDDYYYY from paths/filenames
+- Customer extraction: First path segment after drive (e.g., "E:/videos/Johnson Family/" → "Johnson Family")
+- Customer from filename: e.g., "Smith_Pool_Installation.mp4" → "Smith"
+- Customer from transcript: "Mr. Johnson", "the Smith residence", "working for ABC Pools"
+- Location from transcript: "here in Phoenix", "this property in Scottsdale", street addresses
+- Location from visual: address signs, business names with locations, license plates
+
+[Files Modified]
+- app/services/nova_service.py:220-239 (_build_contextual_prompt):
+  * Enhanced ANALYSIS INSTRUCTIONS with CRITICAL EXTRACTION TARGETS section
+  * Added specific guidance for date, customer/project, and location extraction
+  * Updated to emphasize source attribution and null for missing evidence
+
+- app/services/nova_service.py:1573-1601 (SEARCH METADATA REQUIREMENTS):
+  * Added DATE EXTRACTION section with format examples and source guidance
+  * Added CUSTOMER/PROJECT NAME EXTRACTION section treating them as synonymous
+  * Added LOCATION EXTRACTION section with multi-source examples
+  * Reorganized into subsections: DATE, CUSTOMER/PROJECT, LOCATION, STANDARD FIELDS
+
+- app/services/nova_service.py:1676-1698 (search_metadata JSON schema):
+  * Added recording_date object (date, date_source, confidence, raw_date_string)
+  * Enhanced project object with name_source, name_confidence
+  * Updated customer_name/project_name descriptions to indicate they're synonymous
+  * Enhanced location object with location_source, location_confidence
+
+[Removed/Deprecated]
+- None (additive feature enhancement)
+
+[Testing Considerations]
+- Test with file paths containing dates in various formats
+- Test with customer names in different path positions
+- Test with transcript mentions of dates, customers, and locations
+- Verify source attribution accuracy (path vs filename vs transcript vs visual)
+- Verify confidence scoring appropriateness
+- Check that customer_name and project_name receive identical values
+
+---
+
 2025-12-28 11:26:34 - Updated by Claude Code
 
 [Category: Bug Fix]
