@@ -3772,6 +3772,9 @@ class Database:
         """
         Get cached detailed billing data grouped by service.
 
+        AWS CUR data is cumulative - each day contains month-to-date totals.
+        We use the LATEST date's values to avoid triple-counting.
+
         Args:
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
@@ -3783,16 +3786,31 @@ class Database:
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
+            # Use subquery to get only the latest date's data for each service/operation/usage_type
+            # This avoids summing cumulative CUR data across multiple dates
             cursor.execute('''
                 SELECT
                     service_code,
                     operation,
                     usage_type,
-                    SUM(usage_amount) as usage_amount,
-                    SUM(cost_usd) as cost
-                FROM billing_cache_details
-                WHERE usage_date >= ? AND usage_date <= ?
-                GROUP BY service_code, operation, usage_type
+                    usage_amount,
+                    cost
+                FROM (
+                    SELECT
+                        service_code,
+                        operation,
+                        usage_type,
+                        usage_amount,
+                        cost_usd as cost,
+                        usage_date,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY service_code, operation, usage_type
+                            ORDER BY usage_date DESC
+                        ) as rn
+                    FROM billing_cache_details
+                    WHERE usage_date >= ? AND usage_date <= ?
+                ) ranked
+                WHERE rn = 1
                 ORDER BY service_code, cost DESC
             ''', (start_date, end_date))
 

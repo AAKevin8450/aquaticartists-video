@@ -46,10 +46,12 @@
         const type = (usageType || '').toLowerCase();
 
         // Token formatting
+        // AWS CUR stores token usage in thousands, so multiply by 1000 to get actual count
         if (type.includes('token')) {
-            if (amt >= 1000000) return `${(amt / 1000000).toFixed(2)}M tokens`;
-            if (amt >= 1000) return `${(amt / 1000).toFixed(1)}K tokens`;
-            return `${Math.round(amt)} tokens`;
+            const actualTokens = amt * 1000;  // Convert from thousands to individual tokens
+            if (actualTokens >= 1000000) return `${(actualTokens / 1000000).toFixed(2)}M tokens`;
+            if (actualTokens >= 1000) return `${(actualTokens / 1000).toFixed(1)}K tokens`;
+            return `${Math.round(actualTokens)} tokens`;
         }
 
         // Request formatting
@@ -210,10 +212,15 @@
             tbody.appendChild(row);
         } else {
             data.services.forEach((service) => {
+                // Calculate total usage for this service
+                const totalUsage = (service.operations || []).reduce((sum, op) => sum + (op.usage_amount || 0), 0);
+
                 // Main service row
                 const row = document.createElement('tr');
                 row.style.cursor = 'pointer';
                 row.dataset.serviceCode = service.service_code;
+                row.dataset.serviceCost = service.cost;
+                row.dataset.serviceUsage = totalUsage;
 
                 // Expand/collapse indicator
                 const nameCell = document.createElement('td');
@@ -255,6 +262,8 @@
                         const opRow = document.createElement('tr');
                         opRow.className = 'billing-operation-row';
                         opRow.dataset.parentService = service.service_code;
+                        opRow.dataset.operationCost = op.cost || 0;
+                        opRow.dataset.operationUsage = op.usage_amount || 0;
                         opRow.style.display = 'none';
                         opRow.style.backgroundColor = '#f9fafb';
 
@@ -512,6 +521,8 @@
             operationRows.forEach(row => {
                 row.style.display = 'table-row';
             });
+            // Apply filters to newly expanded operation rows
+            applyBillingFilters();
         }
     };
 
@@ -564,46 +575,77 @@
         });
     }
 
+    // Combined filter function for cost and usage toggles
+    const applyBillingFilters = () => {
+        const hideZeroCost = document.getElementById('hideZeroCostToggle')?.checked || false;
+        const hideZeroUsage = document.getElementById('hideZeroUsageToggle')?.checked || false;
+        const tbody = document.getElementById('billingServiceRows');
+        if (!tbody) return;
+
+        const rows = tbody.querySelectorAll('tr');
+
+        rows.forEach((row) => {
+            // Handle operation detail rows
+            if (row.classList.contains('billing-operation-row')) {
+                const opCost = parseFloat(row.dataset.operationCost || 0);
+                const opUsage = parseFloat(row.dataset.operationUsage || 0);
+                const shouldHideOp = (hideZeroCost && opCost === 0) || (hideZeroUsage && opUsage === 0);
+
+                // Check if parent service is expanded and visible
+                const parentService = row.dataset.parentService;
+                const parentRow = tbody.querySelector(`[data-service-code="${parentService}"]`);
+                const parentVisible = parentRow && parentRow.style.display !== 'none';
+                const parentExpanded = expandedServices.has(parentService);
+
+                if (shouldHideOp || !parentVisible || !parentExpanded) {
+                    row.style.display = 'none';
+                } else {
+                    row.style.display = 'table-row';
+                }
+                return;
+            }
+
+            // Handle service rows
+            const cost = parseFloat(row.dataset.serviceCost || 0);
+            const usage = parseFloat(row.dataset.serviceUsage || 0);
+            const shouldHide = (hideZeroCost && cost === 0) || (hideZeroUsage && usage === 0);
+
+            if (shouldHide) {
+                row.style.display = 'none';
+                // Also hide its operation rows
+                const serviceCode = row.dataset.serviceCode;
+                if (serviceCode) {
+                    const opRows = tbody.querySelectorAll(`[data-parent-service="${serviceCode}"]`);
+                    opRows.forEach(opRow => opRow.style.display = 'none');
+                }
+            } else {
+                row.style.display = 'table-row';
+                // Restore operation rows if parent was expanded (with their own filters applied)
+                const serviceCode = row.dataset.serviceCode;
+                if (serviceCode && expandedServices.has(serviceCode)) {
+                    const opRows = tbody.querySelectorAll(`[data-parent-service="${serviceCode}"]`);
+                    opRows.forEach(opRow => {
+                        // Apply operation-level filters
+                        const opCost = parseFloat(opRow.dataset.operationCost || 0);
+                        const opUsage = parseFloat(opRow.dataset.operationUsage || 0);
+                        const shouldHideOp = (hideZeroCost && opCost === 0) || (hideZeroUsage && opUsage === 0);
+                        opRow.style.display = shouldHideOp ? 'none' : 'table-row';
+                    });
+                }
+            }
+        });
+    };
+
     // Zero-cost filter toggle
     const hideZeroCostToggle = document.getElementById('hideZeroCostToggle');
     if (hideZeroCostToggle) {
-        hideZeroCostToggle.addEventListener('change', (e) => {
-            const hide = e.target.checked;
-            const tbody = document.getElementById('billingServiceRows');
-            const rows = tbody.querySelectorAll('tr');
+        hideZeroCostToggle.addEventListener('change', applyBillingFilters);
+    }
 
-            rows.forEach((row) => {
-                // Skip operation detail rows (let parent control them)
-                if (row.classList.contains('billing-operation-row')) {
-                    return;
-                }
-
-                // Check if this service row has zero cost
-                const costCell = row.querySelector('td:nth-child(2)');
-                if (costCell) {
-                    const costText = costCell.textContent;
-                    const cost = parseFloat(costText.replace(/[$,]/g, ''));
-
-                    if (hide && cost === 0) {
-                        row.style.display = 'none';
-                        // Also hide its operation rows
-                        const serviceCode = row.dataset.serviceCode;
-                        if (serviceCode) {
-                            const opRows = tbody.querySelectorAll(`[data-parent-service="${serviceCode}"]`);
-                            opRows.forEach(opRow => opRow.style.display = 'none');
-                        }
-                    } else {
-                        row.style.display = 'table-row';
-                        // Restore operation rows if parent was expanded
-                        const serviceCode = row.dataset.serviceCode;
-                        if (serviceCode && expandedServices.has(serviceCode)) {
-                            const opRows = tbody.querySelectorAll(`[data-parent-service="${serviceCode}"]`);
-                            opRows.forEach(opRow => opRow.style.display = 'table-row');
-                        }
-                    }
-                }
-            });
-        });
+    // Zero-usage filter toggle
+    const hideZeroUsageToggle = document.getElementById('hideZeroUsageToggle');
+    if (hideZeroUsageToggle) {
+        hideZeroUsageToggle.addEventListener('change', applyBillingFilters);
     }
 
     // Default to last week

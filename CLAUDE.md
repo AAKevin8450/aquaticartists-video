@@ -93,11 +93,12 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - Service breakdown with 4-decimal precision ($4.0100)
 - **Operation-level detail**: Expandable rows showing granular costs (click service to expand)
 - **Model-specific breakdowns**: Bedrock costs separated by model (Nova 2 Lite, Nova Pro, Nova Premier) and token direction (input/output)
-- **Usage quantities**: Context-aware display (1.2M tokens, 450 requests, 12.5 GB)
-- **Zero-cost filter**: Toggle to hide services with $0 cost
+- **Usage quantities**: Context-aware display (29.7M tokens, 450 requests, 12.5 GB)
+- **Dual filter toggles**: "Hide $0 cost" and "Hide 0 usage" (works on both service and operation rows)
 - Daily cost chart with labels, grid lines, and date markers
 - Cached for fast queries (<50ms), manual refresh from S3
-- Only uses latest CUR file per month (cumulative data, avoids 7x duplicate counting bug)
+- **CUR data handling**: Uses latest date only per service/operation (AWS CUR is cumulative month-to-date)
+- **Token conversion**: AWS stores in thousands, display multiplies by 1000 for actual count
 
 ## Database Tables
 - **files**: S3-uploaded files with metadata (duration_seconds, resolution_width/height, frame_rate, codec_video/audio, bitrate)
@@ -124,6 +125,7 @@ BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - **ADDED (2025-12-27)**: AWS billing operation-level detail - Expandable service breakdown with model-specific costs (Nova 2 Lite input/output tokens), usage quantities (1.2M tokens, 450 requests), zero-cost filter (migrations/009, billing_service.py, reports.py/js/html)
 
 ## Recently Fixed
+- **FIXED (2025-12-28)**: AWS billing token discrepancy - Fixed cumulative CUR data triple-counting (database.py ROW_NUMBER query) and token unit conversion (reports.js × 1000 multiplier). AWS billing now correctly shows 29.7M input tokens vs program's 23.9M (was showing 89K due to bugs). Added dual filter toggles for $0 cost and 0 usage at service/operation level.
 - **FIXED (2025-12-27)**: Nova timeout failures - Extended Bedrock read timeout from 60s to 600s with retry logic to handle large videos (nova_service.py:99-112)
 - **FIXED (2025-12-27)**: Missing video metadata - Repaired 5,415 files with NULL duration/codecs, improved FFprobe fallback in upload.py to prevent future metadata loss
 - **FIXED (2025-12-27)**: Nova batch failures with Windows paths - regex pattern bug in escape sequence fixing logic caused 14% failure rate. Fixed by changing regex replacement strings from raw to regular strings in `nova_service.py:1078-1089`.

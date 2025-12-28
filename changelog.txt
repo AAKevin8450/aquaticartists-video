@@ -1,3 +1,80 @@
+2025-12-28 11:26:34 - Updated by Claude Code
+
+[Category: Bug Fix]
+Fix AWS billing token discrepancy - eliminate cumulative CUR data triple-counting and correct token unit conversion.
+
+[Purpose]
+Resolve critical billing discrepancy where AWS reported 89K input tokens vs program's 23.9M tokens. Root cause: AWS Cost and Usage Reports are cumulative (month-to-date totals), and token usage is stored in thousands. The system was summing cumulative values across multiple dates AND displaying units incorrectly, causing 333x under-reporting.
+
+[Impact]
+🐛 **CRITICAL BUG FIX**
+- Fixed cumulative data triple-counting (89,049 → 29,683 tokens after deduplication)
+- Fixed token unit conversion (AWS stores in thousands: 29,683K = 29.7M tokens)
+- AWS billing now shows 29.7M input tokens (was 89K, 333x increase!)
+- AWS billing now shows 416K output tokens (was 1.2K, 333x increase!)
+- Now AWS (29.7M) vs Program (23.9M) = 1.24x difference (acceptable)
+- Added dual filter toggles: "Hide $0 cost" and "Hide 0 usage" for service/operation-level filtering
+
+[Technical Details]
+**Bug 1: Cumulative Data Triple-Counting**
+- AWS CUR files contain month-to-date totals (12/22: $0.00, 12/23: $2.98, 12/26: $10.15)
+- Same 29,683 token usage appeared 3 times, being summed as 89,049
+- Example from database: 3 rows with identical usage_amount, different costs
+
+**Bug 2: Token Unit Conversion**
+- AWS stores token usage in THOUSANDS (not individual tokens)
+- Display showed "29.7K tokens" when it should be "29.7M tokens"
+- Calculation: 29,683 thousands × 1000 = 29,683,000 individual tokens
+
+[Files Modified]
+- app/database.py:3771-3824 (get_cached_billing_details):
+  * Changed from SUM(usage_amount) to ROW_NUMBER() OVER (ORDER BY usage_date DESC)
+  * Now retrieves only latest date's values per service/operation/usage_type
+  * Added comprehensive docstring explaining AWS CUR cumulative behavior
+  * Prevents triple-counting of cumulative month-to-date totals
+
+- app/static/js/reports.js:42-55 (formatUsageAmount):
+  * Added token unit conversion: `const actualTokens = amt * 1000`
+  * Converts AWS CUR thousands to individual tokens for display
+  * Comment: "AWS CUR stores token usage in thousands, so multiply by 1000"
+  * Preserves existing formatting logic for millions/thousands/individual display
+
+- app/static/js/reports.js:213-223 (service row data attributes):
+  * Added dataset.serviceCost and dataset.serviceUsage for filtering
+  * Calculate totalUsage from operations: reduce((sum, op) => sum + op.usage_amount)
+  * Enables dual-toggle filtering at service level
+
+- app/static/js/reports.js:258-266 (operation row data attributes):
+  * Added dataset.operationCost and dataset.operationUsage for granular filtering
+  * Enables dual-toggle filtering at individual operation level
+
+- app/static/js/reports.js:567-626 (applyBillingFilters):
+  * Unified filter function handling both cost and usage toggles
+  * Separate logic for service rows vs operation detail rows
+  * Operation-level filtering: `(hideZeroCost && opCost === 0) || (hideZeroUsage && opUsage === 0)`
+  * Smart visibility: operations only show when parent expanded AND pass filters
+
+- app/static/js/reports.js:515-525 (toggleServiceExpanded):
+  * Added `applyBillingFilters()` call when expanding services
+  * Ensures zero-usage operations don't appear even when freshly expanded
+
+- app/templates/reports.html:459-477 (filter toggles):
+  * Added second toggle: "Hide 0 usage" next to "Hide $0 cost"
+  * Changed label from "Hide $0 services" to "Hide $0 cost" for clarity
+  * Both toggles work independently with OR logic
+
+[Removed/Deprecated]
+- None (additive bug fix, no breaking changes)
+
+[Testing]
+- Verified deduplication: 89,049 → 29,683 units (3x reduction)
+- Verified unit conversion: 29,683 thousands → 29.7M tokens display
+- Tested dual toggles: 16 services → 6 with "Hide $0 cost" → 6 with "Hide 0 usage"
+- Tested operation filtering: S3 shows 77 with usage, hides 22 with zero usage
+- Cost accuracy: $13.63 (AWS) vs $14.08 (program) = 3% difference
+
+---
+
 2025-12-27 12:19:45 - Updated by Claude Code
 
 [Category: Feature Enhancement]
