@@ -90,6 +90,7 @@ function initializeEventListeners() {
 
     // Batch action buttons
     document.getElementById('batchProxyBtn').addEventListener('click', () => startBatchAction('proxy'));
+    document.getElementById('batchImageProxyBtn').addEventListener('click', () => startBatchAction('image-proxy'));
     document.getElementById('batchTranscribeBtn').addEventListener('click', () => startBatchAction('transcribe'));
     document.getElementById('batchTranscriptSummaryBtn').addEventListener('click', () => startBatchAction('transcript-summary'));
     document.getElementById('batchNovaBtn').addEventListener('click', () => startBatchAction('nova'));
@@ -2404,6 +2405,7 @@ async function getBatchOptions(actionType) {
         const description = document.getElementById('batchOptionsDescription');
         const descriptions = {
             proxy: 'Generate 720p/15fps proxies for all eligible videos in the current view.',
+            'image-proxy': 'Generate optimized image proxies (896px) for Nova 2 Lite analysis, reducing storage and transfer costs.',
             transcribe: 'Configure Whisper transcription settings for the current file set.',
             'transcript-summary': 'Generate Nova transcript summaries for files with completed transcripts.',
             nova: 'Choose Nova model and analysis types for proxy-backed videos.',
@@ -2428,6 +2430,7 @@ async function getBatchOptions(actionType) {
         if (confirmBtn) {
             const labels = {
                 proxy: 'Start Proxy Batch',
+                'image-proxy': 'Start Image Proxy Batch',
                 transcribe: 'Start Transcription Batch',
                 'transcript-summary': 'Start Transcript Summary Batch',
                 nova: 'Start Nova Batch',
@@ -2511,6 +2514,9 @@ function buildBatchOptions(actionType) {
 
     switch (actionType) {
         case 'proxy':
+            return {};
+        case 'image-proxy':
+            // Image proxy batch - simple action with no additional options
             return {};
         case 'transcribe': {
             const provider = document.getElementById('batchTranscribeProvider')?.value || 'whisper';

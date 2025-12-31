@@ -558,6 +558,62 @@ def create_proxy_for_file(file_id):
         return jsonify({'error': str(e)}), 500
 
 
+@bp.route('/api/files/<int:file_id>/create-image-proxy', methods=['POST'])
+def create_image_proxy_for_file(file_id):
+    """
+    Create optimized image proxy for Nova 2 Lite analysis.
+
+    Image proxies are resized to 896px on the shorter side (Nova's minimum threshold),
+    reducing S3 storage costs, network transfer time, and API payload sizes.
+
+    Request body (optional):
+        {
+            "force": false  // Recreate even if proxy exists
+        }
+
+    Returns:
+        {
+            "proxy_id": 456,
+            "source_id": 123,
+            "original_size_bytes": 4000000,
+            "proxy_size_bytes": 200000,
+            "savings_percent": 95.0,
+            "original_dimensions": [4000, 3000],
+            "proxy_dimensions": [1195, 896]
+        }
+    """
+    try:
+        data = request.get_json() or {}
+        force = bool(data.get('force', False))
+
+        db = get_db()
+        file = db.get_file(file_id)
+
+        if not file:
+            return jsonify({'error': 'File not found'}), 404
+
+        if file.get('is_proxy'):
+            return jsonify({'error': 'Cannot create proxy for a proxy file'}), 400
+
+        if file.get('file_type') != 'image':
+            return jsonify({'error': 'File must be an image'}), 400
+
+        # Check if proxy already exists
+        existing_proxy = db.get_proxy_for_source(file_id)
+        if existing_proxy and not force:
+            return jsonify({'error': 'Proxy already exists for this file', 'proxy_id': existing_proxy['id']}), 409
+
+        # Create image proxy
+        from app.routes.upload import create_image_proxy_internal
+
+        result = create_image_proxy_internal(file_id, force=force)
+        return jsonify(result), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Create image proxy error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
 @bp.route('/api/files/<int:file_id>/start-analysis', methods=['POST'])
 def start_analysis_for_file(file_id):
     """

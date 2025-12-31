@@ -141,6 +141,108 @@ def batch_create_proxy():
         return jsonify({'error': f'Batch proxy error: {str(e)}'}), 500
 
 
+@bp.route('/api/batch/image-proxy', methods=['POST'])
+def batch_create_image_proxy():
+    """
+    Create optimized image proxies for Nova 2 Lite analysis.
+
+    Image proxies are resized to 896px on the shorter side (Nova's minimum threshold),
+    reducing S3 storage costs, network transfer time, and API payload sizes.
+
+    Request body:
+        {
+            "file_ids": [1, 2, 3, ...],
+            "force": false  // Recreate even if proxy exists
+        }
+
+    Returns:
+        {
+            "job_id": "batch-image-proxy-xxx",
+            "total_files": 10,
+            "message": "Batch image proxy creation started"
+        }
+    """
+    try:
+        data = request.get_json() or {}
+        current_app.logger.info(f"Batch image proxy request received with data: {data}")
+
+        # Get file IDs from request
+        file_ids = data.get('file_ids', [])
+        force = bool(data.get('force', False))
+
+        if not file_ids:
+            current_app.logger.warning("No file IDs provided")
+            return jsonify({'error': 'No file IDs provided'}), 400
+
+        current_app.logger.info(f"Processing batch image proxy for {len(file_ids)} file IDs")
+
+        # Validate files exist and are eligible for image proxy creation
+        db = get_db()
+        eligible_file_ids = []
+
+        for file_id in file_ids:
+            file = db.get_file(file_id)
+            if not file:
+                current_app.logger.warning(f"File {file_id} not found, skipping")
+                continue
+
+            # Check if it's an image with local path
+            if file.get('file_type') != 'image':
+                current_app.logger.warning(f"File {file_id} is not an image, skipping")
+                continue
+
+            if not file.get('local_path'):
+                current_app.logger.warning(f"File {file_id} has no local path, skipping")
+                continue
+
+            # Check if proxy already exists (unless force=True)
+            if not force:
+                existing_proxy = db.get_proxy_for_source(file_id)
+                if existing_proxy:
+                    current_app.logger.info(f"File {file_id} already has a proxy, skipping")
+                    continue
+
+            eligible_file_ids.append(file_id)
+
+        if not eligible_file_ids:
+            current_app.logger.warning("No eligible files for image proxy creation")
+            return jsonify({
+                'error': 'No eligible files for image proxy creation '
+                         '(need images with local paths, without existing proxies unless force=true)'
+            }), 404
+
+        current_app.logger.info(f"Found {len(eligible_file_ids)} eligible files for image proxy creation")
+
+        # Create batch job
+        job_id = f"batch-image-proxy-{uuid.uuid4().hex[:8]}"
+        job = BatchJob(job_id, 'image-proxy', len(eligible_file_ids), eligible_file_ids)
+        job.options = {'force': force}
+
+        set_batch_job(job_id, job)
+
+        current_app.logger.info(f"Created batch job {job_id} for {len(eligible_file_ids)} files")
+
+        # Start background thread
+        app = current_app._get_current_object()
+        thread = threading.Thread(target=_run_batch_image_proxy, args=(app, job))
+        thread.daemon = True
+        thread.start()
+
+        current_app.logger.info(f"Started background thread for batch job {job_id}")
+
+        return jsonify({
+            'job_id': job_id,
+            'total_files': len(eligible_file_ids),
+            'message': f'Batch image proxy creation started for {len(eligible_file_ids)} file(s)'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Batch image proxy error: {e}", exc_info=True)
+        import traceback
+        current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
+        return jsonify({'error': f'Batch image proxy error: {str(e)}'}), 500
+
+
 @bp.route('/api/batch/transcribe', methods=['POST'])
 def batch_transcribe():
     """
@@ -1239,3 +1341,117 @@ def _run_batch_embeddings(app, job: BatchJob):
         job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
         job.end_time = time.time()
         job.current_file = None
+
+
+def _run_batch_image_proxy(app, job: BatchJob):
+    """Background worker for batch image proxy creation."""
+    with app.app_context():
+        from app.routes.upload import create_image_proxy_internal
+        from pathlib import Path
+        import traceback
+        import logging
+
+        logger = logging.getLogger('app')
+        options = job.options or {}
+        force = bool(options.get('force', False))
+
+        logger.info(f"Batch image proxy worker started for job {job.job_id} with {len(job.file_ids)} files")
+        print(f"[BATCH IMAGE PROXY] Worker started for job {job.job_id} with {len(job.file_ids)} files", flush=True)
+
+        # Calculate total batch size before processing
+        db = get_db()
+        for file_id in job.file_ids:
+            try:
+                file = db.get_file(file_id)
+                if file and file.get('local_path'):
+                    local_path = file['local_path']
+                    if Path(local_path).exists():
+                        job.total_batch_size += Path(local_path).stat().st_size
+            except Exception:
+                pass  # Skip files that can't be accessed
+
+        for file_id in job.file_ids:
+            if job.status == 'CANCELLED':
+                logger.info(f"Batch job {job.job_id} was cancelled")
+                print(f"[BATCH IMAGE PROXY] Job {job.job_id} was cancelled", flush=True)
+                break
+
+            try:
+                # Get file info
+                db = get_db()
+                file = db.get_file(file_id)
+                if not file:
+                    raise Exception(f'File {file_id} not found')
+
+                job.current_file = file['filename']
+                logger.info(f"Processing file {file_id}: {file['filename']}")
+                print(f"[BATCH IMAGE PROXY] Processing file {file_id}: {file['filename']}", flush=True)
+
+                # Get source file size for tracking
+                source_file_size = 0
+                if file.get('local_path') and Path(file['local_path']).exists():
+                    source_file_size = Path(file['local_path']).stat().st_size
+
+                # Create image proxy
+                result = create_image_proxy_internal(file_id, force=force)
+
+                # Track processed source file size
+                job.processed_files_sizes.append(source_file_size)
+
+                # Track generated proxy size
+                if result.get('proxy_size_bytes'):
+                    job.total_proxy_size += result['proxy_size_bytes']
+
+                job.completed_files += 1
+                job.results.append({
+                    'file_id': file_id,
+                    'filename': file['filename'],
+                    'success': True,
+                    'proxy_id': result.get('proxy_id'),
+                    'original_size': result.get('original_size_bytes'),
+                    'proxy_size': result.get('proxy_size_bytes'),
+                    'savings_percent': result.get('savings_percent'),
+                    'was_resized': result.get('was_resized', False)
+                })
+                logger.info(
+                    f"Successfully created image proxy for file {file_id}: {file['filename']} "
+                    f"({result.get('savings_percent', 0):.1f}% reduction)"
+                )
+                print(
+                    f"[BATCH IMAGE PROXY] Successfully created image proxy for file {file_id}: {file['filename']}",
+                    flush=True
+                )
+
+            except Exception as e:
+                job.failed_files += 1
+                error_msg = str(e)
+                tb = traceback.format_exc()
+                job.errors.append({
+                    'file_id': file_id,
+                    'filename': file.get('filename', f'File {file_id}') if file else f'File {file_id}',
+                    'error': error_msg
+                })
+
+                # Track failed file size too if available
+                try:
+                    if 'source_file_size' in locals():
+                        job.processed_files_sizes.append(source_file_size)
+                except Exception:
+                    pass
+
+                logger.error(f"Batch image proxy error for file {file_id}: {e}", exc_info=True)
+                print(f"[BATCH IMAGE PROXY ERROR] File {file_id}: {e}", flush=True)
+                print(f"[BATCH IMAGE PROXY ERROR] Full traceback:\n{tb}", flush=True)
+
+        # Mark job as complete
+        job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+        job.end_time = time.time()
+        job.current_file = None
+        logger.info(
+            f"Batch image proxy job {job.job_id} completed: {job.completed_files} succeeded, "
+            f"{job.failed_files} failed, status: {job.status}"
+        )
+        print(
+            f"[BATCH IMAGE PROXY] Job {job.job_id} completed: {job.completed_files} succeeded, "
+            f"{job.failed_files} failed, status: {job.status}", flush=True
+        )

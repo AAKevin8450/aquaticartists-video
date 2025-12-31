@@ -25,7 +25,9 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 ### Stack
 - **Database**: SQLite (data/app.db), foreign keys enabled
 - **Storage**: AWS S3 (presigned URLs)
-- **Proxy**: NVENC GPU encoding → proxy_video/{name}_{source_file_id}_720p15.{ext}
+- **Proxy**:
+  - Video: NVENC GPU encoding → proxy_video/{name}_{source_file_id}_720p15.{ext}
+  - Image: Pillow/Lanczos resize → proxy_image/{name}_{source_file_id}_nova.{ext} (896px shorter side for Nova 2 Lite)
 
 ### Key Services (app/services/)
 | Service | Purpose |
@@ -33,6 +35,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 | s3_service.py | File upload/download |
 | rekognition_video.py | Async video analysis (8 types) |
 | rekognition_image.py | Sync image analysis (8 types) |
+| image_proxy_service.py | Image proxy creation for Nova 2 Lite (896px) |
 | transcription_service.py | Local faster-whisper (6 models) |
 | nova_service.py | Bedrock video analysis (summary/chapters/elements/waterfall) |
 | nova_embeddings_service.py | Semantic search vectors (1024 dim) |
@@ -55,7 +58,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 
 ### Batch Operations
 - Fetch all filtered files (500/request), real-time progress with ETA
-- Action types: proxy, transcribe, transcript-summary, nova, rekognition
+- Action types: proxy, image-proxy, transcribe, transcript-summary, nova, rekognition
 
 ### Folder Rescan & Directory Import
 - Async operations with progress tracking, ETA, cancellation
@@ -99,5 +102,6 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 python -m scripts.backfill_embeddings --force --limit 100
 python -m scripts.backfill_transcript_summaries --dry-run
 python -m scripts.reconcile_proxies --no-dry-run --delete-orphans --yes
+python -m scripts.create_image_proxies --no-dry-run --limit 100
 python -m scripts.analyze_nova_failures
 ```

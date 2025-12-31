@@ -387,12 +387,47 @@ def upload_file_direct():
             db.delete_file(file_id)
             raise
 
-        return jsonify({
+        # Create image proxy for Nova 2 Lite optimization
+        proxy_file_id = None
+        proxy_size_bytes = None
+        try:
+            from app.services.image_proxy_service import ImageProxyService
+            proxy_service = ImageProxyService()
+
+            # Get image dimensions
+            width = image_metadata.get('resolution_width')
+            height = image_metadata.get('resolution_height')
+
+            # Only create proxy if image needs resizing (shorter side > 896px)
+            if width and height and proxy_service.needs_proxy(width, height):
+                proxy_result = create_image_proxy_internal(file_id)
+                proxy_file_id = proxy_result.get('proxy_id')
+                proxy_size_bytes = proxy_result.get('proxy_size_bytes')
+                current_app.logger.info(
+                    f"Created image proxy for uploaded file {file_id}: "
+                    f"{width}x{height} -> {proxy_result['proxy_dimensions']}, "
+                    f"{proxy_result['savings_percent']}% reduction"
+                )
+            else:
+                current_app.logger.info(
+                    f"Image {file_id} does not need proxy "
+                    f"(dimensions: {width}x{height}, threshold: 896px shorter side)"
+                )
+        except Exception as e:
+            # Log error but don't fail the upload - proxy creation is optional
+            current_app.logger.warning(f"Failed to create image proxy for {file_id}: {e}")
+
+        response_data = {
             'file_id': file_id,
             'message': 'File uploaded successfully',
             'size_bytes': size_bytes,
             'display_size': format_file_size(size_bytes)
-        }), 201
+        }
+        if proxy_file_id:
+            response_data['proxy_file_id'] = proxy_file_id
+            response_data['proxy_size_bytes'] = proxy_size_bytes
+
+        return jsonify(response_data), 201
 
     except ValidationError as e:
         return jsonify({'error': str(e)}), 400
@@ -541,6 +576,180 @@ def create_proxy_internal(file_id: int, force: bool = False, upload_to_s3: bool 
         'size_bytes': proxy_size,
         'uploaded_to_s3': upload_to_s3
     }
+
+
+def create_image_proxy_internal(file_id: int, force: bool = False) -> dict:
+    """
+    Internal function to create an optimized image proxy for Nova 2 Lite.
+
+    Image proxies are resized to 896px on the shorter side (Nova's minimum threshold),
+    reducing S3 storage costs, network transfer time, and API payload sizes.
+
+    Args:
+        file_id: The file ID to create proxy for
+        force: If True, recreate proxy even if it exists
+
+    Returns:
+        dict with proxy info:
+        {
+            'proxy_id': int,
+            'source_id': int,
+            'original_size_bytes': int,
+            'proxy_size_bytes': int,
+            'savings_percent': float,
+            'original_dimensions': [width, height],
+            'proxy_dimensions': [width, height],
+            'local_path': str,
+            'needs_resize': bool
+        }
+
+    Raises:
+        Exception: If proxy creation fails
+    """
+    from app.services.image_proxy_service import (
+        ImageProxyService, ImageProxyError, build_image_proxy_filename
+    )
+
+    db = get_db()
+    file = db.get_file(file_id)
+
+    if not file:
+        raise Exception('File not found')
+
+    if file['file_type'] != 'image':
+        raise Exception('File must be an image')
+
+    # Check for existing proxy
+    existing_proxy = db.get_proxy_for_source(file_id)
+    if existing_proxy and not force:
+        return {
+            'proxy_id': existing_proxy['id'],
+            'source_id': file_id,
+            'original_size_bytes': file.get('size_bytes'),
+            'proxy_size_bytes': existing_proxy['size_bytes'],
+            'savings_percent': round(
+                ((file.get('size_bytes', 0) - existing_proxy['size_bytes']) / file.get('size_bytes', 1) * 100)
+                if file.get('size_bytes') else 0, 1
+            ),
+            'original_dimensions': [file.get('resolution_width'), file.get('resolution_height')],
+            'proxy_dimensions': [existing_proxy.get('resolution_width'), existing_proxy.get('resolution_height')],
+            'local_path': existing_proxy.get('local_path'),
+            'message': 'Proxy already exists'
+        }
+
+    # Delete existing proxy if force=True
+    if existing_proxy and force:
+        # Delete old proxy file from disk
+        old_path = existing_proxy.get('local_path')
+        if old_path and os.path.isfile(old_path):
+            try:
+                os.remove(old_path)
+            except Exception as e:
+                current_app.logger.warning(f"Failed to delete old proxy file: {e}")
+        # Delete from database
+        db.delete_file(existing_proxy['id'])
+
+    # Get local path
+    local_path = file.get('local_path')
+    if not local_path or not os.path.isfile(local_path):
+        raise Exception('Local source image not available for proxy creation')
+
+    # Create image proxy service
+    proxy_service = ImageProxyService()
+
+    # Get original dimensions
+    width, height = proxy_service.get_image_dimensions(local_path)
+
+    # Check if proxy is needed
+    needs_resize = proxy_service.needs_proxy(width, height)
+
+    # Calculate target dimensions
+    target_width, target_height = proxy_service.calculate_target_dimensions(width, height)
+
+    # Generate proxy filename and path
+    proxy_filename = build_image_proxy_filename(file['filename'], file_id)
+
+    # Create proxy_image directory
+    proxy_image_dir = Path('proxy_image')
+    proxy_image_dir.mkdir(parents=True, exist_ok=True)
+    proxy_local_path = str(proxy_image_dir / proxy_filename)
+
+    # Determine content type based on format
+    output_format = proxy_service.get_optimal_format(local_path)
+    content_type = 'image/jpeg' if output_format == 'JPEG' else 'image/png'
+
+    try:
+        # Create the proxy
+        result = proxy_service.create_proxy(
+            source_path=local_path,
+            output_path=proxy_local_path
+        )
+
+        proxy_size = result['proxy_size_bytes']
+        proxy_dimensions = result['proxy_dimensions']
+
+        # Create proxy file record in database
+        proxy_id = db.create_proxy_file(
+            source_file_id=file_id,
+            filename=proxy_filename,
+            s3_key=None,  # Local-only for now
+            size_bytes=proxy_size,
+            content_type=content_type,
+            local_path=proxy_local_path,
+            resolution_width=proxy_dimensions[0],
+            resolution_height=proxy_dimensions[1],
+            frame_rate=None,  # Not applicable for images
+            codec_video=None,
+            codec_audio=None,
+            duration_seconds=None,
+            bitrate=None,
+            metadata={
+                'proxy_type': 'nova_image',
+                'target_dimension': 896,
+                'was_resized': result['was_resized'],
+                'format': result['format'],
+                'proxy_generated_at': datetime.utcnow().isoformat() + 'Z'
+            },
+            file_type='image'
+        )
+
+        current_app.logger.info(
+            f"Created image proxy for file {file_id}: {file['filename']} -> {proxy_filename} "
+            f"({width}x{height} -> {proxy_dimensions[0]}x{proxy_dimensions[1]}, "
+            f"{result['savings_percent']}% reduction)"
+        )
+
+        return {
+            'proxy_id': proxy_id,
+            'source_id': file_id,
+            'original_size_bytes': result['original_size_bytes'],
+            'proxy_size_bytes': proxy_size,
+            'savings_percent': result['savings_percent'],
+            'original_dimensions': [width, height],
+            'proxy_dimensions': list(proxy_dimensions),
+            'local_path': proxy_local_path,
+            'needs_resize': needs_resize,
+            'was_resized': result['was_resized']
+        }
+
+    except ImageProxyError as e:
+        current_app.logger.error(f"Image proxy creation failed for file {file_id}: {e}")
+        # Clean up partial proxy file if it exists
+        if os.path.isfile(proxy_local_path):
+            try:
+                os.remove(proxy_local_path)
+            except Exception:
+                pass
+        raise Exception(f'Failed to create image proxy: {e}')
+    except Exception as e:
+        current_app.logger.error(f"Unexpected error creating image proxy for file {file_id}: {e}")
+        # Clean up partial proxy file if it exists
+        if os.path.isfile(proxy_local_path):
+            try:
+                os.remove(proxy_local_path)
+            except Exception:
+                pass
+        raise
 
 
 @bp.route('/create-proxy', methods=['POST'])

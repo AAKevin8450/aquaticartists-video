@@ -10,9 +10,84 @@ import uuid
 bp = Blueprint('image_analysis', __name__, url_prefix='/api/image')
 
 
+def _get_image_s3_key_for_analysis(db, file_id: int, file: dict) -> str:
+    """
+    Get the optimal S3 key for image analysis.
+
+    Uses the image proxy if available, otherwise uses the original image.
+    Automatically uploads proxy to S3 if needed.
+
+    Args:
+        db: Database connection
+        file_id: Source file ID
+        file: File record dictionary
+
+    Returns:
+        S3 key to use for analysis
+    """
+    import os
+    from app.services.s3_service import S3Service
+
+    # Check for existing proxy
+    proxy = db.get_proxy_for_source(file_id)
+
+    if proxy:
+        # Use proxy if it has an S3 key
+        if proxy.get('s3_key'):
+            return proxy['s3_key']
+
+        # Upload proxy to S3 if only available locally
+        if proxy.get('local_path') and os.path.isfile(proxy['local_path']):
+            s3_service = S3Service(
+                bucket_name=current_app.config['S3_BUCKET_NAME'],
+                region=current_app.config['AWS_REGION']
+            )
+            proxy_s3_key = f"proxies/{os.path.basename(proxy['local_path'])}"
+            content_type = proxy.get('content_type', 'image/jpeg')
+
+            with open(proxy['local_path'], 'rb') as f:
+                s3_service.upload_file(f, proxy_s3_key, content_type)
+
+            # Update database with S3 key
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('UPDATE files SET s3_key = ? WHERE id = ?', (proxy_s3_key, proxy['id']))
+
+            current_app.logger.info(f"Uploaded image proxy to S3: {proxy_s3_key}")
+            return proxy_s3_key
+
+    # No proxy - use original image
+    s3_key = file.get('s3_key')
+
+    if not s3_key or s3_key.startswith('local://'):
+        # Upload original to S3 if only local
+        local_path = file.get('local_path')
+        if local_path and os.path.isfile(local_path):
+            s3_service = S3Service(
+                bucket_name=current_app.config['S3_BUCKET_NAME'],
+                region=current_app.config['AWS_REGION']
+            )
+            s3_key = f"uploads/{os.path.basename(local_path)}"
+            content_type = file.get('content_type', 'image/jpeg')
+
+            with open(local_path, 'rb') as f:
+                s3_service.upload_file(f, s3_key, content_type)
+
+            # Update database with S3 key
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('UPDATE files SET s3_key = ? WHERE id = ?', (s3_key, file_id))
+
+            current_app.logger.info(f"Uploaded image to S3: {s3_key}")
+
+    return s3_key
+
+
 def _analyze_image(file_id, analysis_type, analysis_func, **kwargs):
     """
     Helper function to perform image analysis.
+
+    Uses image proxy if available to reduce API costs and transfer time.
 
     Args:
         file_id: Database file ID
@@ -33,9 +108,15 @@ def _analyze_image(file_id, analysis_type, analysis_func, **kwargs):
         if file['file_type'] != 'image':
             return {'error': 'File is not an image'}, 400
 
+        # Get optimal S3 key (proxy if available)
+        s3_key = _get_image_s3_key_for_analysis(db, file_id, file)
+
+        if not s3_key:
+            return {'error': 'Image not available in S3'}, 400
+
         # Perform analysis
         rekognition = get_rekognition_image_service(current_app)
-        results = analysis_func(file['s3_key'], **kwargs)
+        results = analysis_func(s3_key, **kwargs)
 
         # Create job record with immediate results
         job_id = str(uuid.uuid4())

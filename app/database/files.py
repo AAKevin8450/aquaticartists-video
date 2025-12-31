@@ -153,8 +153,30 @@ class FilesMixin:
                          codec_audio: Optional[str] = None,
                          duration_seconds: Optional[float] = None,
                          bitrate: Optional[int] = None,
-                         metadata: Optional[Dict] = None) -> int:
-        """Create a proxy file record linked to a source file."""
+                         metadata: Optional[Dict] = None,
+                         file_type: str = 'video') -> int:
+        """Create a proxy file record linked to a source file.
+
+        Args:
+            source_file_id: ID of the source file
+            filename: Proxy filename
+            s3_key: S3 key (can be None for local-only proxies)
+            size_bytes: File size in bytes
+            content_type: MIME type
+            local_path: Local filesystem path
+            resolution_width: Width in pixels
+            resolution_height: Height in pixels
+            frame_rate: Frame rate (video only)
+            codec_video: Video codec (video only)
+            codec_audio: Audio codec (video only)
+            duration_seconds: Duration in seconds (video only)
+            bitrate: Bitrate in bps (video only)
+            metadata: Additional metadata dict
+            file_type: File type ('video' or 'image', default 'video')
+
+        Returns:
+            ID of created proxy file record
+        """
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -165,8 +187,8 @@ class FilesMixin:
                     codec_video, codec_audio, duration_seconds, bitrate,
                     metadata
                 )
-                VALUES (?, ?, 'video', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (filename, s3_key, size_bytes, content_type,
+                VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (filename, s3_key, file_type, size_bytes, content_type,
                   source_file_id, local_path,
                   resolution_width, resolution_height, frame_rate,
                   codec_video, codec_audio, duration_seconds, bitrate,
