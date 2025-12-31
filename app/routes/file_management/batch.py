@@ -6,7 +6,6 @@ Routes:
 - POST /api/batch/transcribe - Batch transcription
 - POST /api/batch/transcript-summary - Batch transcript summary
 - POST /api/batch/nova - Batch Nova analysis
-- POST /api/batch/rekognition - Batch Rekognition analysis
 - POST /api/batch/embeddings - Batch embeddings generation
 - GET /api/batch/<job_id>/status - Get batch job status
 - POST /api/batch/<job_id>/cancel - Cancel batch job
@@ -457,9 +456,10 @@ def batch_nova():
         if processing_mode not in ('realtime', 'batch'):
             return jsonify({'error': 'processing_mode must be "realtime" or "batch"'}), 400
 
-        # Validate files exist and have proxies (Nova requires S3 files)
+        # Validate files exist (Nova supports both video and image files)
         db = get_db()
         eligible_file_ids = []
+        file_types = {}  # Track file types for the batch worker
 
         for file_id in file_ids:
             file = db.get_file(file_id)
@@ -467,9 +467,10 @@ def batch_nova():
                 current_app.logger.warning(f"File {file_id} not found, skipping")
                 continue
 
-            # Check if it's a video
-            if file.get('file_type') != 'video':
-                current_app.logger.warning(f"File {file_id} is not a video, skipping")
+            file_type = file.get('file_type')
+            # Check if it's a video or image
+            if file_type not in ('video', 'image'):
+                current_app.logger.warning(f"File {file_id} is not a video or image, skipping")
                 continue
 
             local_path = file.get('local_path')
@@ -478,9 +479,10 @@ def batch_nova():
                 continue
 
             eligible_file_ids.append(file_id)
+            file_types[file_id] = file_type
 
         if not eligible_file_ids:
-            return jsonify({'error': 'No eligible files for Nova analysis (need videos with local paths)'}), 404
+            return jsonify({'error': 'No eligible files for Nova analysis (need videos or images with local paths)'}), 404
 
         # Create batch job
         job_id = f"batch-nova-{uuid.uuid4().hex[:8]}"
@@ -489,7 +491,8 @@ def batch_nova():
             'model': model,
             'analysis_types': analysis_types,
             'user_options': options,
-            'processing_mode': processing_mode
+            'processing_mode': processing_mode,
+            'file_types': file_types  # Track which files are video vs image
         }
 
         set_batch_job(job_id, job)
@@ -511,89 +514,6 @@ def batch_nova():
         import traceback
         current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
         return jsonify({'error': f'Batch Nova error: {str(e)}'}), 500
-
-
-@bp.route('/api/batch/rekognition', methods=['POST'])
-def batch_rekognition():
-    """
-    Start Rekognition analysis for specified files (from currently filtered view).
-
-    Request body:
-        {
-            "file_ids": [1, 2, 3, ...],
-            "analysis_types": ["label_detection", "face_detection"],
-            "use_proxy": true
-        }
-
-    Returns:
-        {
-            "job_id": "batch-xxx",
-            "total_files": 10,
-            "message": "Batch Rekognition analysis started"
-        }
-    """
-    try:
-        data = request.get_json() or {}
-
-        # Get file IDs from request
-        file_ids = data.get('file_ids', [])
-
-        if not file_ids:
-            return jsonify({'error': 'No file IDs provided'}), 400
-
-        # Rekognition options
-        analysis_types = data.get('analysis_types', ['label_detection'])
-        use_proxy = data.get('use_proxy', True)
-
-        # Validate files exist (proxy check done later in worker if use_proxy=True)
-        db = get_db()
-        eligible_file_ids = []
-
-        for file_id in file_ids:
-            file = db.get_file(file_id)
-            if not file:
-                current_app.logger.warning(f"File {file_id} not found, skipping")
-                continue
-
-            # If using proxy, check if proxy exists
-            if use_proxy:
-                proxy = db.get_proxy_for_source(file_id)
-                if not proxy:
-                    current_app.logger.warning(f"File {file_id} has no proxy, skipping")
-                    continue
-
-            eligible_file_ids.append(file_id)
-
-        if not eligible_file_ids:
-            error_msg = 'No eligible files for Rekognition analysis'
-            if use_proxy:
-                error_msg += ' (need files with proxies)'
-            return jsonify({'error': error_msg}), 404
-
-        # Create batch job
-        job_id = f"batch-rekognition-{uuid.uuid4().hex[:8]}"
-        job = BatchJob(job_id, 'rekognition', len(eligible_file_ids), eligible_file_ids)
-        job.options = {'analysis_types': analysis_types, 'use_proxy': use_proxy}
-
-        set_batch_job(job_id, job)
-
-        # Start background thread
-        app = current_app._get_current_object()
-        thread = threading.Thread(target=_run_batch_rekognition, args=(app, job))
-        thread.daemon = True
-        thread.start()
-
-        return jsonify({
-            'job_id': job_id,
-            'total_files': len(eligible_file_ids),
-            'message': f'Batch Rekognition analysis started for {len(eligible_file_ids)} file(s)'
-        }), 200
-
-    except Exception as e:
-        current_app.logger.error(f"Batch Rekognition error: {e}", exc_info=True)
-        import traceback
-        current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
-        return jsonify({'error': f'Batch Rekognition error: {str(e)}'}), 500
 
 
 @bp.route('/api/batch/embeddings', methods=['POST'])
@@ -1097,61 +1017,92 @@ def _run_batch_transcript_summary(app, job: BatchJob):
 
 
 def _run_batch_nova(app, job: BatchJob):
-    """Background worker for batch Nova analysis."""
+    """Background worker for batch Nova analysis (supports both video and image files)."""
     with app.app_context():
         from app.routes.nova_analysis import start_nova_analysis_internal
         from app.routes.upload import create_proxy_internal
+        from app.routes.file_management.image_proxy import create_image_proxy_internal
+        from app.services.nova_image_service import NovaImageService
+        from app.services.s3_service import S3Service
+        import tempfile
+        import os
+        import json
 
         options = job.options or {}
         model_key = options.get('model', 'lite')
         analysis_types = options.get('analysis_types', ['summary'])
         user_options = options.get('user_options', {})
         processing_mode = options.get('processing_mode', user_options.get('processing_mode', 'realtime'))
+        file_types = options.get('file_types', {})
+
+        # Image analysis types mapping (video types to image types)
+        image_analysis_types = []
+        for atype in analysis_types:
+            if atype == 'summary':
+                image_analysis_types.append('description')
+            elif atype == 'elements':
+                image_analysis_types.append('elements')
+            elif atype == 'waterfall_classification':
+                image_analysis_types.append('waterfall')
+            elif atype == 'combined':
+                image_analysis_types = ['description', 'elements', 'waterfall', 'metadata']
+                break
+        if not image_analysis_types:
+            image_analysis_types = ['description', 'elements', 'metadata']
 
         for file_id in job.file_ids:
             if job.status == 'CANCELLED':
                 break
 
+            file = None
             try:
-                # Get file and proxy
+                # Get file
                 db = get_db()
                 file = db.get_file(file_id)
                 if not file:
                     raise Exception(f'File {file_id} not found')
 
-                proxy = db.get_proxy_for_source(file_id)
-                if not proxy:
-                    proxy_result = create_proxy_internal(file_id, upload_to_s3=False)
-                    proxy = db.get_file(proxy_result['proxy_id'])
-                if not proxy:
-                    raise Exception(f'Proxy not found for file {file_id}')
-
                 job.current_file = file['filename']
+                file_type = file_types.get(file_id, file.get('file_type', 'video'))
 
-                payload, status_code = start_nova_analysis_internal(
-                    file_id=proxy['id'],
-                    model=model_key,
-                    analysis_types=analysis_types,
-                    options=user_options,
-                    processing_mode=processing_mode
-                )
+                if file_type == 'image':
+                    # Handle image analysis
+                    payload = _process_nova_image(
+                        app, db, file_id, file, model_key, image_analysis_types
+                    )
+                else:
+                    # Handle video analysis (existing logic)
+                    proxy = db.get_proxy_for_source(file_id)
+                    if not proxy:
+                        proxy_result = create_proxy_internal(file_id, upload_to_s3=False)
+                        proxy = db.get_file(proxy_result['proxy_id'])
+                    if not proxy:
+                        raise Exception(f'Proxy not found for file {file_id}')
 
-                if status_code >= 400:
-                    raise Exception(payload.get('error') or 'Failed to start Nova analysis')
+                    payload, status_code = start_nova_analysis_internal(
+                        file_id=proxy['id'],
+                        model=model_key,
+                        analysis_types=analysis_types,
+                        options=user_options,
+                        processing_mode=processing_mode
+                    )
 
-                analysis_job_id = payload.get('analysis_job_id')
-                if analysis_job_id:
-                    with db.get_connection() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            'UPDATE analysis_jobs SET file_id = ? WHERE id = ?',
-                            (file_id, analysis_job_id)
-                        )
+                    if status_code >= 400:
+                        raise Exception(payload.get('error') or 'Failed to start Nova analysis')
+
+                    analysis_job_id = payload.get('analysis_job_id')
+                    if analysis_job_id:
+                        with db.get_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                'UPDATE analysis_jobs SET file_id = ? WHERE id = ?',
+                                (file_id, analysis_job_id)
+                            )
 
                 # Track token usage and cost for Nova jobs
                 results_summary = payload.get('results_summary', {})
-                tokens_used = results_summary.get('tokens_used', 0)
-                cost_usd = results_summary.get('cost_usd', 0.0)
+                tokens_used = results_summary.get('tokens_used', 0) or payload.get('tokens_total', 0)
+                cost_usd = results_summary.get('cost_usd', 0.0) or payload.get('actual_cost', 0.0)
 
                 if tokens_used > 0:
                     job.total_tokens += tokens_used
@@ -1165,9 +1116,10 @@ def _run_batch_nova(app, job: BatchJob):
                 job.results.append({
                     'file_id': file_id,
                     'filename': file['filename'],
+                    'file_type': file_type,
                     'success': True,
                     'nova_job_id': payload.get('nova_job_id'),
-                    'analysis_job_id': analysis_job_id,
+                    'analysis_job_id': payload.get('analysis_job_id'),
                     'status': payload.get('status'),
                     'tokens_used': tokens_used,
                     'cost_usd': cost_usd
@@ -1178,7 +1130,7 @@ def _run_batch_nova(app, job: BatchJob):
                 error_msg = str(e)
                 job.errors.append({
                     'file_id': file_id,
-                    'filename': file.get('filename', f'File {file_id}'),
+                    'filename': file.get('filename', f'File {file_id}') if file else f'File {file_id}',
                     'error': error_msg
                 })
                 current_app.logger.error(f"Batch Nova error for file {file_id}: {e}")
@@ -1189,66 +1141,133 @@ def _run_batch_nova(app, job: BatchJob):
         job.current_file = None
 
 
-def _run_batch_rekognition(app, job: BatchJob):
-    """Background worker for batch Rekognition analysis."""
-    with app.app_context():
-        from app.routes.analysis import start_analysis_job
+def _process_nova_image(app, db, file_id, file, model_key, analysis_types):
+    """Process a single image file with Nova analysis."""
+    import tempfile
+    import os
+    import json
+    from app.routes.file_management.image_proxy import create_image_proxy_internal
+    from app.services.nova_image_service import NovaImageService
+    from app.services.s3_service import S3Service
 
-        options = job.options
-        use_proxy = options['use_proxy']
-        analysis_types = options['analysis_types']
+    # Check/create image proxy
+    proxy_files = db.get_proxy_files(file_id)
+    if not proxy_files:
+        # Create image proxy first
+        proxy_result = create_image_proxy_internal(file_id)
+        if not proxy_result.get('success'):
+            raise Exception(proxy_result.get('error', 'Failed to create image proxy'))
+        proxy_files = db.get_proxy_files(file_id)
 
-        for file_id in job.file_ids:
-            if job.status == 'CANCELLED':
-                break
+    if not proxy_files:
+        raise Exception('No proxy image found after creation attempt')
 
-            try:
-                # Get file
-                db = get_db()
-                file = db.get_file(file_id)
-                if not file:
-                    raise Exception(f'File {file_id} not found')
+    proxy_file = proxy_files[0]
 
-                job.current_file = file['filename']
+    # Create analysis job
+    analysis_job_id = db.create_analysis_job(
+        file_id=file_id,
+        analysis_type='nova_image'
+    )
 
-                # Determine target file (proxy or source)
-                if use_proxy:
-                    proxy = db.get_proxy_for_source(file_id)
-                    if not proxy:
-                        raise Exception(f'Proxy not found for file {file_id}')
-                    target_file_id = proxy['id']
-                else:
-                    target_file_id = file_id
+    # Create Nova job
+    nova_job_id = db.create_nova_job(
+        analysis_job_id=analysis_job_id,
+        model=model_key,
+        analysis_types=analysis_types,
+        user_options={'proxy_file_id': proxy_file['id']},
+        content_type='image'
+    )
 
-                # Start analysis for each type
-                job_ids = []
-                for analysis_type in analysis_types:
-                    result = start_analysis_job(target_file_id, analysis_type)
-                    if result and 'job_id' in result:
-                        job_ids.append(result['job_id'])
+    # Update status to IN_PROGRESS
+    db.update_nova_job_status(nova_job_id, 'IN_PROGRESS', 0)
+    db.update_nova_job_started_at(nova_job_id)
 
-                job.completed_files += 1
-                job.results.append({
-                    'file_id': file_id,
-                    'filename': file['filename'],
-                    'success': True,
-                    'job_ids': job_ids
-                })
+    # Get Nova image service
+    service = NovaImageService(
+        bucket_name=current_app.config['S3_BUCKET_NAME'],
+        region=current_app.config['AWS_REGION'],
+        aws_access_key=current_app.config.get('AWS_ACCESS_KEY_ID'),
+        aws_secret_key=current_app.config.get('AWS_SECRET_ACCESS_KEY')
+    )
 
-            except Exception as e:
-                job.failed_files += 1
-                error_msg = str(e)
-                job.errors.append({
-                    'file_id': file_id,
-                    'filename': file.get('filename', f'File {file_id}'),
-                    'error': error_msg
-                })
-                current_app.logger.error(f"Batch Rekognition error for file {file_id}: {e}")
+    # Download proxy image to temp file
+    s3_service = S3Service(
+        bucket_name=current_app.config['S3_BUCKET_NAME'],
+        region=current_app.config['AWS_REGION']
+    )
 
-        # Mark job as complete
-        job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
-        job.end_time = time.time()
-        job.current_file = None
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+    temp_path = temp_file.name
+    temp_file.close()
+
+    try:
+        # Download proxy image
+        s3_service.download_file(proxy_file['s3_key'], temp_path)
+
+        # Build file context
+        file_context = service.build_file_context(file, temp_path)
+
+        # Perform analysis
+        result = service.analyze_image(
+            image_path=temp_path,
+            analysis_types=analysis_types,
+            model=model_key,
+            file_context=file_context
+        )
+
+        # Store results in database
+        update_data = {
+            'status': 'COMPLETED',
+            'progress_percent': 100,
+            'tokens_input': result['tokens_input'],
+            'tokens_output': result['tokens_output'],
+            'tokens_total': result['tokens_total'],
+            'cost_usd': result['cost_usd'],
+            'processing_time_seconds': result['processing_time_seconds'],
+            'raw_response': json.dumps(result['raw_response'])
+        }
+
+        # Store individual result types
+        results = result['results']
+        if 'description' in results:
+            update_data['description_result'] = results['description']
+        if 'elements' in results:
+            update_data['elements_result'] = results['elements']
+        if 'waterfall_classification' in results:
+            update_data['waterfall_classification_result'] = results['waterfall_classification']
+        if 'metadata' in results:
+            update_data['search_metadata'] = results['metadata']
+
+        db.update_nova_job(nova_job_id, update_data)
+        db.update_nova_job_completed_at(nova_job_id)
+        db.update_analysis_job(analysis_job_id, status='COMPLETED')
+
+        current_app.logger.info(f"Image analysis completed: job={nova_job_id}, cost=${result['cost_usd']:.6f}")
+
+        return {
+            'nova_job_id': nova_job_id,
+            'analysis_job_id': analysis_job_id,
+            'status': 'COMPLETED',
+            'tokens_total': result['tokens_total'],
+            'actual_cost': result['cost_usd'],
+            'processing_time_seconds': result['processing_time_seconds']
+        }
+
+    except Exception as analysis_error:
+        # Update job with error
+        db.update_nova_job(nova_job_id, {
+            'status': 'FAILED',
+            'error_message': str(analysis_error),
+            'progress_percent': 0
+        })
+        db.update_analysis_job(analysis_job_id, status='FAILED')
+        raise
+
+    finally:
+        # Cleanup temp file
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 def _run_batch_embeddings(app, job: BatchJob):

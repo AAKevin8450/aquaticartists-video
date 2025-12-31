@@ -236,18 +236,11 @@
             </div>
             <div class="card-body">
                 <div class="row text-center mb-3">
-                    <div class="col-6">
+                    <div class="col-12">
                         <div class="p-3 bg-light rounded">
                             <i class="bi bi-stars text-primary" style="font-size: 1.8rem;"></i>
                             <h4 class="mt-2 mb-0">{{ "{:,}".format(stats.nova_count|default(0)) }}</h4>
-                            <small class="text-muted">Nova AI</small>
-                        </div>
-                    </div>
-                    <div class="col-6">
-                        <div class="p-3 bg-light rounded">
-                            <i class="bi bi-eye text-success" style="font-size: 1.8rem;"></i>
-                            <h4 class="mt-2 mb-0">{{ "{:,}".format(stats.rekognition_count|default(0)) }}</h4>
-                            <small class="text-muted">Rekognition</small>
+                            <small class="text-muted">Nova AI Analyses</small>
                         </div>
                     </div>
                 </div>

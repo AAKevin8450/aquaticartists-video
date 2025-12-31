@@ -116,16 +116,6 @@
                 </select>
             </div>
 
-            <!-- Rekognition Analysis Filter -->
-            <div class="col-lg-1 col-md-2 col-sm-3">
-                <label for="rekognitionFilter" class="form-label mb-0" style="font-size: 0.75rem;">Rekog</label>
-                <select class="form-select form-select-sm" id="rekognitionFilter">
-                    <option value="">All</option>
-                    <option value="true">Yes</option>
-                    <option value="false">No</option>
-                </select>
-            </div>
-
             <!-- Nova Embeddings Filter -->
             <div class="col-lg-1 col-md-2 col-sm-3">
                 <label for="embeddingsFilter" class="form-label mb-0" style="font-size: 0.75rem;">Embed</label>
@@ -254,9 +244,6 @@
             </button>
             <button class="btn btn-warning" id="batchNovaBtn">
                 <i class="bi bi-stars"></i> Nova Analysis
-            </button>
-            <button class="btn btn-success" id="batchRekognitionBtn">
-                <i class="bi bi-eye"></i> Rekognition Analysis
             </button>
             <button class="btn btn-secondary" id="batchEmbeddingsBtn">
                 <i class="bi bi-vector-pen"></i> Generate Embeddings
@@ -555,59 +542,6 @@
                         </div>
                     </div>
 
-                    <div class="single-options-group" data-action="rekognition" style="display: none;">
-                        <div class="row g-3">
-                            <div class="col-12">
-                                <label class="form-label">Analysis Types</label>
-                                <div class="row g-2">
-                                    <div class="col-md-6">
-                                        <div class="form-check">
-                                            <input class="form-check-input single-rekognition-type" type="checkbox" id="singleRekognitionLabels" value="label_detection" checked>
-                                            <label class="form-check-label" for="singleRekognitionLabels">Label Detection</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input single-rekognition-type" type="checkbox" id="singleRekognitionFaces" value="face_detection">
-                                            <label class="form-check-label" for="singleRekognitionFaces">Face Detection</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input single-rekognition-type" type="checkbox" id="singleRekognitionCelebrities" value="celebrity_recognition">
-                                            <label class="form-check-label" for="singleRekognitionCelebrities">Celebrity Recognition</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input single-rekognition-type" type="checkbox" id="singleRekognitionModeration" value="content_moderation">
-                                            <label class="form-check-label" for="singleRekognitionModeration">Content Moderation</label>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div class="form-check">
-                                            <input class="form-check-input single-rekognition-type" type="checkbox" id="singleRekognitionText" value="text_detection">
-                                            <label class="form-check-label" for="singleRekognitionText">Text Detection</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input single-rekognition-type" type="checkbox" id="singleRekognitionPersons" value="person_tracking">
-                                            <label class="form-check-label" for="singleRekognitionPersons">Person Tracking</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input single-rekognition-type" type="checkbox" id="singleRekognitionShots" value="shot_segmentation">
-                                            <label class="form-check-label" for="singleRekognitionShots">Shot Segmentation</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input single-rekognition-type" type="checkbox" id="singleRekognitionPPE" value="ppe_detection">
-                                            <label class="form-check-label" for="singleRekognitionPPE">PPE Detection (images)</label>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="col-12">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="singleRekognitionUseProxy" checked>
-                                    <label class="form-check-label" for="singleRekognitionUseProxy">
-                                        Use proxy for video analysis when available
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 </form>
             </div>
             <div class="modal-footer">
@@ -784,63 +718,6 @@
                                             <label class="form-check-label" for="batchNovaCombined">Combined (single pass)</label>
                                         </div>
                                     </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="batch-options-group" data-action="rekognition" style="display: none;">
-                        <div class="row g-3">
-                            <div class="col-12">
-                                <label class="form-label">Analysis Types</label>
-                                <div class="row g-2">
-                                    <div class="col-md-6">
-                                        <div class="form-check">
-                                            <input class="form-check-input batch-rekognition-type" type="checkbox" id="batchRekognitionLabels" value="label_detection" checked>
-                                            <label class="form-check-label" for="batchRekognitionLabels">Label Detection</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input batch-rekognition-type" type="checkbox" id="batchRekognitionFaces" value="face_detection">
-                                            <label class="form-check-label" for="batchRekognitionFaces">Face Detection</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input batch-rekognition-type" type="checkbox" id="batchRekognitionCelebrities" value="celebrity_recognition">
-                                            <label class="form-check-label" for="batchRekognitionCelebrities">Celebrity Recognition</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input batch-rekognition-type" type="checkbox" id="batchRekognitionModeration" value="content_moderation">
-                                            <label class="form-check-label" for="batchRekognitionModeration">Content Moderation</label>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-6">
-                                        <div class="form-check">
-                                            <input class="form-check-input batch-rekognition-type" type="checkbox" id="batchRekognitionText" value="text_detection">
-                                            <label class="form-check-label" for="batchRekognitionText">Text Detection</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input batch-rekognition-type" type="checkbox" id="batchRekognitionPersons" value="person_tracking">
-                                            <label class="form-check-label" for="batchRekognitionPersons">Person Tracking</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input batch-rekognition-type" type="checkbox" id="batchRekognitionShots" value="shot_segmentation">
-                                            <label class="form-check-label" for="batchRekognitionShots">Shot Segmentation</label>
-                                        </div>
-                                        <div class="form-check">
-                                            <input class="form-check-input batch-rekognition-type" type="checkbox" id="batchRekognitionPPE" value="ppe_detection">
-                                            <label class="form-check-label" for="batchRekognitionPPE">PPE Detection (images)</label>
-                                        </div>
-                                    </div>
-                                </div>
-                                <small class="text-muted d-block mt-2">
-                                    Some analysis types only apply to videos or images; incompatible choices may fail.
-                                </small>
-                            </div>
-                            <div class="col-12">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="batchRekognitionUseProxy" checked>
-                                    <label class="form-check-label" for="batchRekognitionUseProxy">
-                                        Use proxy files when available
-                                    </label>
                                 </div>
                             </div>
                         </div>

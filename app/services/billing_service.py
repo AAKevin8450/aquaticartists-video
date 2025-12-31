@@ -47,15 +47,6 @@ OPERATION_NAME_MAP = {
     'Bedrock.ModelInvocation.Premier': 'Nova Premier Invocation',
     'Bedrock.Embeddings': 'Embeddings Generation',
 
-    # Rekognition operations
-    'RekognitionVideo.DetectLabels': 'Video Label Detection',
-    'RekognitionVideo.DetectText': 'Video Text Detection',
-    'RekognitionVideo.DetectFaces': 'Video Face Detection',
-    'RekognitionVideo.RecognizeCelebrities': 'Celebrity Recognition',
-    'RekognitionImage.DetectLabels': 'Image Label Detection',
-    'RekognitionImage.DetectText': 'Image Text Detection',
-    'RekognitionImage.DetectFaces': 'Image Face Detection',
-
     # S3 operations
     'PutObject': 'S3 Upload',
     'GetObject': 'S3 Download',

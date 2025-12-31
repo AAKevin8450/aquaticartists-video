@@ -128,19 +128,37 @@ class FilesMixin:
         """Create a source file record with media metadata."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
+
+            # Compute created_date from metadata timestamps
+            meta = metadata or {}
+            file_mtime = meta.get('file_mtime')
+            file_ctime = meta.get('file_ctime')
+
+            created_date = None
+            if file_mtime is None and file_ctime is None:
+                created_date = datetime.now().isoformat()
+            elif file_mtime is None:
+                created_date = datetime.fromtimestamp(file_ctime).isoformat()
+            elif file_ctime is None:
+                created_date = datetime.fromtimestamp(file_mtime).isoformat()
+            elif file_mtime <= file_ctime:
+                created_date = datetime.fromtimestamp(file_mtime).isoformat()
+            else:
+                created_date = datetime.fromtimestamp(file_ctime).isoformat()
+
             cursor.execute('''
                 INSERT INTO files (
                     filename, s3_key, file_type, size_bytes, content_type,
                     is_proxy, source_file_id, local_path,
                     resolution_width, resolution_height, frame_rate,
                     codec_video, codec_audio, duration_seconds, bitrate,
-                    metadata
+                    metadata, created_date
                 )
-                VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (filename, s3_key, file_type, size_bytes, content_type,
                   local_path, resolution_width, resolution_height, frame_rate,
                   codec_video, codec_audio, duration_seconds, bitrate,
-                  json.dumps(metadata or {})))
+                  json.dumps(meta), created_date))
             return cursor.lastrowid
 
     def create_proxy_file(self, source_file_id: int, filename: str, s3_key: str,
@@ -541,27 +559,13 @@ class FilesMixin:
                 query += ' AND date(f.uploaded_at) <= date(?)'
                 params.append(upload_to_date)
 
-            created_date_expr = (
-                "CASE "
-                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
-                "AND json_extract(f.metadata, '$.file_ctime') IS NULL "
-                "THEN f.uploaded_at "
-                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
-                "THEN datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
-                "WHEN json_extract(f.metadata, '$.file_ctime') IS NULL "
-                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
-                "WHEN json_extract(f.metadata, '$.file_mtime') <= json_extract(f.metadata, '$.file_ctime') "
-                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
-                "ELSE datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
-                "END"
-            )
-
+            # Use indexed created_date column instead of JSON extraction
             if created_from_date:
-                query += f' AND date({created_date_expr}) >= date(?)'
+                query += ' AND date(f.created_date) >= date(?)'
                 params.append(created_from_date)
 
             if created_to_date:
-                query += f' AND date({created_date_expr}) <= date(?)'
+                query += ' AND date(f.created_date) <= date(?)'
                 params.append(created_to_date)
 
             # Add sorting

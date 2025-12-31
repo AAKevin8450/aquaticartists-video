@@ -76,7 +76,6 @@ def list_files():
         has_proxy_str = request.args.get('has_proxy')
         has_transcription_str = request.args.get('has_transcription')
         has_nova_analysis_str = request.args.get('has_nova_analysis')
-        has_rekognition_analysis_str = request.args.get('has_rekognition_analysis')
         has_nova_embeddings_str = request.args.get('has_nova_embeddings')
         search = request.args.get('search', '').strip()
 
@@ -117,10 +116,6 @@ def list_files():
         if has_nova_analysis_str:
             has_nova_analysis = has_nova_analysis_str.lower() in ('true', '1', 'yes')
 
-        has_rekognition_analysis = None
-        if has_rekognition_analysis_str:
-            has_rekognition_analysis = has_rekognition_analysis_str.lower() in ('true', '1', 'yes')
-
         has_nova_embeddings = None
         if has_nova_embeddings_str:
             has_nova_embeddings = has_nova_embeddings_str.lower() in ('true', '1', 'yes')
@@ -142,7 +137,6 @@ def list_files():
             has_proxy=has_proxy,
             has_transcription=has_transcription,
             has_nova_analysis=has_nova_analysis,
-            has_rekognition_analysis=has_rekognition_analysis,
             has_nova_embeddings=has_nova_embeddings,
             search=search or None,
             upload_from_date=upload_from_date,
@@ -168,7 +162,6 @@ def list_files():
             has_proxy=has_proxy,
             has_transcription=has_transcription,
             has_nova_analysis=has_nova_analysis,
-            has_rekognition_analysis=has_rekognition_analysis,
             has_nova_embeddings=has_nova_embeddings,
             search=search or None,
             upload_from_date=upload_from_date,
@@ -190,7 +183,6 @@ def list_files():
             has_proxy=has_proxy,
             has_transcription=has_transcription,
             has_nova_analysis=has_nova_analysis,
-            has_rekognition_analysis=has_rekognition_analysis,
             has_nova_embeddings=has_nova_embeddings,
             search=search or None,
             upload_from_date=upload_from_date,
@@ -611,67 +603,6 @@ def create_image_proxy_for_file(file_id):
 
     except Exception as e:
         current_app.logger.error(f"Create image proxy error: {e}", exc_info=True)
-        return jsonify({'error': str(e)}), 500
-
-
-@bp.route('/api/files/<int:file_id>/start-analysis', methods=['POST'])
-def start_analysis_for_file(file_id):
-    """
-    Start Rekognition analysis for file.
-
-    Request body:
-        {
-            "analysis_types": ["label_detection", "face_detection"],
-            "use_proxy": true
-        }
-
-    Returns:
-        {
-            "job_ids": ["rekognition-abc123", ...],
-            "message": "Started X analysis jobs"
-        }
-    """
-    try:
-        data = request.get_json() or {}
-        analysis_types = data.get('analysis_types', [])
-        use_proxy = data.get('use_proxy', True)
-
-        if not analysis_types:
-            return jsonify({'error': 'No analysis types specified'}), 400
-
-        db = get_db()
-
-        # Determine which file to analyze
-        if use_proxy:
-            proxy = db.get_proxy_for_source(file_id)
-            if not proxy:
-                return jsonify({'error': 'Proxy file not found. Please create proxy first.'}), 404
-            target_file_id = proxy['id']
-        else:
-            file = db.get_file(file_id)
-            if not file:
-                return jsonify({'error': 'File not found'}), 404
-            target_file_id = file_id
-
-        # Import and call the start_analysis function
-        from app.routes.analysis import start_analysis_job
-
-        job_ids = []
-        for analysis_type in analysis_types:
-            try:
-                result = start_analysis_job(target_file_id, analysis_type)
-                if result and 'job_id' in result:
-                    job_ids.append(result['job_id'])
-            except Exception as e:
-                current_app.logger.error(f"Failed to start {analysis_type}: {e}")
-
-        return jsonify({
-            'job_ids': job_ids,
-            'message': f'Started {len(job_ids)} analysis job(s)'
-        }), 200
-
-    except Exception as e:
-        current_app.logger.error(f"Start analysis error: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 

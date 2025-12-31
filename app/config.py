@@ -56,7 +56,7 @@ class Config:
     JOB_POLL_INTERVAL_SECONDS = 5
     JOB_MAX_POLL_TIME_SECONDS = 1800  # 30 minutes
 
-    # Rekognition defaults
+    # Analysis defaults
     DEFAULT_MIN_CONFIDENCE = 50.0
     DEFAULT_MAX_LABELS = 1000
 

@@ -229,6 +229,8 @@ class DatabaseBase:
                 ('transcripts', 'codec_audio', 'TEXT'),
                 ('transcripts', 'bitrate', 'INTEGER'),
                 ('transcripts', 'transcript_summary', 'TEXT'),
+                # Performance: avoid JSON extraction for created date filtering
+                ('files', 'created_date', 'TEXT'),
             ]
             for table, column, col_type in migration_columns:
                 try:
@@ -372,11 +374,61 @@ class DatabaseBase:
                 ('idx_transcripts_completed_at', 'transcripts', 'completed_at DESC'),
                 ('idx_collections_created_at', 'face_collections', 'created_at DESC'),
             ]
+
+            # Performance indexes for file filtering EXISTS subqueries
+            # These composite indexes dramatically improve has_* filter performance
+            filter_indexes = [
+                # For has_proxy filter: EXISTS (SELECT 1 FROM files WHERE source_file_id=f.id AND is_proxy=1)
+                ('idx_files_source_proxy', 'files', 'source_file_id, is_proxy'),
+                # For has_transcription filter: EXISTS (SELECT 1 FROM transcripts WHERE file_path=f.local_path)
+                ('idx_transcripts_file_path_status', 'transcripts', 'file_path, status'),
+                # For has_nova_embeddings filter: EXISTS (SELECT 1 FROM nova_embedding_metadata WHERE file_id=f.id)
+                ('idx_nova_embed_file_id', 'nova_embedding_metadata', 'file_id'),
+                # For is_proxy filtering in main query
+                ('idx_files_is_proxy', 'files', 'is_proxy'),
+                # For uploaded_at date range filters
+                ('idx_files_uploaded_at_date', 'files', "date(uploaded_at)"),
+                # For created_date range filters (avoids JSON extraction)
+                ('idx_files_created_date', 'files', 'date(created_date)'),
+            ]
+            for idx_name, table, columns in filter_indexes:
+                try:
+                    cursor.execute(f'''
+                        CREATE INDEX IF NOT EXISTS {idx_name}
+                        ON {table}({columns})
+                    ''')
+                except sqlite3.OperationalError:
+                    pass  # Table may not exist yet (e.g., nova_embedding_metadata)
             for idx_name, table, columns in search_indexes:
                 cursor.execute(f'''
                     CREATE INDEX IF NOT EXISTS {idx_name}
                     ON {table}({columns})
                 ''')
+
+            # Backfill created_date from metadata for existing files (performance migration)
+            cursor.execute('''
+                UPDATE files SET created_date =
+                    CASE
+                        WHEN json_extract(metadata, '$.file_mtime') IS NULL
+                            AND json_extract(metadata, '$.file_ctime') IS NULL
+                        THEN uploaded_at
+                        WHEN json_extract(metadata, '$.file_mtime') IS NULL
+                        THEN datetime(json_extract(metadata, '$.file_ctime'), 'unixepoch')
+                        WHEN json_extract(metadata, '$.file_ctime') IS NULL
+                        THEN datetime(json_extract(metadata, '$.file_mtime'), 'unixepoch')
+                        WHEN json_extract(metadata, '$.file_mtime') <= json_extract(metadata, '$.file_ctime')
+                        THEN datetime(json_extract(metadata, '$.file_mtime'), 'unixepoch')
+                        ELSE datetime(json_extract(metadata, '$.file_ctime'), 'unixepoch')
+                    END
+                WHERE created_date IS NULL
+            ''')
+
+            # Backfill character_count for transcripts missing it (performance)
+            cursor.execute('''
+                UPDATE transcripts
+                SET character_count = LENGTH(transcript_text)
+                WHERE character_count IS NULL AND transcript_text IS NOT NULL
+            ''')
 
             # Embedding tables (requires vector extension for vec0 virtual table)
             self._ensure_embedding_tables(conn)

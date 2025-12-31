@@ -20,7 +20,7 @@ class BatchJob:
 
     def __init__(self, job_id: str, action_type: str, total_files: int, file_ids: List[int]):
         self.job_id = job_id
-        self.action_type = action_type  # 'proxy', 'transcribe', 'transcript-summary', 'nova', 'rekognition'
+        self.action_type = action_type  # 'proxy', 'transcribe', 'transcript-summary', 'nova', 'embeddings'
         self.total_files = total_files
         self.file_ids = file_ids
         self.completed_files = 0

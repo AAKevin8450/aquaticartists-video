@@ -1,3 +1,62 @@
+2025-12-31 16:05:24 - Updated by Claude Code
+
+[Category: Refactoring / Feature Removal]
+Complete removal of Amazon Rekognition and Face Collections from the application
+
+[Purpose]
+Transition the application to use only Amazon Bedrock Nova for all video and image analysis. Rekognition was no longer needed after implementing Nova-based analysis with superior multimodal capabilities. This change simplifies the codebase, reduces AWS service dependencies, and enables unified Nova-based workflows.
+
+[Impact]
+- Removed all Rekognition video analysis functionality
+- Removed all Rekognition image analysis functionality
+- Removed Face Collections feature entirely
+- Nova Analysis now processes both video AND image files (unified button)
+- Updated Actions dropdown to show Nova Analysis for all file types
+- Updated footer to "AWS Video & Image Analysis"
+- Removed Rekognition filter options from file management
+- Cleaned up obsolete planning/documentation files
+
+[Files Deleted]
+- app/services/rekognition_video.py - Rekognition video analysis service
+- app/services/rekognition_image.py - Rekognition image analysis service
+- app/services/face_collection_service.py - Face collection management service
+- app/routes/video_analysis.py - Rekognition video analysis routes
+- app/routes/image_analysis.py - Rekognition image analysis routes
+- app/routes/analysis.py - Unified Rekognition analysis routes
+- app/routes/collections.py - Face collections routes/blueprint
+- app/templates/collections.html - Face collections UI template
+- BATCH_FAILURE_FIX_SUMMARY.md, file_updates.md, nova_analysis_update.md, plan.md, program_retooling.md, split_large_files.md, task.md, tasks.md - Obsolete documentation files
+
+[Files Modified]
+- app/__init__.py - Removed Rekognition blueprint registrations (video_analysis, image_analysis, analysis, collections)
+- app/routes/file_management/batch.py - Removed batch_rekognition route; modified batch_nova to handle both video AND image files
+- app/routes/file_management/core.py - Removed has_rekognition_analysis filter and start_analysis_for_file endpoint
+- app/database/search.py - Removed has_rekognition_analysis from list_all_files_with_stats(), count_files(), get_summary_stats(); removed 'rekognition' from search sources
+- app/routes/search.py - Removed rekognition source handling from extract_preview_text(), get_source_actions(), search(), count_by_source()
+- app/templates/file_management.html - Removed Rekognition filter dropdown, batch button, modal options
+- app/static/js/file_management.js - Removed has_rekognition_analysis from filter state; updated renderActionsDropdown() to show Nova for all file types
+- app/templates/search.html - Removed Rekognition source checkbox
+- app/templates/index.html - Removed Rekognition count from Analysis Breakdown section
+- app/static/js/search.js - Removed 'rekognition' from sources array and icon mappings
+- app/models.py - Removed FaceCollection dataclass and REKOGNITION_VIDEO_METHODS mapping
+- app/templates/base.html - Updated footer to "AWS Video & Image Analysis"
+- app/config.py - Removed REKOGNITION_MODELS config
+- app/utils/validators.py - Removed rekognition from ANALYSIS_TYPES set
+- CLAUDE.md - Updated to reflect Nova-only analysis capabilities
+
+[Technical Details]
+- Nova Analysis batch processing now routes files to appropriate service based on file type (video → nova_service, image → nova_image_service)
+- Search sources reduced from ['file', 'transcript', 'nova', 'rekognition', 'collection'] to ['file', 'transcript', 'nova', 'collection']
+- billing_service.py retains Rekognition service name mapping for historical billing data display
+- All Nova functionality (video analysis, image analysis, embeddings) remains fully intact
+
+[Breaking Changes]
+- Rekognition API endpoints removed: /api/analysis/*, /api/video/*, /api/image/*, /api/collections/*
+- has_rekognition_analysis filter no longer available
+- Face collections feature completely removed
+
+================================================================================
+
 2025-12-31 11:09:16 - Updated by Claude Code
 
 [Category: Feature]

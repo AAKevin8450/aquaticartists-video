@@ -49,8 +49,8 @@ def create_app(config_name=None):
 
     # Register blueprints
     from app.routes import (
-        main, upload, video_analysis, image_analysis, collections,
-        history, analysis, transcription, dashboard, nova_analysis,
+        main, upload,
+        history, transcription, dashboard, nova_analysis,
         nova_image_analysis, reports, search
     )
     from app.routes.file_management import (
@@ -61,11 +61,7 @@ def create_app(config_name=None):
 
     app.register_blueprint(main.bp)
     app.register_blueprint(upload.bp)
-    app.register_blueprint(video_analysis.bp)
-    app.register_blueprint(image_analysis.bp)
-    app.register_blueprint(collections.bp)
     app.register_blueprint(history.bp)
-    app.register_blueprint(analysis.bp)
     app.register_blueprint(transcription.bp)
     app.register_blueprint(dashboard.bp)
     app.register_blueprint(nova_analysis.bp)

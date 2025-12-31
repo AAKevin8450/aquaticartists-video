@@ -63,28 +63,6 @@ class AnalysisJob:
 
 
 @dataclass
-class FaceCollection:
-    """Face collection model for Rekognition face collections."""
-    id: Optional[int] = None
-    collection_id: str = ''
-    collection_arn: str = ''
-    created_at: Optional[str] = None
-    face_count: int = 0
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'FaceCollection':
-        """Create from dictionary."""
-        if isinstance(data.get('metadata'), str):
-            data['metadata'] = json.loads(data['metadata'])
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
-
-
-@dataclass
 class Transcript:
     """Transcript model for local video transcription."""
     id: Optional[int] = None
@@ -159,14 +137,3 @@ class TranscriptStatus:
     FAILED = 'FAILED'
 
 
-# Rekognition API method mappings
-REKOGNITION_VIDEO_METHODS = {
-    AnalysisType.VIDEO_LABELS: ('start_label_detection', 'get_label_detection'),
-    AnalysisType.VIDEO_FACES: ('start_face_detection', 'get_face_detection'),
-    AnalysisType.VIDEO_FACE_SEARCH: ('start_face_search', 'get_face_search'),
-    AnalysisType.VIDEO_PERSONS: ('start_person_tracking', 'get_person_tracking'),
-    AnalysisType.VIDEO_CELEBRITIES: ('start_celebrity_recognition', 'get_celebrity_recognition'),
-    AnalysisType.VIDEO_MODERATION: ('start_content_moderation', 'get_content_moderation'),
-    AnalysisType.VIDEO_TEXT: ('start_text_detection', 'get_text_detection'),
-    AnalysisType.VIDEO_SEGMENTS: ('start_segment_detection', 'get_segment_detection'),
-}

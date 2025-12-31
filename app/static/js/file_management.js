@@ -10,7 +10,6 @@ let currentFilters = {
     has_proxy: null,
     has_transcription: null,
     has_nova_analysis: null,
-    has_rekognition_analysis: null,
     has_nova_embeddings: null,
     upload_from_date: '',
     upload_to_date: '',
@@ -94,7 +93,6 @@ function initializeEventListeners() {
     document.getElementById('batchTranscribeBtn').addEventListener('click', () => startBatchAction('transcribe'));
     document.getElementById('batchTranscriptSummaryBtn').addEventListener('click', () => startBatchAction('transcript-summary'));
     document.getElementById('batchNovaBtn').addEventListener('click', () => startBatchAction('nova'));
-    document.getElementById('batchRekognitionBtn').addEventListener('click', () => startBatchAction('rekognition'));
     document.getElementById('batchEmbeddingsBtn').addEventListener('click', () => startBatchAction('embeddings'));
 
     // Rescan folder button
@@ -259,9 +257,6 @@ function applyFilters() {
     const novaFilter = document.getElementById('novaFilter').value;
     currentFilters.has_nova_analysis = novaFilter === '' ? null : novaFilter === 'true';
 
-    const rekognitionFilter = document.getElementById('rekognitionFilter').value;
-    currentFilters.has_rekognition_analysis = rekognitionFilter === '' ? null : rekognitionFilter === 'true';
-
     const embeddingsFilter = document.getElementById('embeddingsFilter').value;
     currentFilters.has_nova_embeddings = embeddingsFilter === '' ? null : embeddingsFilter === 'true';
 
@@ -301,7 +296,6 @@ function resetFilters() {
     document.getElementById('proxyFilter').value = '';
     document.getElementById('transcriptionFilter').value = '';
     document.getElementById('novaFilter').value = '';
-    document.getElementById('rekognitionFilter').value = '';
     document.getElementById('embeddingsFilter').value = '';
     document.getElementById('uploadFromDate').value = '';
     document.getElementById('uploadToDate').value = '';
@@ -322,7 +316,6 @@ function resetFilters() {
         has_proxy: null,
         has_transcription: null,
         has_nova_analysis: null,
-        has_rekognition_analysis: null,
         has_nova_embeddings: null,
         upload_from_date: '',
         upload_to_date: '',
@@ -388,7 +381,6 @@ function applyFiltersToInputs() {
     document.getElementById('proxyFilter').value = normalizeTriState(currentFilters.has_proxy);
     document.getElementById('transcriptionFilter').value = normalizeTriState(currentFilters.has_transcription);
     document.getElementById('novaFilter').value = normalizeTriState(currentFilters.has_nova_analysis);
-    document.getElementById('rekognitionFilter').value = normalizeTriState(currentFilters.has_rekognition_analysis);
     document.getElementById('embeddingsFilter').value = normalizeTriState(currentFilters.has_nova_embeddings);
     document.getElementById('uploadFromDate').value = currentFilters.upload_from_date || '';
     document.getElementById('uploadToDate').value = currentFilters.upload_to_date || '';
@@ -1006,17 +998,10 @@ function renderActionsDropdown(file) {
                 <li><hr class="dropdown-divider"></li>
                 <li><h6 class="dropdown-header">Analysis</h6></li>
                 <li>
-                    <a class="dropdown-item action-analyze-rekognition" href="#" data-file-id="${file.id}">
-                        <i class="bi bi-eye"></i> Rekognition
+                    <a class="dropdown-item action-analyze-nova" href="#" data-file-id="${file.id}" data-file-type="${file.file_type}">
+                        <i class="bi bi-stars"></i> Nova Analysis
                     </a>
                 </li>
-                ${file.file_type === 'video' ? `
-                    <li>
-                        <a class="dropdown-item action-analyze-nova" href="#" data-file-id="${file.id}">
-                            <i class="bi bi-stars"></i> Nova
-                        </a>
-                    </li>
-                ` : ''}
                 <li><hr class="dropdown-divider"></li>
                 <li>
                     <a class="dropdown-item action-download" href="#" data-file-id="${file.id}">
@@ -1077,15 +1062,6 @@ function attachFileEventListeners() {
             e.preventDefault();
             const fileId = parseInt(e.currentTarget.dataset.fileId);
             startTranscription(fileId);
-        });
-    });
-
-    // Rekognition analysis
-    document.querySelectorAll('.action-analyze-rekognition').forEach(link => {
-        link.addEventListener('click', (e) => {
-            e.preventDefault();
-            const fileId = parseInt(e.currentTarget.dataset.fileId);
-            startRekognitionAnalysis(fileId);
         });
     });
 
@@ -1286,14 +1262,9 @@ function renderFileDetails(data, container) {
                         <i class="bi bi-mic"></i> Transcribe
                     </button>
                 ` : ''}
-                <button class="btn btn-sm btn-outline-success detail-rekognition-btn" data-file-id="${file.id}">
-                    <i class="bi bi-eye"></i> Rekognition
+                <button class="btn btn-sm btn-outline-warning detail-nova-btn" data-file-id="${file.id}" data-file-type="${file.file_type}">
+                    <i class="bi bi-stars"></i> Nova Analysis
                 </button>
-                ${file.file_type === 'video' ? `
-                    <button class="btn btn-sm btn-outline-warning detail-nova-btn" data-file-id="${file.id}">
-                        <i class="bi bi-stars"></i> Nova
-                    </button>
-                ` : ''}
             </div>
         </div>
         <!-- File Info Section -->
@@ -1489,13 +1460,6 @@ function attachFileDetailsActionListeners(container) {
         btn.addEventListener('click', (e) => {
             const fileId = parseInt(e.currentTarget.dataset.fileId);
             startTranscription(fileId);
-        });
-    });
-
-    container.querySelectorAll('.detail-rekognition-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const fileId = parseInt(e.currentTarget.dataset.fileId);
-            startRekognitionAnalysis(fileId);
         });
     });
 
@@ -1836,34 +1800,6 @@ async function startTranscription(fileId) {
 
     } catch (error) {
         console.error('Start transcription error:', error);
-        showAlert(`Error: ${error.message}`, 'danger');
-    }
-}
-
-async function startRekognitionAnalysis(fileId) {
-    const options = await getSingleOptions('rekognition', fileId);
-    if (!options) return;
-
-    try {
-        showAlert('Starting analysis...', 'info');
-
-        const response = await fetch(`/api/files/${fileId}/start-analysis`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(options)
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to start analysis');
-        }
-
-        const result = await response.json();
-        showAlert(`Started ${result.job_ids.length} analysis job(s)`, 'success');
-        loadFiles();
-
-    } catch (error) {
-        console.error('Start analysis error:', error);
         showAlert(`Error: ${error.message}`, 'danger');
     }
 }
@@ -2408,8 +2344,7 @@ async function getBatchOptions(actionType) {
             'image-proxy': 'Generate optimized image proxies (896px) for Nova 2 Lite analysis, reducing storage and transfer costs.',
             transcribe: 'Configure Whisper transcription settings for the current file set.',
             'transcript-summary': 'Generate Nova transcript summaries for files with completed transcripts.',
-            nova: 'Choose Nova model and analysis types for proxy-backed videos.',
-            rekognition: 'Select Rekognition analysis types and target files.',
+            nova: 'Choose Nova model and analysis types for videos and images.',
             embeddings: 'Generate Nova Embeddings for transcripts and analysis results.'
         };
         if (description) {
@@ -2434,7 +2369,6 @@ async function getBatchOptions(actionType) {
                 transcribe: 'Start Transcription Batch',
                 'transcript-summary': 'Start Transcript Summary Batch',
                 nova: 'Start Nova Batch',
-                rekognition: 'Start Rekognition Batch',
                 embeddings: 'Start Embeddings Batch'
             };
             confirmBtn.textContent = labels[actionType] || 'Start Batch';
@@ -2560,19 +2494,6 @@ function buildBatchOptions(actionType) {
                 processing_mode: processingMode
             };
         }
-        case 'rekognition': {
-            const analysisTypes = Array.from(document.querySelectorAll('.batch-rekognition-type:checked'))
-                .map(input => input.value);
-            if (analysisTypes.length === 0) {
-                showBatchOptionsError('Select at least one Rekognition analysis type.');
-                return null;
-            }
-            const useProxy = !!document.getElementById('batchRekognitionUseProxy')?.checked;
-            return {
-                analysis_types: analysisTypes,
-                use_proxy: useProxy
-            };
-        }
         case 'embeddings': {
             const force = !!document.getElementById('batchEmbeddingsForce')?.checked;
             return {
@@ -2613,8 +2534,7 @@ async function getSingleOptions(actionType, fileId) {
         if (description) {
             const descriptions = {
                 transcribe: 'Choose transcription settings for this file.',
-                nova: 'Choose Nova analysis settings for this file.',
-                rekognition: 'Choose Rekognition settings for this file.'
+                nova: 'Choose Nova analysis settings for this file.'
             };
             description.textContent = descriptions[actionType] || 'Configure processing settings.';
         }
@@ -2633,8 +2553,7 @@ async function getSingleOptions(actionType, fileId) {
         if (confirmBtn) {
             const labels = {
                 transcribe: 'Start Transcription',
-                nova: 'Start Nova Analysis',
-                rekognition: 'Start Rekognition Analysis'
+                nova: 'Start Nova Analysis'
             };
             confirmBtn.textContent = labels[actionType] || 'Start';
         }
@@ -2730,27 +2649,6 @@ function setSingleDefaults(actionType) {
         updateNovaCombinedState('single');
         return;
     }
-
-    if (actionType === 'rekognition') {
-        const label = document.getElementById('singleRekognitionLabels');
-        const faces = document.getElementById('singleRekognitionFaces');
-        const celebs = document.getElementById('singleRekognitionCelebrities');
-        const mod = document.getElementById('singleRekognitionModeration');
-        const text = document.getElementById('singleRekognitionText');
-        const persons = document.getElementById('singleRekognitionPersons');
-        const shots = document.getElementById('singleRekognitionShots');
-        const ppe = document.getElementById('singleRekognitionPPE');
-        if (label) label.checked = true;
-        if (faces) faces.checked = false;
-        if (celebs) celebs.checked = false;
-        if (mod) mod.checked = false;
-        if (text) text.checked = false;
-        if (persons) persons.checked = false;
-        if (shots) shots.checked = false;
-        if (ppe) ppe.checked = false;
-        const useProxy = document.getElementById('singleRekognitionUseProxy');
-        if (useProxy) useProxy.checked = true;
-    }
 }
 
 function buildSingleOptions(actionType) {
@@ -2794,19 +2692,6 @@ function buildSingleOptions(actionType) {
                 analysis_types: analysisTypes,
                 options: options,
                 processing_mode: processingMode
-            };
-        }
-        case 'rekognition': {
-            const analysisTypes = Array.from(document.querySelectorAll('.single-rekognition-type:checked'))
-                .map(input => input.value);
-            if (analysisTypes.length === 0) {
-                showSingleOptionsError('Select at least one Rekognition analysis type.');
-                return null;
-            }
-            const useProxy = !!document.getElementById('singleRekognitionUseProxy')?.checked;
-            return {
-                analysis_types: analysisTypes,
-                use_proxy: useProxy
             };
         }
         default:
@@ -2912,8 +2797,7 @@ function showBatchProgressModal(actionType, totalFiles) {
         'proxy': 'Generating Proxy Videos',
         'transcribe': 'Transcribing Videos',
         'transcript-summary': 'Generating Transcript Summaries',
-        'nova': 'Running Nova Analysis',
-        'rekognition': 'Running Rekognition Analysis'
+        'nova': 'Running Nova Analysis'
     };
     document.getElementById('batchActionTitle').textContent = titles[actionType] || 'Processing...';
 
@@ -3231,12 +3115,11 @@ function handleURLParameters() {
         return;
     }
 
-    // Check for job_id parameter (Rekognition analysis)
+    // Check for job_id parameter (analysis job)
     const jobId = params.get('job_id');
     if (jobId) {
-        console.log('Auto-opening Rekognition job details for ID:', jobId);
-        // For Rekognition jobs, we need to find the file that has this job
-        // and show the file details which includes analysis jobs
+        console.log('Auto-opening job details for ID:', jobId);
+        // Find the file that has this job and show file details
         findAndShowFileByJobId(parseInt(jobId));
         return;
     }
@@ -3245,7 +3128,7 @@ function handleURLParameters() {
     const novaId = params.get('nova_id');
     if (novaId) {
         console.log('Auto-opening Nova analysis details for ID:', novaId);
-        // Similar to Rekognition, find the file with this Nova job
+        // Find the file with this Nova job
         findAndShowFileByNovaId(parseInt(novaId));
         return;
     }

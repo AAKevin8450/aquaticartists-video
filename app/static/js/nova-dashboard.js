@@ -263,7 +263,7 @@ async function renderComparison() {
         const related = (data.jobs || []).filter(job => job.analysis_type !== 'nova');
 
         if (!related.length) {
-            container.innerHTML = '<div class="text-muted">No Rekognition jobs found for this file.</div>';
+            container.innerHTML = '<div class="text-muted">No related analysis jobs found for this file.</div>';
             return;
         }
 

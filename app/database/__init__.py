@@ -44,11 +44,11 @@ class Database(
         - TranscriptsMixin: Transcript operations (create, update, list transcripts)
         - EmbeddingsMixin: Vector embedding operations (create, search embeddings)
         - NovaJobsMixin: Nova analysis job operations
-        - AnalysisJobsMixin: Rekognition analysis job operations
+        - AnalysisJobsMixin: Analysis job operations
         - AsyncJobsMixin: Rescan and import job operations
         - SearchMixin: Search and statistics operations
         - BillingCacheMixin: AWS billing cache operations
-        - CollectionsMixin: Face collection operations
+        - CollectionsMixin: Collection operations
     """
     pass
 

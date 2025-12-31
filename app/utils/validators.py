@@ -136,7 +136,7 @@ def validate_confidence(confidence: float) -> bool:
 
 def validate_collection_id(collection_id: str) -> bool:
     """
-    Validate Rekognition collection ID format.
+    Validate collection ID format.
 
     Args:
         collection_id: Collection ID to validate
@@ -166,7 +166,7 @@ def validate_collection_id(collection_id: str) -> bool:
 
 def validate_job_id(job_id: str) -> bool:
     """
-    Validate Rekognition job ID format.
+    Validate job ID format.
 
     Args:
         job_id: Job ID to validate

@@ -158,6 +158,8 @@ videos/
 uploads/
 output/
 temp/
+proxy_video/
+proxy_image/
 
 # Database files
 data/

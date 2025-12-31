@@ -22,7 +22,7 @@ def extract_preview_text(source_type: str, row: Dict[str, Any], query: str, max_
     Extract preview text from search result with context around the matched term.
 
     Args:
-        source_type: Type of search result (file, transcript, rekognition, nova, collection)
+        source_type: Type of search result (file, transcript, nova, collection)
         row: Database row dict
         query: Search query
         max_length: Maximum preview length in characters
@@ -57,33 +57,6 @@ def extract_preview_text(source_type: str, row: Dict[str, Any], query: str, max_
                 if text:
                     return text
         text = row.get('title', '')
-
-    elif source_type == 'rekognition':
-        # For Rekognition, try to extract relevant analysis results
-        db = get_db()
-        job_id = row.get('source_id')
-        if job_id:
-            job = db.get_job(job_id)
-            if job and job.get('results'):
-                results = job['results']
-                if isinstance(results, str):
-                    try:
-                        results = json.loads(results)
-                    except:
-                        pass
-
-                # Extract relevant fields based on analysis type
-                category = row.get('category', '')
-                if 'label_detection' in category.lower():
-                    text = _extract_label_preview(results, query)
-                elif 'celebrity' in category.lower():
-                    text = _extract_celebrity_preview(results, query)
-                elif 'text_detection' in category.lower():
-                    text = _extract_text_detection_preview(results, query)
-                else:
-                    text = f"{row.get('title', '')} - {category}"
-        if not text:
-            text = row.get('title', '')
 
     elif source_type == 'nova':
         # For Nova, extract from summary, chapters, or elements
@@ -297,12 +270,6 @@ def build_action_links(source_type: str, row: Dict[str, Any]) -> Dict[str, str]:
         actions['view_transcript'] = f'/transcriptions?id={source_id}'
         actions['download'] = f'/transcriptions/api/transcript/{source_id}/download?format=txt'
 
-    elif source_type == 'rekognition':
-        # Get the job details to find the dashboard link
-        actions['view'] = f'/files?job_id={source_id}'
-        actions['view_dashboard'] = f'/dashboard/{source_id}'
-        actions['download_json'] = f'/api/history/{source_id}?format=json'
-
     elif source_type == 'nova':
         actions['view'] = f'/files?nova_id={source_id}'
         actions['view_results'] = f'/api/nova/results/{source_id}'
@@ -326,12 +293,12 @@ def search():
 
     Query Parameters:
         q: Search query (required, min 2 chars)
-        sources: Comma-separated list of sources (file,transcript,rekognition,nova,collection)
+        sources: Comma-separated list of sources (file,transcript,nova,collection)
         file_type: Filter by file type (video/image)
         from_date: Start date filter (YYYY-MM-DD)
         to_date: End date filter (YYYY-MM-DD)
         status: Filter by status
-        analysis_type: Filter by Rekognition analysis type
+        analysis_type: Filter by analysis type
         model: Filter by model (Whisper or Nova)
         sort_by: Sort field (relevance/date/name, default: relevance)
         sort_order: Sort order (asc/desc, default: desc)
@@ -389,7 +356,7 @@ def search():
     sources = None
     if sources_str:
         sources = [s.strip() for s in sources_str.split(',') if s.strip()]
-        valid_sources = {'file', 'transcript', 'rekognition', 'nova', 'collection'}
+        valid_sources = {'file', 'transcript', 'nova', 'collection'}
         sources = [s for s in sources if s in valid_sources]
         if not sources:
             sources = None
@@ -484,7 +451,6 @@ def search():
             'results_by_source': {
                 'file': counts.get('file', 0),
                 'transcript': counts.get('transcript', 0),
-                'rekognition': counts.get('rekognition', 0),
                 'nova': counts.get('nova', 0),
                 'collection': counts.get('collection', 0)
             },
@@ -590,7 +556,7 @@ def semantic_search(
 
     Args:
         query: Search query text
-        sources: List of source types to search (file, transcript, rekognition, nova, collection)
+        sources: List of source types to search (file, transcript, nova, collection)
         page: Page number
         per_page: Results per page
         start_time: Request start time for performance tracking
@@ -669,7 +635,7 @@ def semantic_search(
         search_time_ms = int((time.time() - start_time) * 1000)
 
         # Count results by source
-        source_counts = {'transcript': 0, 'nova': 0, 'file': 0, 'rekognition': 0, 'collection': 0}
+        source_counts = {'transcript': 0, 'nova': 0, 'file': 0, 'collection': 0}
         for r in results:
             if r['source_type'] == 'transcript':
                 source_counts['transcript'] += 1

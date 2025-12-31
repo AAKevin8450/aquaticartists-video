@@ -1,7 +1,7 @@
 # Project-Specific Instructions for Claude Code
 
 ## Project Overview
-AWS Video & Image Analysis Application - Flask web app (port 5700) using Amazon Rekognition, Bedrock Nova, faster-whisper transcription, and semantic search (Nova Embeddings).
+AWS Video & Image Analysis Application - Flask web app (port 5700) using Bedrock Nova for video/image analysis, faster-whisper transcription, and semantic search (Nova Embeddings).
 
 ## Quick Start
 ```bash
@@ -10,7 +10,7 @@ cd E:\coding\video && .\.venv\Scripts\activate && python run.py
 
 ## AWS Configuration
 - **S3 Bucket**: video-analysis-app-676206912644 (us-east-1)
-- **IAM Policy**: VideoAnalysisAppPolicy v3 (31 Rekognition + 4 Bedrock actions)
+- **IAM Policy**: VideoAnalysisAppPolicy v3 (Bedrock + S3 actions)
 
 ### Environment Variables (.env)
 ```
@@ -33,8 +33,6 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 | Service | Purpose |
 |---------|---------|
 | s3_service.py | File upload/download |
-| rekognition_video.py | Async video analysis (8 types) |
-| rekognition_image.py | Sync image analysis (8 types) |
 | image_proxy_service.py | Image proxy creation for Nova 2 Lite (896px) |
 | transcription_service.py | Local faster-whisper (6 models) |
 | nova_service.py | Bedrock video analysis (summary/chapters/elements/waterfall) |
@@ -60,7 +58,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 
 ### Batch Operations
 - Fetch all filtered files (500/request), real-time progress with ETA
-- Action types: proxy, image-proxy, transcribe, transcript-summary, nova, rekognition
+- Action types: proxy, image-proxy, transcribe, transcript-summary, nova, embeddings
 
 ### Folder Rescan & Directory Import
 - Async operations with progress tracking, ETA, cancellation
@@ -68,7 +66,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - Endpoints: POST → job_id, GET /status, POST /cancel, POST /apply
 
 ### Search
-- **Keyword**: UNION across files, transcripts, Rekognition, Nova results, collections
+- **Keyword**: UNION across files, transcripts, Nova results, collections
 - **Semantic**: Nova Embeddings with sqlite-vec KNN (sub-500ms)
 
 ### Nova Analysis
@@ -100,9 +98,6 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 ## Constraints
 - Video: Max 10GB (MP4, MOV, AVI, MKV) | Image: Max 15MB (JPEG, PNG)
 - Region: us-east-1 only | FFmpeg required (NVENC for GPU proxy)
-
-## Known Issues
-- Rekognition Person Tracking: AccessDeniedException (AWS account restriction)
 
 ## Debug Commands
 ```bash

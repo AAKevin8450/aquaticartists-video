@@ -13,7 +13,6 @@ class SearchMixin:
         has_proxy: Optional[bool] = None,
         has_transcription: Optional[bool] = None,
         has_nova_analysis: Optional[bool] = None,
-        has_rekognition_analysis: Optional[bool] = None,
         has_nova_embeddings: Optional[bool] = None,
         search: Optional[str] = None,
         upload_from_date: Optional[str] = None,
@@ -110,12 +109,6 @@ class SearchMixin:
                 else:
                     query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
 
-            if has_rekognition_analysis is not None:
-                if has_rekognition_analysis:
-                    query += ' AND EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
-                else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
-
             if has_nova_embeddings is not None:
                 if has_nova_embeddings:
                     query += ' AND EXISTS (SELECT 1 FROM nova_embedding_metadata nem WHERE nem.file_id = f.id)'
@@ -143,27 +136,13 @@ class SearchMixin:
                 query += ' AND date(f.uploaded_at) <= date(?)'
                 params.append(upload_to_date)
 
-            created_date_expr = (
-                "CASE "
-                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
-                "AND json_extract(f.metadata, '$.file_ctime') IS NULL "
-                "THEN f.uploaded_at "
-                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
-                "THEN datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
-                "WHEN json_extract(f.metadata, '$.file_ctime') IS NULL "
-                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
-                "WHEN json_extract(f.metadata, '$.file_mtime') <= json_extract(f.metadata, '$.file_ctime') "
-                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
-                "ELSE datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
-                "END"
-            )
-
+            # Use indexed created_date column instead of JSON extraction
             if created_from_date:
-                query += f' AND date({created_date_expr}) >= date(?)'
+                query += ' AND date(f.created_date) >= date(?)'
                 params.append(created_from_date)
 
             if created_to_date:
-                query += f' AND date({created_date_expr}) <= date(?)'
+                query += ' AND date(f.created_date) <= date(?)'
                 params.append(created_to_date)
 
             if min_size is not None:
@@ -242,7 +221,6 @@ class SearchMixin:
         has_proxy: Optional[bool] = None,
         has_transcription: Optional[bool] = None,
         has_nova_analysis: Optional[bool] = None,
-        has_rekognition_analysis: Optional[bool] = None,
         has_nova_embeddings: Optional[bool] = None,
         search: Optional[str] = None,
         upload_from_date: Optional[str] = None,
@@ -287,12 +265,6 @@ class SearchMixin:
                 else:
                     query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
 
-            if has_rekognition_analysis is not None:
-                if has_rekognition_analysis:
-                    query += ' AND EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
-                else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
-
             if has_nova_embeddings is not None:
                 if has_nova_embeddings:
                     query += ' AND EXISTS (SELECT 1 FROM nova_embedding_metadata nem WHERE nem.file_id = f.id)'
@@ -320,27 +292,13 @@ class SearchMixin:
                 query += ' AND date(f.uploaded_at) <= date(?)'
                 params.append(upload_to_date)
 
-            created_date_expr = (
-                "CASE "
-                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
-                "AND json_extract(f.metadata, '$.file_ctime') IS NULL "
-                "THEN f.uploaded_at "
-                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
-                "THEN datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
-                "WHEN json_extract(f.metadata, '$.file_ctime') IS NULL "
-                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
-                "WHEN json_extract(f.metadata, '$.file_mtime') <= json_extract(f.metadata, '$.file_ctime') "
-                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
-                "ELSE datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
-                "END"
-            )
-
+            # Use indexed created_date column instead of JSON extraction
             if created_from_date:
-                query += f' AND date({created_date_expr}) >= date(?)'
+                query += ' AND date(f.created_date) >= date(?)'
                 params.append(created_from_date)
 
             if created_to_date:
-                query += f' AND date({created_date_expr}) <= date(?)'
+                query += ' AND date(f.created_date) <= date(?)'
                 params.append(created_to_date)
 
             if min_size is not None:
@@ -393,7 +351,6 @@ class SearchMixin:
         has_proxy: Optional[bool] = None,
         has_transcription: Optional[bool] = None,
         has_nova_analysis: Optional[bool] = None,
-        has_rekognition_analysis: Optional[bool] = None,
         has_nova_embeddings: Optional[bool] = None,
         search: Optional[str] = None,
         upload_from_date: Optional[str] = None,
@@ -460,12 +417,6 @@ class SearchMixin:
                 else:
                     query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
 
-            if has_rekognition_analysis is not None:
-                if has_rekognition_analysis:
-                    query += ' AND EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
-                else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM analysis_jobs aj WHERE aj.file_id = f.id)'
-
             if has_nova_embeddings is not None:
                 if has_nova_embeddings:
                     query += ' AND EXISTS (SELECT 1 FROM nova_embedding_metadata nem WHERE nem.file_id = f.id)'
@@ -493,27 +444,13 @@ class SearchMixin:
                 query += ' AND date(f.uploaded_at) <= date(?)'
                 params.append(upload_to_date)
 
-            created_date_expr = (
-                "CASE "
-                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
-                "AND json_extract(f.metadata, '$.file_ctime') IS NULL "
-                "THEN f.uploaded_at "
-                "WHEN json_extract(f.metadata, '$.file_mtime') IS NULL "
-                "THEN datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
-                "WHEN json_extract(f.metadata, '$.file_ctime') IS NULL "
-                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
-                "WHEN json_extract(f.metadata, '$.file_mtime') <= json_extract(f.metadata, '$.file_ctime') "
-                "THEN datetime(json_extract(f.metadata, '$.file_mtime'), 'unixepoch') "
-                "ELSE datetime(json_extract(f.metadata, '$.file_ctime'), 'unixepoch') "
-                "END"
-            )
-
+            # Use indexed created_date column instead of JSON extraction
             if created_from_date:
-                query += f' AND date({created_date_expr}) >= date(?)'
+                query += ' AND date(f.created_date) >= date(?)'
                 params.append(created_from_date)
 
             if created_to_date:
-                query += f' AND date({created_date_expr}) <= date(?)'
+                query += ' AND date(f.created_date) <= date(?)'
                 params.append(created_to_date)
 
             if min_size is not None:
@@ -734,7 +671,6 @@ class SearchMixin:
 
                 # Analysis Breakdown
                 'nova_count': nova_count,
-                'rekognition_count': job_stats['total_jobs'] - nova_count,
                 'top_analysis_types': top_analysis_types,
 
                 # Collections
@@ -762,7 +698,7 @@ class SearchMixin:
         Unified search across all data sources.
 
         Returns list of search result dictionaries with:
-        - source_type: 'file', 'transcript', 'rekognition', 'nova', 'collection'
+        - source_type: 'file', 'transcript', 'nova', 'collection'
         - source_id: Primary key from source table
         - title: Display title
         - category: Result category
@@ -775,7 +711,7 @@ class SearchMixin:
             cursor = conn.cursor()
 
             # Build source filter
-            all_sources = ['file', 'transcript', 'rekognition', 'nova', 'collection']
+            all_sources = ['file', 'transcript', 'nova', 'collection']
             active_sources = sources if sources else all_sources
 
             # Prepare search pattern for LIKE
@@ -870,47 +806,7 @@ class SearchMixin:
 
                 union_queries.append(transcript_query)
 
-            # 3. Search in Rekognition analysis results
-            if 'rekognition' in active_sources:
-                rekognition_query = '''
-                SELECT
-                    'rekognition' as source_type,
-                    aj.id as source_id,
-                    f.filename || ' - ' || aj.analysis_type as title,
-                    aj.analysis_type as category,
-                    aj.completed_at as timestamp,
-                    'analysis_results' as match_field,
-                    f.size_bytes,
-                    f.duration_seconds
-                FROM analysis_jobs aj
-                JOIN files f ON aj.file_id = f.id
-                WHERE aj.status = 'COMPLETED'
-                AND aj.results IS NOT NULL
-                AND CAST(aj.results AS TEXT) LIKE ?
-                '''
-                params.append(search_pattern)
-
-                # Add file_type filter if specified
-                if file_type:
-                    rekognition_query += ' AND f.file_type = ?'
-                    params.append(file_type)
-
-                # Add analysis_type filter if specified
-                if analysis_type:
-                    rekognition_query += ' AND aj.analysis_type = ?'
-                    params.append(analysis_type)
-
-                # Add date range filters
-                if from_date:
-                    rekognition_query += ' AND aj.completed_at >= ?'
-                    params.append(from_date)
-                if to_date:
-                    rekognition_query += ' AND aj.completed_at <= ?'
-                    params.append(to_date)
-
-                union_queries.append(rekognition_query)
-
-            # 4. Search in Nova analysis
+            # 3. Search in Nova analysis
             if 'nova' in active_sources:
                 nova_query = '''
                 SELECT
@@ -1031,7 +927,6 @@ class SearchMixin:
             'total': 145,
             'file': 23,
             'transcript': 67,
-            'rekognition': 34,
             'nova': 19,
             'collection': 2
         }
@@ -1040,7 +935,7 @@ class SearchMixin:
             cursor = conn.cursor()
 
             # Build source filter
-            all_sources = ['file', 'transcript', 'rekognition', 'nova', 'collection']
+            all_sources = ['file', 'transcript', 'nova', 'collection']
             active_sources = sources if sources else all_sources
 
             # Prepare search pattern for LIKE
@@ -1105,34 +1000,6 @@ class SearchMixin:
                 cursor.execute(query_str, params)
                 counts['transcript'] = cursor.fetchone()['count']
                 total += counts['transcript']
-
-            # Count Rekognition results
-            if 'rekognition' in active_sources:
-                query_str = '''
-                SELECT COUNT(*) as count FROM analysis_jobs aj
-                JOIN files f ON aj.file_id = f.id
-                WHERE aj.status = 'COMPLETED'
-                AND aj.results IS NOT NULL
-                AND CAST(aj.results AS TEXT) LIKE ?
-                '''
-                params = [search_pattern]
-
-                if file_type:
-                    query_str += ' AND f.file_type = ?'
-                    params.append(file_type)
-                if analysis_type:
-                    query_str += ' AND aj.analysis_type = ?'
-                    params.append(analysis_type)
-                if from_date:
-                    query_str += ' AND aj.completed_at >= ?'
-                    params.append(from_date)
-                if to_date:
-                    query_str += ' AND aj.completed_at <= ?'
-                    params.append(to_date)
-
-                cursor.execute(query_str, params)
-                counts['rekognition'] = cursor.fetchone()['count']
-                total += counts['rekognition']
 
             # Count Nova results
             if 'nova' in active_sources:

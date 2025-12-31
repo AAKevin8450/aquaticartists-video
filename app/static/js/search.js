@@ -9,7 +9,7 @@ let currentQuery = '';
 let currentPage = 1;
 let semanticEnabled = false;  // AI semantic search toggle
 let currentFilters = {
-    sources: ['file', 'transcript', 'rekognition', 'nova', 'collection'],
+    sources: ['file', 'transcript', 'nova', 'collection'],
     file_type: '',
     from_date: '',
     to_date: '',
@@ -44,7 +44,6 @@ const errorState = document.getElementById('errorState');
 const sourceIcons = {
     file: 'bi-file-earmark',
     transcript: 'bi-card-text',
-    rekognition: 'bi-eye',
     nova: 'bi-stars',
     face_collection: 'bi-people'
 };
@@ -233,7 +232,7 @@ function resetFilters() {
 
     // Reset state
     currentFilters = {
-        sources: ['file', 'transcript', 'rekognition', 'nova', 'collection'],
+        sources: ['file', 'transcript', 'nova', 'collection'],
         file_type: '',
         from_date: '',
         to_date: '',
@@ -387,7 +386,6 @@ function displayResults(data) {
     const breakdown = [];
     if (data.results_by_source.file > 0) breakdown.push(`Files: ${data.results_by_source.file}`);
     if (data.results_by_source.transcript > 0) breakdown.push(`Transcripts: ${data.results_by_source.transcript}`);
-    if (data.results_by_source.rekognition > 0) breakdown.push(`Rekognition: ${data.results_by_source.rekognition}`);
     if (data.results_by_source.nova > 0) breakdown.push(`Nova: ${data.results_by_source.nova}`);
     if (data.results_by_source.collection > 0) breakdown.push(`Collections: ${data.results_by_source.collection}`);
     resultsBreakdown.textContent = breakdown.join(' • ');
@@ -420,8 +418,6 @@ function getTitleOnClick(result) {
         return `viewFileDetails(${sourceId})`;
     } else if (sourceType === 'transcript') {
         return `openTranscriptDetails(${sourceId})`;
-    } else if (sourceType === 'rekognition') {
-        return `viewAnalysisResult(${sourceId}, 'rekognition')`;
     } else if (sourceType === 'nova') {
         return `viewAnalysisResult(${sourceId}, 'nova')`;
     } else if (sourceType === 'face_collection') {
@@ -495,11 +491,6 @@ function buildActionButtons(result) {
         buttons.push(`<button class="btn btn-outline-primary" onclick="openTranscriptDetails(${sourceId})">
             <i class="bi bi-eye"></i> View Transcript
         </button>`);
-    } else if (sourceType === 'rekognition') {
-        // For Rekognition, we need to get the file_id first
-        buttons.push(`<button class="btn btn-outline-primary" onclick="viewAnalysisResult(${sourceId}, 'rekognition')">
-            <i class="bi bi-eye"></i> View Analysis
-        </button>`);
     } else if (sourceType === 'nova') {
         buttons.push(`<button class="btn btn-outline-primary" onclick="viewAnalysisResult(${sourceId}, 'nova')">
             <i class="bi bi-stars"></i> View Analysis
@@ -511,7 +502,7 @@ function buildActionButtons(result) {
         </a>`);
     }
 
-    // Dashboard link (opens in new tab for Rekognition results)
+    // Dashboard link (opens in new tab)
     if (result.actions.view_dashboard) {
         buttons.push(`<a href="${result.actions.view_dashboard}" class="btn btn-outline-secondary" target="_blank">
             <i class="bi bi-bar-chart"></i> Dashboard
@@ -986,19 +977,7 @@ function getStatusBadgeClass(status) {
 
 async function viewAnalysisResult(jobId, type) {
     try {
-        if (type === 'rekognition') {
-            // Get job details to find the file_id
-            const response = await fetch(`/api/history/${jobId}`);
-            if (!response.ok) {
-                throw new Error('Failed to load job details');
-            }
-            const job = await response.json();
-            if (job.file_id) {
-                viewFileDetails(job.file_id);
-            } else {
-                showError('Could not find file for this analysis job');
-            }
-        } else if (type === 'nova') {
+        if (type === 'nova') {
             // Get Nova job details to find the file_id
             const response = await fetch(`/api/nova/results/${jobId}`);
             if (!response.ok) {
