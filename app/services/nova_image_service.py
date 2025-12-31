@@ -307,7 +307,8 @@ class NovaImageService:
                 - raw_response: Full API response
         """
         model_config = get_model_config(model)
-        model_id = model_config['id']
+        # Use inference profile ID if available (required for nova-2-lite), otherwise model ID
+        model_id = model_config.get('inference_profile_id', model_config['id'])
 
         image_content = self._prepare_image_content(image_path)
 
@@ -339,8 +340,8 @@ class NovaImageService:
         # Calculate cost
         cost = calculate_cost(
             model=model,
-            tokens_input=tokens_input,
-            tokens_output=tokens_output
+            input_tokens=tokens_input,
+            output_tokens=tokens_output
         )
 
         logger.info(f"Nova image analysis complete: {tokens_total} tokens, ${cost:.6f}")
@@ -369,7 +370,7 @@ class NovaImageService:
             NovaParseError: If JSON parsing fails
         """
         # Use shared parser from parsers.py
-        parsed = parse_json_response(response_text, context="image_analysis")
+        parsed = parse_json_response(response_text)
 
         results = {}
 
@@ -424,8 +425,8 @@ class NovaImageService:
         # Calculate cost
         cost = calculate_cost(
             model=model,
-            tokens_input=estimated_input_tokens,
-            tokens_output=estimated_output_tokens
+            input_tokens=estimated_input_tokens,
+            output_tokens=estimated_output_tokens
         )
 
         return {

@@ -1,3 +1,42 @@
+2025-12-31 17:25:50 - Updated by Claude Code
+
+[Category: Bug Fix]
+Fix batch Nova image analysis - 6 critical bugs preventing image batch processing
+
+[Purpose]
+Enable batch Nova analysis for images. The feature was broken with multiple issues including incorrect imports, missing method calls, local file path handling, AWS model ID requirements, and parameter mismatches.
+
+[Fixes Applied]
+1. Fixed incorrect import from non-existent `app.routes.file_management.image_proxy` module
+2. Changed `get_proxy_files()` to `get_proxy_for_source()` - method didn't exist
+3. Added missing `job_id` parameter to `create_analysis_job()` calls
+4. Added local file path support - proxy images stored locally weren't being found
+5. Changed to use `inference_profile_id` for Nova 2 Lite (AWS requires `us.` prefix)
+6. Fixed `tokens_input/tokens_output` → `input_tokens/output_tokens` parameter names
+7. Removed invalid `context` parameter from `parse_json_response()` call
+
+[Files Modified]
+- app/routes/file_management/batch.py
+  - Fixed import: `create_image_proxy_internal` from `app.routes.upload`
+  - Changed `get_proxy_files()` → `get_proxy_for_source()` (returns single dict)
+  - Added `job_id` and `status` parameters to `create_analysis_job()`
+  - Added local file path detection before S3 download attempt
+  - Added `cleanup_temp` flag to prevent deleting local proxy files
+- app/routes/nova_image_analysis.py
+  - Same fixes for `get_proxy_for_source()`, `create_analysis_job()`, local file handling
+- app/services/nova_image_service.py
+  - Use `inference_profile_id` instead of `id` for model (Nova 2 Lite requires `us.` prefix)
+  - Fixed `calculate_cost()` parameter names: `input_tokens`, `output_tokens`
+  - Removed invalid `context` parameter from `parse_json_response()` call
+
+[Testing]
+- Successfully processed 13/13 images in batch mode
+- Average cost: $0.0016/image
+- Average tokens: ~2,200/image
+- Processing time: ~3 seconds/image
+
+---
+
 2025-12-31 16:05:24 - Updated by Claude Code
 
 [Category: Refactoring / Feature Removal]

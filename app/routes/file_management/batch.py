@@ -1020,8 +1020,7 @@ def _run_batch_nova(app, job: BatchJob):
     """Background worker for batch Nova analysis (supports both video and image files)."""
     with app.app_context():
         from app.routes.nova_analysis import start_nova_analysis_internal
-        from app.routes.upload import create_proxy_internal
-        from app.routes.file_management.image_proxy import create_image_proxy_internal
+        from app.routes.upload import create_proxy_internal, create_image_proxy_internal
         from app.services.nova_image_service import NovaImageService
         from app.services.s3_service import S3Service
         import tempfile
@@ -1146,28 +1145,29 @@ def _process_nova_image(app, db, file_id, file, model_key, analysis_types):
     import tempfile
     import os
     import json
-    from app.routes.file_management.image_proxy import create_image_proxy_internal
+    from app.routes.upload import create_image_proxy_internal
     from app.services.nova_image_service import NovaImageService
     from app.services.s3_service import S3Service
 
     # Check/create image proxy
-    proxy_files = db.get_proxy_files(file_id)
-    if not proxy_files:
+    proxy_file = db.get_proxy_for_source(file_id)
+    if not proxy_file:
         # Create image proxy first
         proxy_result = create_image_proxy_internal(file_id)
         if not proxy_result.get('success'):
             raise Exception(proxy_result.get('error', 'Failed to create image proxy'))
-        proxy_files = db.get_proxy_files(file_id)
+        proxy_file = db.get_proxy_for_source(file_id)
 
-    if not proxy_files:
+    if not proxy_file:
         raise Exception('No proxy image found after creation attempt')
 
-    proxy_file = proxy_files[0]
-
     # Create analysis job
+    from datetime import datetime
     analysis_job_id = db.create_analysis_job(
         file_id=file_id,
-        analysis_type='nova_image'
+        job_id=f"nova-image-{datetime.utcnow().timestamp()}",
+        analysis_type='nova_image',
+        status='SUBMITTED'
     )
 
     # Create Nova job
@@ -1191,19 +1191,27 @@ def _process_nova_image(app, db, file_id, file, model_key, analysis_types):
         aws_secret_key=current_app.config.get('AWS_SECRET_ACCESS_KEY')
     )
 
-    # Download proxy image to temp file
-    s3_service = S3Service(
-        bucket_name=current_app.config['S3_BUCKET_NAME'],
-        region=current_app.config['AWS_REGION']
-    )
-
-    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
-    temp_path = temp_file.name
-    temp_file.close()
+    # Get proxy image path - prefer local file, fallback to S3 download
+    temp_path = None
+    cleanup_temp = False
 
     try:
-        # Download proxy image
-        s3_service.download_file(proxy_file['s3_key'], temp_path)
+        if proxy_file.get('local_path') and os.path.exists(proxy_file['local_path']):
+            # Use local file directly
+            temp_path = proxy_file['local_path']
+        elif proxy_file.get('s3_key'):
+            # Download from S3
+            s3_service = S3Service(
+                bucket_name=current_app.config['S3_BUCKET_NAME'],
+                region=current_app.config['AWS_REGION']
+            )
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+            temp_path = temp_file.name
+            temp_file.close()
+            cleanup_temp = True
+            s3_service.download_file(proxy_file['s3_key'], temp_path)
+        else:
+            raise Exception(f"No valid path for proxy file {proxy_file['id']}: no local_path or s3_key")
 
         # Build file context
         file_context = service.build_file_context(file, temp_path)
@@ -1265,8 +1273,8 @@ def _process_nova_image(app, db, file_id, file, model_key, analysis_types):
         raise
 
     finally:
-        # Cleanup temp file
-        if os.path.exists(temp_path):
+        # Cleanup temp file only if we created it (S3 download)
+        if cleanup_temp and temp_path and os.path.exists(temp_path):
             os.unlink(temp_path)
 
 

@@ -82,17 +82,18 @@ def start_image_analysis():
             return jsonify({'error': f'File must be an image, got: {file_type}'}), 400
 
         # Check if proxy exists (we always analyze proxies)
-        proxy_files = db.get_proxy_files(file_id)
-        if not proxy_files:
+        proxy_file = db.get_proxy_for_source(file_id)
+        if not proxy_file:
             return jsonify({'error': 'No proxy image found. Create image proxy first.'}), 400
-
-        proxy_file = proxy_files[0]  # Should only be one image proxy
         proxy_file_id = proxy_file['id']
 
         # Create analysis job
+        from datetime import datetime
         analysis_job_id = db.create_analysis_job(
             file_id=file_id,
-            analysis_type='nova_image'
+            job_id=f"nova-image-{datetime.utcnow().timestamp()}",
+            analysis_type='nova_image',
+            status='SUBMITTED'
         )
 
         # Create Nova job
@@ -114,21 +115,29 @@ def start_image_analysis():
         # Estimate cost
         cost_estimate = service.estimate_image_cost(model, analysis_types)
 
-        # Download proxy image to temp file
+        # Get proxy image path - prefer local file, fallback to S3 download
+        import os
         from app.services.s3_service import S3Service
-        s3_service = S3Service(
-            bucket_name=current_app.config['S3_BUCKET_NAME'],
-            region=current_app.config['AWS_REGION']
-        )
-
-        # Create temp file for image
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
-        temp_path = temp_file.name
-        temp_file.close()
+        temp_path = None
+        cleanup_temp = False
 
         try:
-            # Download proxy image
-            s3_service.download_file(proxy_file['s3_key'], temp_path)
+            if proxy_file.get('local_path') and os.path.exists(proxy_file['local_path']):
+                # Use local file directly
+                temp_path = proxy_file['local_path']
+            elif proxy_file.get('s3_key'):
+                # Download from S3
+                s3_service = S3Service(
+                    bucket_name=current_app.config['S3_BUCKET_NAME'],
+                    region=current_app.config['AWS_REGION']
+                )
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.jpg')
+                temp_path = temp_file.name
+                temp_file.close()
+                cleanup_temp = True
+                s3_service.download_file(proxy_file['s3_key'], temp_path)
+            else:
+                return jsonify({'error': f"No valid path for proxy file {proxy_file['id']}: no local_path or s3_key"}), 400
 
             # Build file context
             file_context = service.build_file_context(file_record, temp_path)
@@ -191,8 +200,8 @@ def start_image_analysis():
             raise
 
         finally:
-            # Cleanup temp file
-            if os.path.exists(temp_path):
+            # Cleanup temp file only if we created it (S3 download)
+            if cleanup_temp and temp_path and os.path.exists(temp_path):
                 os.unlink(temp_path)
 
     except NovaError as e:
