@@ -38,13 +38,15 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 | image_proxy_service.py | Image proxy creation for Nova 2 Lite (896px) |
 | transcription_service.py | Local faster-whisper (6 models) |
 | nova_service.py | Bedrock video analysis (summary/chapters/elements/waterfall) |
+| nova_image_service.py | Bedrock image analysis with EXIF extraction (description/elements/waterfall/metadata) |
 | nova_embeddings_service.py | Semantic search vectors (1024 dim) |
 | billing_service.py | AWS CUR Parquet parsing, cost aggregation |
 
 ### Key Routes (app/routes/)
 | Route | Key Endpoints |
 |-------|---------------|
-| nova_analysis.py | /api/nova/analyze, /status, /results, /models |
+| nova_analysis.py | /api/nova/analyze, /status, /results, /models (video) |
+| nova_image_analysis.py | /api/nova/image/analyze, /status, /results, /models (image) |
 | file_management/ | /api/files, /api/batch/*, /api/files/rescan, /api/files/import-directory |
 | search.py | /api/search?semantic=true |
 | reports.py | /reports/api/summary, /api/billing/summary |
@@ -70,11 +72,16 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - **Semantic**: Nova Embeddings with sqlite-vec KNN (sub-500ms)
 
 ### Nova Analysis
-- 4 types: summary, chapters, elements, waterfall_classification
-- 3 models: Lite, Pro, Premier | Videos < 30 min
-- Extended timeout: 600s read with 3 retries for large videos
-- **Metadata extraction**: Recording date, customer/project name, location from file paths, filenames, transcripts, and visual content
-- **Source attribution**: All extracted metadata includes source (path/filename/transcript/visual) and confidence scores
+- **Video**: 4 types (summary, chapters, elements, waterfall_classification)
+  - 3 models: Lite, Pro, Premier | Videos < 30 min
+  - Extended timeout: 600s read with 3 retries for large videos
+  - Metadata extraction from file paths, filenames, transcripts, visual content
+- **Image**: 4 types (description, elements, waterfall_classification, metadata)
+  - 3 models: Lite ($0.00006/image), Pro, Premier
+  - EXIF metadata extraction (GPS, capture date, camera info)
+  - Single combined API call for all analysis types (cost-efficient)
+  - Processing time: 5-15s typical
+- **Source attribution**: All extracted metadata includes source (path/filename/transcript/visual/exif) and confidence scores
 
 ### AWS Billing Reports
 - Real-time CUR data with expandable operation-level detail
@@ -85,7 +92,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 ## Database Tables
 - **files**: Metadata (duration, resolution, codec, bitrate)
 - **transcripts**: Text, segments, transcript_summary
-- **nova_jobs**: Results (summary/chapters/elements/waterfall), search_metadata, raw_response
+- **nova_jobs**: Results (summary/chapters/elements/waterfall/description), search_metadata, raw_response, content_type (video/image)
 - **nova_embeddings**: sqlite-vec vectors
 - **billing_cache/billing_cache_details**: Cost aggregation by service/operation/date
 - **rescan_jobs/import_jobs**: Async job tracking

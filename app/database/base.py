@@ -287,6 +287,8 @@ class DatabaseBase:
                 ('nova_jobs', 'waterfall_classification_result', 'TEXT'),
                 ('nova_jobs', 'search_metadata', 'TEXT'),
                 ('nova_jobs', 'raw_response', 'TEXT'),
+                ('nova_jobs', 'content_type', "VARCHAR(10) DEFAULT 'video'"),
+                ('nova_jobs', 'description_result', 'TEXT'),
             ]
             for table, column, col_type in nova_job_columns:
                 try:

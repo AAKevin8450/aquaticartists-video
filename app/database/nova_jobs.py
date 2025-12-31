@@ -8,14 +8,14 @@ class NovaJobsMixin:
     """Mixin providing Nova analysis job CRUD operations."""
 
     def create_nova_job(self, analysis_job_id: int, model: str, analysis_types: list,
-                       user_options: dict = None) -> int:
+                       user_options: dict = None, content_type: str = 'video') -> int:
         """Create a new Nova analysis job."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO nova_jobs (analysis_job_id, model, analysis_types, user_options, status)
-                VALUES (?, ?, ?, ?, 'SUBMITTED')
-            ''', (analysis_job_id, model, json.dumps(analysis_types), json.dumps(user_options or {})))
+                INSERT INTO nova_jobs (analysis_job_id, model, analysis_types, user_options, status, content_type)
+                VALUES (?, ?, ?, ?, 'SUBMITTED', ?)
+            ''', (analysis_job_id, model, json.dumps(analysis_types), json.dumps(user_options or {}), content_type))
             return cursor.lastrowid
 
     def get_nova_job(self, nova_job_id: int) -> Optional[Dict[str, Any]]:
@@ -39,6 +39,8 @@ class NovaJobsMixin:
                     job['elements_result'] = json.loads(job['elements_result'])
                 if job.get('waterfall_classification_result'):
                     job['waterfall_classification_result'] = json.loads(job['waterfall_classification_result'])
+                if job.get('description_result'):
+                    job['description_result'] = json.loads(job['description_result'])
                 return job
             return None
 
@@ -63,6 +65,8 @@ class NovaJobsMixin:
                     job['elements_result'] = json.loads(job['elements_result'])
                 if job.get('waterfall_classification_result'):
                     job['waterfall_classification_result'] = json.loads(job['waterfall_classification_result'])
+                if job.get('description_result'):
+                    job['description_result'] = json.loads(job['description_result'])
                 return job
             return None
 
@@ -76,7 +80,7 @@ class NovaJobsMixin:
             for key, value in update_data.items():
                 fields.append(f"{key} = ?")
                 # JSON fields
-                if key in ('summary_result', 'chapters_result', 'elements_result', 'waterfall_classification_result', 'user_options'):
+                if key in ('summary_result', 'chapters_result', 'elements_result', 'waterfall_classification_result', 'description_result', 'user_options'):
                     values.append(json.dumps(value) if value is not None else None)
                 else:
                     values.append(value)
@@ -210,5 +214,7 @@ class NovaJobsMixin:
                     job['elements_result'] = json.loads(job['elements_result'])
                 if job.get('waterfall_classification_result'):
                     job['waterfall_classification_result'] = json.loads(job['waterfall_classification_result'])
+                if job.get('description_result'):
+                    job['description_result'] = json.loads(job['description_result'])
                 jobs.append(job)
             return jobs

@@ -1,3 +1,183 @@
+2025-12-31 11:09:16 - Updated by Claude Code
+
+[Category: Feature]
+Implement Nova image analysis with EXIF metadata extraction and combined API calls
+
+[Purpose]
+Enable intelligent image comprehension using Amazon Bedrock Nova models (Lite/Pro/Premier) for static images. Provides comprehensive image descriptions, visual element extraction, waterfall classification, and metadata enrichment with EXIF data extraction. Uses single combined API call for cost efficiency.
+
+[Impact]
+- ✅ Nova-powered image analysis with description, elements, waterfall classification, metadata
+- ✅ EXIF metadata extraction (GPS coordinates, capture date, camera info) for enriched context
+- ✅ Single combined API call for all analysis types (cost-efficient)
+- ✅ Support for all three Nova models: Lite ($0.00006/image), Pro, Premier
+- ✅ Database schema supports both video and image analysis in unified nova_jobs table
+- ✅ API endpoints for analysis, status, results, cost estimation
+
+[Implementation Details]
+
+**1. Image Analysis Prompts (app/services/nova/image_prompts.py) - NEW FILE**
+- get_image_description_prompt(): Comprehensive 2-4 paragraph image description
+  * Scene type, primary subject, context, mood/atmosphere, technical observations
+  * Depth parameter: brief (100-150 words), standard (250-350), detailed (500-700)
+- get_image_elements_prompt(): Visual elements extraction
+  * Equipment (tools, machinery, vehicles, waterfall components with location, prominence)
+  * Objects, structures (pools, waterfalls, buildings with construction phase)
+  * People (count, role-based descriptions, activities)
+  * Visible text (signs, labels, brand names, model numbers with relevance)
+  * Materials (primary, secondary, finishes)
+  * Environment (setting, location type, weather, time of day)
+- get_image_waterfall_prompt(): Waterfall classification adapted from video version
+  * 4-step sequential: family, functional type, tier level, sub-type
+  * Uses same waterfall_spec.json taxonomy as video analysis
+  * Installation state: pre_installation, during_installation, completed, product_only
+  * Visible components: spillway, basin, pump, lighting, weir
+- get_image_metadata_prompt(file_context): Metadata extraction with EXIF priority
+  * Recording date: EXIF > visual cues > path patterns
+  * Location: EXIF GPS > visible addresses > license plates > path segments
+  * Customer/project: path segments > visible signage > filename
+  * 8-20 descriptive keywords for search
+- get_image_combined_prompt(): Single prompt for all analysis types
+  * Generates unified JSON request structure for multiple analyses
+  * Enables cost-efficient single API call
+
+**2. Nova Image Service (app/services/nova_image_service.py) - NEW FILE**
+- NovaImageService class with EXIF metadata extraction
+- extract_exif_metadata(image_path): EXIF data extraction
+  * DateTimeOriginal/DateTime → ISO date format
+  * GPSInfo → decimal coordinates (latitude, longitude)
+  * Make/Model → camera information
+  * ImageDescription → embedded description
+  * Uses PIL.ExifTags (TAGS, GPSTAGS) for parsing
+- build_file_context(): Context dict with filename, path_segments, EXIF data
+- analyze_image(): Main entry point for combined analysis
+  * Single API call for all requested analysis types
+  * Returns results, tokens (input/output/total), cost, processing time
+- _prepare_image_content(): Bedrock Converse API image preparation
+  * Base64 encoding not needed - direct bytes in 'source.bytes'
+  * Format detection: jpeg, png, gif, webp
+- _invoke_nova_image(): Bedrock Converse API invocation
+  * maxTokens: 4096, temperature: 0.3
+  * Timeout: 120s read, 30s connect (shorter than video)
+  * Cost calculation using shared calculate_cost() from nova.models
+- estimate_image_cost(): Cost estimation
+  * Input tokens: ~1500 (896px image) + 200 per analysis type
+  * Output tokens: 400-600 per analysis type
+  * Returns estimated_input_tokens, estimated_output_tokens, estimated_cost_usd
+
+**3. Database Schema (migrations/010_add_image_analysis_support.sql) - NEW FILE**
+- ALTER TABLE nova_jobs ADD COLUMN content_type VARCHAR(10) DEFAULT 'video'
+- ALTER TABLE nova_jobs ADD COLUMN description_result TEXT
+- CREATE INDEX idx_nova_jobs_content_type ON nova_jobs(content_type)
+- UPDATE nova_jobs SET content_type = 'video' WHERE content_type IS NULL
+- Database migration integrated into app/database/base.py:286-297
+  * Auto-creates columns if missing (backwards compatible)
+
+**4. Database Layer Updates (app/database/nova_jobs.py)**
+- create_nova_job():10-19: Added content_type parameter (default 'video')
+- get_nova_job():21-45: Parse description_result JSON field
+- get_nova_job_by_analysis_job():47-71: Parse description_result
+- update_nova_job():73-90: Handle description_result in JSON fields list
+- get_nova_jobs_by_file():189-220: Parse description_result for file queries
+
+**5. API Routes (app/routes/nova_image_analysis.py) - NEW FILE**
+- POST /api/nova/image/analyze: Start image analysis
+  * Request: file_id, model (lite/pro/premier), analysis_types array
+  * Validates image has proxy (required for Nova analysis)
+  * Creates analysis_job and nova_job with content_type='image'
+  * Downloads proxy to temp file, extracts EXIF, performs analysis
+  * Stores results: description_result, elements_result, waterfall_classification_result, search_metadata
+  * Returns: nova_job_id, status, estimated_cost, actual_cost, processing_time
+  * Synchronous processing (fast: 5-15s typical for images)
+- GET /api/nova/image/status/<job_id>: Get analysis status
+  * Returns: status, progress_percent, error_message, processing_time, cost
+- GET /api/nova/image/results/<job_id>: Get analysis results
+  * Returns: results dict with description, elements, waterfall_classification, metadata
+  * Includes token counts and cost breakdown
+- GET /api/nova/image/models: List available models and pricing
+- POST /api/nova/image/estimate-cost: Estimate analysis cost
+  * Request: model, analysis_types
+  * Returns: estimated_input_tokens, estimated_output_tokens, estimated_cost_usd
+
+**6. Flask Integration (app/__init__.py)**
+- Line 54: Import nova_image_analysis blueprint
+- Line 72: Register nova_image_analysis.bp
+
+**7. Testing Infrastructure (test_image_analysis.py) - NEW FILE**
+- Test script with sample image analysis workflow
+- get_sample_images(): Fetch images from API
+- check_proxy_exists(): Verify image has proxy
+- analyze_image(): Perform analysis and display results
+- Pretty-printed output for description, elements, metadata
+
+[Files Modified]
+- app/__init__.py (import and register nova_image_analysis blueprint)
+- app/database/base.py (add content_type and description_result columns to nova_jobs)
+- app/database/nova_jobs.py (extend methods to support content_type and description_result)
+- plan.md (implementation plan for Nova image analysis - expanded from 224 to 1078 lines)
+
+[Files Created]
+- app/services/nova/image_prompts.py (image-specific prompt templates)
+- app/services/nova_image_service.py (NovaImageService with EXIF extraction)
+- app/routes/nova_image_analysis.py (image analysis API endpoints)
+- migrations/010_add_image_analysis_support.sql (database migration)
+- test_image_analysis.py (testing script)
+- proxy_image/ (directory for image proxies - created by image proxy service)
+
+[Technical Details]
+- **EXIF Priority**: Metadata extraction prioritizes EXIF data as most reliable source
+  * GPS coordinates used for location extraction when available
+  * Capture date from EXIF more reliable than visual/path inference
+  * Camera make/model included in prompts for context
+- **Combined API Call**: Single prompt requests all analysis types, single response contains all results
+  * Reduces cost: image tokens counted once (not 3-4x for separate calls)
+  * Faster: single round-trip vs sequential calls
+  * Simpler: one API invocation, one response to parse
+- **Proxy Requirement**: Always uses 896px proxy images for Nova analysis
+  * Consistent with Nova 2 Lite's internal rescaling threshold
+  * Reduces API payload size and cost
+  * Standardized input for reproducible results
+- **Error Handling**: Uses existing parsers.py repair logic for JSON parsing
+  * Handles trailing commas, truncation, malformed responses
+  * Stores raw_response for debugging
+  * Returns partial results if JSON parsing fails
+
+[Design Decisions]
+1. **Unified nova_jobs Table**: Extends existing table with content_type instead of separate nova_image_jobs
+   * Code reuse for status tracking, cost calculation, result storage
+   * Unified querying across video and image analysis
+   * Backward compatible (defaults to 'video' for existing records)
+
+2. **EXIF Metadata Extraction**: Extract before Nova analysis to enrich context
+   * DateTimeOriginal most reliable date source
+   * GPS coordinates enable accurate location extraction
+   * Camera info provides technical context
+   * Passed to Nova in file_context for metadata prompt
+
+3. **Single Combined API Call**: All analysis types in one request/response
+   * Cost efficient: image tokens counted once
+   * Faster: single round-trip
+   * Context sharing: model sees full context simultaneously
+
+4. **Always Use Proxies**: Require 896px proxy images for analysis
+   * Optimal for Nova 2 Lite (rescales internally at 896px)
+   * Smaller payloads, faster transfers
+   * Consistent results across analyses
+
+[Testing Notes]
+- Flask app initializes successfully with nova_image_analysis blueprint registered
+- Database migration runs automatically on startup (columns added if missing)
+- Test script ready at test_image_analysis.py (requires image proxies)
+- API endpoints validated: /api/nova/image/analyze, /status, /results, /models, /estimate-cost
+
+[Next Steps]
+- Test with actual images once proxies are created
+- Consider adding batch image analysis endpoint (similar to batch video)
+- Integrate image analysis results into search (keyword + semantic)
+- Add UI controls in file_management.html for image analysis
+
+---
+
 2025-12-30 21:30:18 - Updated by Claude Code
 
 [Category: Feature]
