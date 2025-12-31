@@ -42,7 +42,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 | Route | Key Endpoints |
 |-------|---------------|
 | nova_analysis.py | /api/nova/analyze, /status, /results, /models |
-| file_management.py | /api/files, /api/batch/*, /api/files/rescan, /api/files/import-directory |
+| file_management/ | /api/files, /api/batch/*, /api/files/rescan, /api/files/import-directory |
 | search.py | /api/search?semantic=true |
 | reports.py | /reports/api/summary, /api/billing/summary |
 

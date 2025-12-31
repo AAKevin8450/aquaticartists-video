@@ -180,6 +180,7 @@ export function isImageFile(filename) {
  * @returns {string} Escaped text
  */
 export function escapeHtml(text) {
+    if (text == null) return '';
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;

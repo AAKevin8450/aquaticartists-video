@@ -1,4 +1,4 @@
-import { showAlert } from './utils.js';
+import { showAlert, escapeHtml } from './utils.js';
 
 // ============================================================================
 // STATE MANAGEMENT
@@ -2161,17 +2161,6 @@ async function deleteAllS3Files() {
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
-
-function escapeHtml(unsafe) {
-    if (!unsafe) return '';
-    return unsafe
-        .toString()
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
 
 function formatFileSize(bytes) {
     if (bytes === 0 || !bytes) return '0 B';

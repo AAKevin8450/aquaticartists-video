@@ -51,7 +51,12 @@ def create_app(config_name=None):
     from app.routes import (
         main, upload, video_analysis, image_analysis, collections,
         history, analysis, transcription, dashboard, nova_analysis,
-        file_management, reports, search
+        reports, search
+    )
+    from app.routes.file_management import (
+        bp as file_management_bp,
+        directory_browser_bp, import_jobs_bp, rescan_jobs_bp,
+        s3_files_bp, batch_bp
     )
 
     app.register_blueprint(main.bp)
@@ -64,9 +69,15 @@ def create_app(config_name=None):
     app.register_blueprint(transcription.bp)
     app.register_blueprint(dashboard.bp)
     app.register_blueprint(nova_analysis.bp)
-    app.register_blueprint(file_management.bp)
+    app.register_blueprint(file_management_bp)
     app.register_blueprint(reports.bp)
     app.register_blueprint(search.bp)
+    # File management submodule blueprints
+    app.register_blueprint(directory_browser_bp)
+    app.register_blueprint(import_jobs_bp)
+    app.register_blueprint(rescan_jobs_bp)
+    app.register_blueprint(s3_files_bp)
+    app.register_blueprint(batch_bp)
 
     app.logger.info("All blueprints registered (including Nova, File Management, and Search)")
 

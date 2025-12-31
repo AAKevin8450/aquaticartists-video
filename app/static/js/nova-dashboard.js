@@ -2,7 +2,7 @@
  * Nova dashboard rendering for AWS Nova analysis results.
  */
 
-import { showAlert } from './utils.js';
+import { showAlert, escapeHtml } from './utils.js';
 
 let jobData = null;
 let novaResults = null;
@@ -304,12 +304,6 @@ function showError(message) {
     document.getElementById('loadingState').classList.add('d-none');
     document.getElementById('errorState').classList.remove('d-none');
     document.getElementById('errorMessage').textContent = message;
-}
-
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text || '';
-    return div.innerHTML;
 }
 
 export default {

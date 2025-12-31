@@ -2,7 +2,7 @@
  * Dashboard functionality for AWS Video Analysis Results
  */
 
-import { showAlert } from './utils.js';
+import { showAlert, escapeHtml } from './utils.js';
 
 // Global state
 let jobData = null;
@@ -910,15 +910,6 @@ function showError(message) {
     document.getElementById('loadingState').classList.add('d-none');
     document.getElementById('errorState').classList.remove('d-none');
     document.getElementById('errorMessage').textContent = message;
-}
-
-/**
- * Escape HTML to prevent XSS
- */
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
 }
 
 // Export functions
