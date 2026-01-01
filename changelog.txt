@@ -1,3 +1,43 @@
+2026-01-01 17:40:20 - Updated by Claude Code
+
+[Category: Feature Enhancement]
+Implement async import with progress tracking for Rescan Folder
+
+[Purpose]
+Large file imports (thousands of files) were timing out because the synchronous HTTP request couldn't handle the time required for full metadata extraction (~1-2 seconds per video file via ffprobe). Implemented a fully asynchronous import system that runs in the background with real-time progress updates, cancellation support, and no timeout limits.
+
+[New Features]
+1. Async apply job system - Imports run in background thread, never timeout
+2. Real-time progress tracking - Shows percentage, current file, and counts
+3. Cancellation support - Can stop long-running imports
+4. Full metadata extraction - All imports now include ffprobe metadata (duration, resolution, codec, etc.)
+
+[API Endpoints Added]
+- POST /api/files/rescan/apply-async - Start async apply job
+- GET /api/files/rescan/apply/<job_id>/status - Poll for progress
+- POST /api/files/rescan/apply/<job_id>/cancel - Cancel running job
+
+[Files Modified]
+- app/services/rescan_service.py:840-1035 - Added `generate_apply_job_id()` and `run_apply_job_async()` methods
+- app/services/rescan_service.py:423-431 - Added `skip_metadata` parameter to `import_file()`
+- app/routes/file_management/rescan_jobs.py:214-340 - Added 3 new async apply endpoints
+- app/static/js/file_management.js:3561-3787 - Complete rewrite of apply flow with async polling, progress UI, cancel support
+
+[UI Changes]
+- Progress screen with animated progress bar
+- Shows "Importing X/Y: filename.mp4" in real-time
+- Displays files processed and imported counts
+- Cancel button to abort long-running imports
+- Modal properly resets state on reopen
+
+[Performance]
+- No timeout limits - can run for hours
+- Progress updates every ~1 second
+- Supports cancellation at any point
+- Full metadata extraction for all file types
+
+---
+
 2026-01-01 16:53:18 - Updated by Claude Code
 
 [Category: Bug Fix / Feature Enhancement]

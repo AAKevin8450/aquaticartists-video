@@ -209,3 +209,132 @@ def apply_rescan_changes():
     except Exception as e:
         current_app.logger.error(f"Apply rescan error: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/api/files/rescan/apply-async', methods=['POST'])
+def apply_rescan_changes_async():
+    """
+    Start an async apply job for rescan changes.
+
+    Request body:
+    {
+        "directory_path": "/path/to/scan",
+        "actions": {
+            "update_moved": true,
+            "delete_missing": true,
+            "import_new": true,
+            "handle_ambiguous": "skip"
+        },
+        "selected_files": {
+            "moved": [1, 3, 5],
+            "deleted": [2],
+            "new": ["/path/to/new.mp4", ...]
+        }
+    }
+
+    Response:
+    {
+        "success": true,
+        "job_id": "apply_abc123def456",
+        "message": "Apply job started"
+    }
+    """
+    try:
+        from app.services.rescan_service import RescanService
+
+        data = request.get_json()
+        directory_path = data.get('directory_path')
+        actions = data.get('actions', {})
+        selected_files = data.get('selected_files', {})
+
+        if not directory_path:
+            return jsonify({'error': 'directory_path is required'}), 400
+
+        # Create job
+        db = get_db()
+        job_id = RescanService.generate_apply_job_id()
+        db.create_import_job(job_id, directory_path, recursive=True)
+
+        # Start async apply
+        rescan_service = RescanService(db, app=current_app._get_current_object())
+        rescan_service.run_apply_job_async(job_id, directory_path, selected_files, actions)
+
+        return jsonify({
+            'success': True,
+            'job_id': job_id,
+            'message': 'Apply job started'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Async apply error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/api/files/rescan/apply/<job_id>/status', methods=['GET'])
+def get_apply_status(job_id):
+    """
+    Get status of an apply job.
+
+    Response:
+    {
+        "success": true,
+        "job": {
+            "job_id": "apply_abc123",
+            "status": "IN_PROGRESS",
+            "progress_percent": 45,
+            "files_scanned": 234,
+            "total_files": 520,
+            "files_imported": 200,
+            "current_operation": "Importing 234/520: file.mp4",
+            "results": {...}  // Only present when completed
+        }
+    }
+    """
+    try:
+        db = get_db()
+        job = db.get_import_job(job_id)
+
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        return jsonify({
+            'success': True,
+            'job': job
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Get apply status error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/api/files/rescan/apply/<job_id>/cancel', methods=['POST'])
+def cancel_apply_job(job_id):
+    """
+    Cancel a running apply job.
+
+    Response:
+    {
+        "success": true,
+        "message": "Job cancelled"
+    }
+    """
+    try:
+        db = get_db()
+        job = db.get_import_job(job_id)
+
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+
+        if job['status'] in ('SUCCEEDED', 'FAILED', 'CANCELLED'):
+            return jsonify({'error': 'Job already completed'}), 400
+
+        db.cancel_import_job(job_id)
+
+        return jsonify({
+            'success': True,
+            'message': 'Job cancelled'
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Cancel apply job error: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500

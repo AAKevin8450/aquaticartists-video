@@ -355,20 +355,28 @@ class RescanService:
             new_selection = set(selected.get('new', [])) if selected.get('new') else None
             directory_path = options.get('directory_path', '')
 
-            for disk_file in reconcile_results['new']:
-                # Normalize path for comparison
-                disk_path_normalized = self.normalize_path(disk_file['path'])
+            # Count files to import for skip_metadata decision
+            files_to_import = []
+            selection_normalized = {self.normalize_path(p) for p in new_selection} if new_selection else None
 
-                # Skip if selection provided and this file not in it
-                if new_selection is not None:
-                    # Check if the file path matches any in the selection (normalized)
-                    selection_normalized = {self.normalize_path(p) for p in new_selection}
+            for disk_file in reconcile_results['new']:
+                disk_path_normalized = self.normalize_path(disk_file['path'])
+                if selection_normalized is not None:
                     if disk_path_normalized not in selection_normalized:
                         results['skipped'] += 1
                         continue
+                files_to_import.append(disk_file)
 
+            # Skip metadata extraction for bulk imports (>50 files) - much faster
+            skip_metadata = len(files_to_import) > 50
+
+            for disk_file in files_to_import:
                 try:
-                    imported = self.import_file(disk_file['path'], directory_path)
+                    imported = self.import_file(
+                        disk_file['path'],
+                        directory_path,
+                        skip_metadata=skip_metadata
+                    )
                     if imported:
                         results['imported'] += 1
                     else:
@@ -420,13 +428,15 @@ class RescanService:
 
         return results
 
-    def import_file(self, file_path: str, source_directory: str = '') -> bool:
+    def import_file(self, file_path: str, source_directory: str = '',
+                    skip_metadata: bool = False) -> bool:
         """
         Import a single file into the database.
 
         Args:
             file_path: Full path to the file
             source_directory: Directory path for metadata
+            skip_metadata: If True, skip ffprobe metadata extraction (faster for bulk imports)
 
         Returns:
             True if imported successfully, False if skipped
@@ -466,12 +476,13 @@ class RescanService:
         # Determine content type
         content_type = mimetypes.guess_type(abs_path)[0] or 'application/octet-stream'
 
-        # Extract media metadata
+        # Extract media metadata (skip for bulk imports to improve speed)
         media_metadata = {}
-        try:
-            media_metadata = extract_media_metadata(abs_path)
-        except MediaMetadataError:
-            pass  # Continue without metadata
+        if not skip_metadata:
+            try:
+                media_metadata = extract_media_metadata(abs_path)
+            except MediaMetadataError:
+                pass  # Continue without metadata
 
         # Use file's parent directory if source_directory not provided
         if not source_directory:
@@ -825,3 +836,200 @@ class RescanService:
     def generate_job_id() -> str:
         """Generate a unique job ID."""
         return f"rescan_{uuid.uuid4().hex[:12]}"
+
+    @staticmethod
+    def generate_apply_job_id() -> str:
+        """Generate a unique apply job ID."""
+        return f"apply_{uuid.uuid4().hex[:12]}"
+
+    def run_apply_job_async(self, job_id: str, directory_path: str,
+                            selected_files: Dict[str, List],
+                            actions: Dict[str, Any]):
+        """
+        Run apply changes job asynchronously in a background thread.
+
+        Args:
+            job_id: Unique job identifier
+            directory_path: Directory being processed
+            selected_files: Dict with 'moved', 'deleted', 'new' lists
+            actions: Dict with action flags
+        """
+        def _run_job():
+            try:
+                # Update job status
+                self.db.update_import_job_status(job_id, 'IN_PROGRESS')
+                self.db.update_import_job(job_id, {
+                    'current_operation': 'Starting...'
+                })
+
+                # Run reconciliation first
+                self.db.update_import_job(job_id, {
+                    'current_operation': 'Scanning directory...'
+                })
+
+                reconcile_results = self.reconcile(directory_path, mode='smart')
+
+                # Check for cancellation
+                if self.db.is_import_job_cancelled(job_id):
+                    return
+
+                # Prepare for apply
+                results = {
+                    'updated': 0,
+                    'deleted': 0,
+                    'imported': 0,
+                    'skipped': 0,
+                    'errors': []
+                }
+
+                selected = selected_files or {}
+                total_operations = 0
+                completed_operations = 0
+
+                # Count total operations
+                if actions.get('update_moved', False) and selected.get('moved'):
+                    total_operations += len(selected['moved'])
+                if actions.get('delete_missing', False) and selected.get('deleted'):
+                    total_operations += len(selected['deleted'])
+                if actions.get('import_new', False) and selected.get('new'):
+                    total_operations += len(selected['new'])
+
+                self.db.update_import_job_progress(job_id, total_files=total_operations)
+
+                # Handle moved files
+                if actions.get('update_moved', False):
+                    moved_selection = set(selected.get('moved', [])) if selected.get('moved') else None
+
+                    self.db.update_import_job(job_id, {
+                        'current_operation': 'Updating moved files...'
+                    })
+
+                    for db_file, disk_file in reconcile_results['moved']:
+                        if self.db.is_import_job_cancelled(job_id):
+                            return
+
+                        if moved_selection is not None and db_file['id'] not in moved_selection:
+                            results['skipped'] += 1
+                            continue
+
+                        try:
+                            new_path = Path(disk_file['path'])
+                            new_source_dir = str(new_path.parent)
+                            success = self.db.update_file_local_path_and_metadata(
+                                db_file['id'], disk_file['path'], new_source_dir
+                            )
+                            if success:
+                                results['updated'] += 1
+                            else:
+                                results['errors'].append({
+                                    'file_id': db_file['id'],
+                                    'error': 'Failed to update path'
+                                })
+                        except Exception as e:
+                            results['errors'].append({
+                                'file_id': db_file['id'],
+                                'error': str(e)
+                            })
+
+                        completed_operations += 1
+                        self.db.update_import_job_progress(
+                            job_id,
+                            files_scanned=completed_operations,
+                            files_imported=results['imported']
+                        )
+
+                # Handle deleted files
+                if actions.get('delete_missing', False):
+                    deleted_selection = set(selected.get('deleted', [])) if selected.get('deleted') else None
+
+                    self.db.update_import_job(job_id, {
+                        'current_operation': 'Removing deleted files...'
+                    })
+
+                    file_ids_to_delete = []
+                    for db_file in reconcile_results['deleted']:
+                        if self.db.is_import_job_cancelled(job_id):
+                            return
+
+                        if deleted_selection is not None and db_file['id'] not in deleted_selection:
+                            results['skipped'] += 1
+                            completed_operations += 1
+                            continue
+
+                        file_ids_to_delete.append(db_file['id'])
+                        completed_operations += 1
+
+                    if file_ids_to_delete:
+                        try:
+                            deleted_count = self.db.bulk_delete_files_by_ids(file_ids_to_delete)
+                            results['deleted'] = deleted_count
+                        except Exception as e:
+                            results['errors'].append({
+                                'error': f'Bulk delete failed: {str(e)}'
+                            })
+
+                    self.db.update_import_job_progress(
+                        job_id,
+                        files_scanned=completed_operations,
+                        files_imported=results['imported']
+                    )
+
+                # Handle new files - import with full metadata
+                if actions.get('import_new', False):
+                    new_selection = set(selected.get('new', [])) if selected.get('new') else None
+                    selection_normalized = {self.normalize_path(p) for p in new_selection} if new_selection else None
+
+                    # Build list of files to import
+                    files_to_import = []
+                    for disk_file in reconcile_results['new']:
+                        disk_path_normalized = self.normalize_path(disk_file['path'])
+                        if selection_normalized is not None:
+                            if disk_path_normalized not in selection_normalized:
+                                results['skipped'] += 1
+                                continue
+                        files_to_import.append(disk_file)
+
+                    # Import files one by one with progress updates
+                    for i, disk_file in enumerate(files_to_import):
+                        if self.db.is_import_job_cancelled(job_id):
+                            return
+
+                        # Update progress
+                        self.db.update_import_job(job_id, {
+                            'current_operation': f'Importing {i+1}/{len(files_to_import)}: {disk_file["filename"]}'
+                        })
+
+                        try:
+                            # Import with full metadata extraction
+                            imported = self.import_file(
+                                disk_file['path'],
+                                directory_path,
+                                skip_metadata=False  # Full metadata for async imports
+                            )
+                            if imported:
+                                results['imported'] += 1
+                            else:
+                                results['skipped'] += 1
+                        except Exception as e:
+                            results['errors'].append({
+                                'path': disk_file['path'],
+                                'error': str(e)
+                            })
+
+                        completed_operations += 1
+                        self.db.update_import_job_progress(
+                            job_id,
+                            files_scanned=completed_operations,
+                            files_imported=results['imported']
+                        )
+
+                # Complete the job
+                self.db.complete_import_job(job_id, results)
+
+            except Exception as e:
+                # Mark job as failed
+                self.db.complete_import_job(job_id, {}, error_message=str(e))
+
+        # Start background thread
+        thread = threading.Thread(target=_run_job, daemon=True)
+        thread.start()

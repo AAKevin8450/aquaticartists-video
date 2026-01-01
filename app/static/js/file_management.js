@@ -3203,9 +3203,22 @@ function openRescanModal() {
     document.getElementById('rescanStep2').style.display = 'none';
     document.getElementById('rescanLoading').style.display = 'none';
 
+    // Hide apply step if it exists
+    const applyStep = document.getElementById('rescanApplyStep');
+    if (applyStep) {
+        applyStep.style.display = 'none';
+    }
+
     // Clear previous results
     document.getElementById('rescanDirectoryInput').value = '';
     rescanResults = null;
+    applyJobId = null;
+
+    // Clear any running poll intervals
+    if (applyPollInterval) {
+        clearInterval(applyPollInterval);
+        applyPollInterval = null;
+    }
 
     modal.show();
 }
@@ -3558,6 +3571,9 @@ function renderRescanResults(data) {
     }
 }
 
+let applyJobId = null;
+let applyPollInterval = null;
+
 async function applyRescanChanges() {
     if (!rescanResults) {
         showAlert('No rescan results available', 'warning');
@@ -3588,13 +3604,20 @@ async function applyRescanChanges() {
 
     // Confirm import if many new files selected
     if (selectedNew.length > 100) {
-        if (!confirm(`You are about to import ${selectedNew.length} files. This may take a while. Continue?`)) {
+        if (!confirm(`You are about to import ${selectedNew.length} files with full metadata extraction. This may take a long time (1-2 seconds per file). Continue?`)) {
             return;
         }
     }
 
+    console.log('Applying rescan changes (async):', {
+        moved: selectedMoved.length,
+        deleted: selectedDeleted.length,
+        new: selectedNew.length
+    });
+
     try {
-        const response = await fetch('/api/files/rescan/apply', {
+        // Start async apply job
+        const response = await fetch('/api/files/rescan/apply-async', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -3617,30 +3640,161 @@ async function applyRescanChanges() {
 
         if (!response.ok) {
             const error = await response.json();
-            throw new Error(error.error || 'Failed to apply changes');
+            throw new Error(error.error || 'Failed to start apply job');
         }
 
         const data = await response.json();
-        const results = data.results;
+        applyJobId = data.job_id;
 
-        // Build result message
-        const parts = [];
-        if (results.updated > 0) parts.push(`${results.updated} updated`);
-        if (results.deleted > 0) parts.push(`${results.deleted} deleted`);
-        if (results.imported > 0) parts.push(`${results.imported} imported`);
-        if (results.errors.length > 0) parts.push(`${results.errors.length} errors`);
+        // Show apply progress UI
+        document.getElementById('rescanStep2').style.display = 'none';
+        showApplyProgress();
 
-        showAlert(
-            `Successfully applied changes: ${parts.join(', ')}`,
-            results.errors.length > 0 ? 'warning' : 'success'
-        );
-
-        // Close modal and refresh file list
-        bootstrap.Modal.getInstance(document.getElementById('rescanModal')).hide();
-        loadFiles();
+        // Start polling for progress
+        pollApplyProgress();
 
     } catch (error) {
         console.error('Apply rescan error:', error);
         showAlert(`Failed to apply changes: ${error.message}`, 'danger');
     }
+}
+
+function showApplyProgress() {
+    // Create or show apply progress div
+    let applyDiv = document.getElementById('rescanApplyStep');
+    if (!applyDiv) {
+        applyDiv = document.createElement('div');
+        applyDiv.id = 'rescanApplyStep';
+        applyDiv.innerHTML = `
+            <div class="text-center py-4">
+                <div class="spinner-border text-primary mb-3" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <h5 id="applyProgressTitle">Applying changes...</h5>
+                <p class="text-muted mb-3" id="applyProgressOperation">Starting...</p>
+                <div class="progress mb-3" style="height: 25px;">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated"
+                         role="progressbar"
+                         id="applyProgressBar"
+                         style="width: 0%">0%</div>
+                </div>
+                <p class="small text-muted mb-3">
+                    <span id="applyProgressFiles">0</span> / <span id="applyProgressTotal">0</span> files processed
+                    <br>
+                    <span id="applyProgressImported">0</span> imported
+                </p>
+                <button class="btn btn-sm btn-outline-danger" onclick="cancelApplyJob()">
+                    <i class="bi bi-x-circle me-1"></i>Cancel
+                </button>
+            </div>
+        `;
+        document.querySelector('#rescanModal .modal-body').appendChild(applyDiv);
+    }
+    applyDiv.style.display = 'block';
+}
+
+async function pollApplyProgress() {
+    if (!applyJobId) return;
+
+    try {
+        const response = await fetch(`/api/files/rescan/apply/${applyJobId}/status`);
+        if (!response.ok) {
+            throw new Error('Failed to get apply status');
+        }
+
+        const data = await response.json();
+        const job = data.job;
+
+        updateApplyProgress(job);
+
+        if (job.status === 'SUCCEEDED') {
+            clearInterval(applyPollInterval);
+            applyPollInterval = null;
+
+            // Show success
+            const results = job.results || {};
+            const parts = [];
+            if (results.updated > 0) parts.push(`${results.updated} updated`);
+            if (results.deleted > 0) parts.push(`${results.deleted} deleted`);
+            if (results.imported > 0) parts.push(`${results.imported} imported`);
+            if (results.skipped > 0) parts.push(`${results.skipped} skipped`);
+            if (results.errors && results.errors.length > 0) parts.push(`${results.errors.length} errors`);
+
+            showAlert(
+                `Successfully applied changes: ${parts.join(', ')}`,
+                (results.errors && results.errors.length > 0) ? 'warning' : 'success'
+            );
+
+            // Close modal and refresh
+            bootstrap.Modal.getInstance(document.getElementById('rescanModal')).hide();
+            loadFiles();
+
+        } else if (job.status === 'FAILED') {
+            clearInterval(applyPollInterval);
+            applyPollInterval = null;
+            showAlert(`Apply job failed: ${job.error_message || 'Unknown error'}`, 'danger');
+            resetApplyUI();
+
+        } else if (job.status === 'CANCELLED') {
+            clearInterval(applyPollInterval);
+            applyPollInterval = null;
+            showAlert('Apply job was cancelled', 'info');
+            resetApplyUI();
+
+        } else {
+            // Still in progress, continue polling
+            if (!applyPollInterval) {
+                applyPollInterval = setInterval(pollApplyProgress, 1000);
+            }
+        }
+
+    } catch (error) {
+        clearInterval(applyPollInterval);
+        applyPollInterval = null;
+        console.error('Poll apply progress error:', error);
+        showAlert(`Error checking apply progress: ${error.message}`, 'danger');
+        resetApplyUI();
+    }
+}
+
+function updateApplyProgress(job) {
+    const progressBar = document.getElementById('applyProgressBar');
+    const progressFiles = document.getElementById('applyProgressFiles');
+    const progressTotal = document.getElementById('applyProgressTotal');
+    const progressImported = document.getElementById('applyProgressImported');
+    const progressOperation = document.getElementById('applyProgressOperation');
+
+    if (progressBar) {
+        progressBar.style.width = `${job.progress_percent || 0}%`;
+        progressBar.textContent = `${job.progress_percent || 0}%`;
+    }
+    if (progressFiles) progressFiles.textContent = job.files_scanned || 0;
+    if (progressTotal) progressTotal.textContent = job.total_files || 0;
+    if (progressImported) progressImported.textContent = job.files_imported || 0;
+    if (progressOperation) progressOperation.textContent = job.current_operation || 'Processing...';
+}
+
+async function cancelApplyJob() {
+    if (!applyJobId) return;
+
+    try {
+        const response = await fetch(`/api/files/rescan/apply/${applyJobId}/cancel`, {
+            method: 'POST'
+        });
+
+        if (response.ok) {
+            showAlert('Cancelling apply job...', 'info');
+        }
+    } catch (error) {
+        console.error('Cancel apply job error:', error);
+    }
+}
+
+function resetApplyUI() {
+    const applyDiv = document.getElementById('rescanApplyStep');
+    if (applyDiv) {
+        applyDiv.style.display = 'none';
+    }
+    document.getElementById('rescanStep2').style.display = 'block';
+    applyJobId = null;
 }
