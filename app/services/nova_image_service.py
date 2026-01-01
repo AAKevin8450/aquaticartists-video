@@ -254,6 +254,30 @@ class NovaImageService:
             'processing_time_seconds': processing_time
         }
 
+    def _detect_image_format(self, image_bytes: bytes) -> str:
+        """
+        Detect image format from file magic bytes.
+
+        Args:
+            image_bytes: Raw image data
+
+        Returns:
+            Format string for Bedrock API: 'jpeg', 'png', 'gif', 'webp'
+        """
+        # Check magic bytes for common image formats
+        if image_bytes[:3] == b'\xff\xd8\xff':
+            return 'jpeg'
+        elif image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+            return 'png'
+        elif image_bytes[:6] in (b'GIF87a', b'GIF89a'):
+            return 'gif'
+        elif image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+            return 'webp'
+        else:
+            # Default to JPEG for unknown formats
+            logger.warning("Could not detect image format from magic bytes, defaulting to JPEG")
+            return 'jpeg'
+
     def _prepare_image_content(self, image_path: str) -> Dict[str, Any]:
         """
         Prepare image for Bedrock Converse API.
@@ -267,16 +291,19 @@ class NovaImageService:
         with open(image_path, 'rb') as f:
             image_bytes = f.read()
 
-        # Determine media type from extension
+        # Detect actual format from file content, not extension
+        # This handles cases where file extension doesn't match actual content
+        image_format = self._detect_image_format(image_bytes)
+
         ext = Path(image_path).suffix.lower()
-        format_map = {
-            '.jpg': 'jpeg',
-            '.jpeg': 'jpeg',
-            '.png': 'png',
-            '.gif': 'gif',
-            '.webp': 'webp'
-        }
-        image_format = format_map.get(ext, 'jpeg')
+        ext_format_map = {'.jpg': 'jpeg', '.jpeg': 'jpeg', '.png': 'png', '.gif': 'gif', '.webp': 'webp'}
+        expected_format = ext_format_map.get(ext, 'jpeg')
+
+        if image_format != expected_format:
+            logger.warning(
+                f"Image format mismatch for {Path(image_path).name}: "
+                f"extension suggests {expected_format}, actual content is {image_format}"
+            )
 
         return {
             "image": {

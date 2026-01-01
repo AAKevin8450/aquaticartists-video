@@ -410,6 +410,28 @@ class FilesMixin:
                     file['metadata'] = self._parse_json_field(file['metadata'], default={})
             return files
 
+    def get_files_by_current_directory(self, directory_path: str) -> List[Dict[str, Any]]:
+        """Get all files whose current local_path is within a specific directory.
+
+        This is used for folder rescans to only compare files that are currently
+        expected to be in the scanned directory, not files from other directories.
+        """
+        # Normalize path separators for consistent matching
+        normalized_path = directory_path.replace('\\', '/')
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            # Use REPLACE to normalize backslashes in the database values for comparison
+            cursor.execute('''
+                SELECT * FROM files
+                WHERE local_path IS NOT NULL
+                AND REPLACE(local_path, '\\', '/') LIKE ?
+            ''', (f"{normalized_path}%",))
+            files = [dict(row) for row in cursor.fetchall()]
+            for file in files:
+                if 'metadata' in file:
+                    file['metadata'] = self._parse_json_field(file['metadata'], default={})
+            return files
+
     def get_file_by_fingerprint(self, filename: str, size_bytes: int, mtime: float,
                                 mtime_tolerance: int = 2) -> Optional[Dict[str, Any]]:
         """Find file by fingerprint (name + size + approx mtime)."""

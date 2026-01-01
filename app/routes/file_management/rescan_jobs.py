@@ -184,9 +184,9 @@ def apply_rescan_changes():
         if not directory_path:
             return jsonify({'error': 'directory_path is required'}), 400
 
-        # Create rescan service and perform reconciliation
+        # Create rescan service with app for import functionality
         db = get_db()
-        rescan_service = RescanService(db)
+        rescan_service = RescanService(db, app=current_app._get_current_object())
         reconcile_results = rescan_service.reconcile(directory_path, mode='smart')
 
         # Apply changes
@@ -195,7 +195,8 @@ def apply_rescan_changes():
             'delete_missing': actions.get('delete_missing', False),
             'import_new': actions.get('import_new', False),
             'handle_ambiguous': actions.get('handle_ambiguous', 'skip'),
-            'selected_files': selected_files
+            'selected_files': selected_files,
+            'directory_path': directory_path  # Pass for import metadata
         }
 
         results = rescan_service.apply_changes(reconcile_results, options)

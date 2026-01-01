@@ -41,6 +41,8 @@ class NovaJobsMixin:
                     job['waterfall_classification_result'] = json.loads(job['waterfall_classification_result'])
                 if job.get('description_result'):
                     job['description_result'] = json.loads(job['description_result'])
+                if job.get('search_metadata'):
+                    job['search_metadata'] = json.loads(job['search_metadata'])
                 return job
             return None
 
@@ -67,6 +69,8 @@ class NovaJobsMixin:
                     job['waterfall_classification_result'] = json.loads(job['waterfall_classification_result'])
                 if job.get('description_result'):
                     job['description_result'] = json.loads(job['description_result'])
+                if job.get('search_metadata'):
+                    job['search_metadata'] = json.loads(job['search_metadata'])
                 return job
             return None
 
@@ -80,7 +84,7 @@ class NovaJobsMixin:
             for key, value in update_data.items():
                 fields.append(f"{key} = ?")
                 # JSON fields
-                if key in ('summary_result', 'chapters_result', 'elements_result', 'waterfall_classification_result', 'description_result', 'user_options'):
+                if key in ('summary_result', 'chapters_result', 'elements_result', 'waterfall_classification_result', 'description_result', 'user_options', 'search_metadata'):
                     values.append(json.dumps(value) if value is not None else None)
                 else:
                     values.append(value)
@@ -216,5 +220,7 @@ class NovaJobsMixin:
                     job['waterfall_classification_result'] = json.loads(job['waterfall_classification_result'])
                 if job.get('description_result'):
                     job['description_result'] = json.loads(job['description_result'])
+                if job.get('search_metadata'):
+                    job['search_metadata'] = json.loads(job['search_metadata'])
                 jobs.append(job)
             return jobs

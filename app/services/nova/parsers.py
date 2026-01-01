@@ -114,6 +114,17 @@ def parse_json_response(text: str) -> Dict[str, Any]:
     Raises:
         NovaParseError: If JSON parsing fails after all fix attempts
     """
+    # Handle empty or None responses
+    if not text or not text.strip():
+        logger.error("Nova returned empty response - possible content filter, API error, or timeout")
+        raise NovaParseError(
+            "Nova returned empty response. This may indicate: "
+            "1) Content was filtered by safety systems, "
+            "2) API timeout or transient error, "
+            "3) Image could not be processed. "
+            "Try re-running the analysis."
+        )
+
     # Remove markdown code fences if present
     cleaned = text.strip()
     cleaned = re.sub(r'^```(?:json)?\s*\n?', '', cleaned)

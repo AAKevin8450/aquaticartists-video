@@ -110,6 +110,9 @@ function initializeEventListeners() {
     document.getElementById('rescanSelectAllDeleted').addEventListener('change', (e) => {
         document.querySelectorAll('.rescan-deleted-checkbox').forEach(cb => cb.checked = e.target.checked);
     });
+    document.getElementById('rescanSelectAllNew').addEventListener('change', (e) => {
+        document.querySelectorAll('.rescan-new-checkbox').forEach(cb => cb.checked = e.target.checked);
+    });
 
     // S3 files section (lazy load)
     const s3FilesCollapse = document.getElementById('s3FilesCollapse');
@@ -3506,7 +3509,7 @@ function renderRescanResults(data) {
         deletedSection.style.display = 'none';
     }
 
-    // Render new files
+    // Render new files with checkboxes
     const newSection = document.getElementById('rescanNewSection');
     const newList = document.getElementById('rescanNewList');
     const newBadge = document.getElementById('rescanNewBadge');
@@ -3514,14 +3517,18 @@ function renderRescanResults(data) {
     if (details.new.length > 0) {
         newSection.style.display = 'block';
         newBadge.textContent = details.new.length;
+        // Reset select all checkbox
+        document.getElementById('rescanSelectAllNew').checked = false;
         newList.innerHTML = details.new.map(file => `
             <div class="list-group-item">
-                <div class="d-flex justify-content-between align-items-start">
+                <div class="d-flex align-items-start">
+                    <input class="form-check-input rescan-new-checkbox me-2 mt-1" type="checkbox"
+                           value="${file.path.replace(/"/g, '&quot;')}">
                     <div class="flex-grow-1">
                         <strong>${file.filename}</strong>
-                        <div class="small text-muted">${file.path}</div>
+                        <div class="small text-muted text-truncate" style="max-width: 400px;" title="${file.path}">${file.path}</div>
                     </div>
-                    <span class="badge bg-light text-dark">${formatFileSize(file.size_bytes)}</span>
+                    <span class="badge bg-light text-dark ms-2">${formatFileSize(file.size_bytes)}</span>
                 </div>
             </div>
         `).join('');
@@ -3564,8 +3571,10 @@ async function applyRescanChanges() {
         .map(cb => parseInt(cb.value));
     const selectedDeleted = Array.from(document.querySelectorAll('.rescan-deleted-checkbox:checked'))
         .map(cb => parseInt(cb.value));
+    const selectedNew = Array.from(document.querySelectorAll('.rescan-new-checkbox:checked'))
+        .map(cb => cb.value);
 
-    if (selectedMoved.length === 0 && selectedDeleted.length === 0) {
+    if (selectedMoved.length === 0 && selectedDeleted.length === 0 && selectedNew.length === 0) {
         showAlert('No changes selected to apply', 'warning');
         return;
     }
@@ -3573,6 +3582,13 @@ async function applyRescanChanges() {
     // Confirm deletion if any files selected for deletion
     if (selectedDeleted.length > 0) {
         if (!confirm(`You are about to delete ${selectedDeleted.length} file(s) from the database. This will also delete any associated proxies and analysis data. Continue?`)) {
+            return;
+        }
+    }
+
+    // Confirm import if many new files selected
+    if (selectedNew.length > 100) {
+        if (!confirm(`You are about to import ${selectedNew.length} files. This may take a while. Continue?`)) {
             return;
         }
     }
@@ -3586,15 +3602,15 @@ async function applyRescanChanges() {
             body: JSON.stringify({
                 directory_path: directoryPath,
                 actions: {
-                    update_moved: true,
-                    delete_missing: true,
-                    import_new: false,
+                    update_moved: selectedMoved.length > 0,
+                    delete_missing: selectedDeleted.length > 0,
+                    import_new: selectedNew.length > 0,
                     handle_ambiguous: 'skip'
                 },
                 selected_files: {
                     moved: selectedMoved,
                     deleted: selectedDeleted,
-                    new: []
+                    new: selectedNew
                 }
             })
         });
@@ -3607,9 +3623,15 @@ async function applyRescanChanges() {
         const data = await response.json();
         const results = data.results;
 
+        // Build result message
+        const parts = [];
+        if (results.updated > 0) parts.push(`${results.updated} updated`);
+        if (results.deleted > 0) parts.push(`${results.deleted} deleted`);
+        if (results.imported > 0) parts.push(`${results.imported} imported`);
+        if (results.errors.length > 0) parts.push(`${results.errors.length} errors`);
+
         showAlert(
-            `Successfully applied changes: ${results.updated} updated, ${results.deleted} deleted` +
-            (results.errors.length > 0 ? `, ${results.errors.length} errors` : ''),
+            `Successfully applied changes: ${parts.join(', ')}`,
             results.errors.length > 0 ? 'warning' : 'success'
         );
 

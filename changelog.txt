@@ -1,3 +1,44 @@
+2026-01-01 16:53:18 - Updated by Claude Code
+
+[Category: Bug Fix / Feature Enhancement]
+Fix folder rescan functionality and add direct file import capability
+
+[Purpose]
+The folder rescan feature had two critical bugs: (1) it compared against the entire database instead of just files from the scanned folder, causing files from other directories to be incorrectly marked as "deleted"; (2) path comparison failed due to Windows backslash vs forward slash mismatches. Additionally, users had to manually run Import Folder to add new files discovered during rescan - now they can import directly.
+
+[Bug Fixes]
+1. Directory scope bug - Rescan now only queries files whose `local_path` is within the scanned directory, not all files in the database
+2. Path normalization - Added `normalize_path()` method to convert backslashes to forward slashes for consistent comparison across Windows/Unix path formats
+3. Applied normalization to both `reconcile()` and `reconcile_with_progress()` methods
+
+[New Feature: Import from Rescan]
+- Added `import_file()` method to RescanService for importing individual files with metadata extraction
+- Updated `apply_changes()` to actually import selected new files instead of skipping them
+- Frontend now shows checkboxes for new files with "Select all" option
+- Users can import files directly from rescan results without running separate Import Folder
+
+[Files Modified]
+- app/database/files.py:413-433 - Added `get_files_by_current_directory()` method for scoped queries
+- app/services/rescan_service.py:23-26 - Added optional `app` parameter to constructor
+- app/services/rescan_service.py:156-159 - Added `normalize_path()` static method
+- app/services/rescan_service.py:85-100 - Updated `get_database_files_for_directory()` to use scoped query
+- app/services/rescan_service.py:185-252 - Applied path normalization in `reconcile()`
+- app/services/rescan_service.py:353-380 - Updated new file handling to call `import_file()`
+- app/services/rescan_service.py:423-504 - Added `import_file()` method
+- app/services/rescan_service.py:542-611 - Applied path normalization in `reconcile_with_progress()`
+- app/routes/file_management/rescan_jobs.py:187-200 - Pass app and directory_path to service
+- app/static/js/file_management.js:113-115 - Added event listener for new files select all
+- app/static/js/file_management.js:3512-3537 - Updated new files rendering with checkboxes
+- app/static/js/file_management.js:3561-3646 - Updated apply function to handle new file imports
+- app/templates/file_management.html:1113-1136 - Added select all checkbox and scrollable list for new files
+
+[Testing]
+- Verified 8608 files correctly matched (vs 0 before fix)
+- Verified 0 false deletions (vs thousands before fix)
+- Verified 8680 genuinely new files identified
+
+---
+
 2025-12-31 17:25:50 - Updated by Claude Code
 
 [Category: Bug Fix]

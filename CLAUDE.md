@@ -63,6 +63,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 ### Folder Rescan & Directory Import
 - Async operations with progress tracking, ETA, cancellation
 - Fingerprint matching preserves analysis data for moved files
+- Rescan can import new files directly (select files → Apply Changes)
 - Endpoints: POST → job_id, GET /status, POST /cancel, POST /apply
 
 ### Search

@@ -1122,9 +1122,15 @@
                             <div class="card-body">
                                 <p class="text-muted small">
                                     These files are on disk but not in the database.
-                                    Use the "Import Directory" feature to add them.
+                                    Select files to import them now.
                                 </p>
-                                <div id="rescanNewList" class="list-group"></div>
+                                <div class="form-check mb-2">
+                                    <input class="form-check-input" type="checkbox" id="rescanSelectAllNew">
+                                    <label class="form-check-label" for="rescanSelectAllNew">
+                                        Select all
+                                    </label>
+                                </div>
+                                <div id="rescanNewList" class="list-group" style="max-height: 300px; overflow-y: auto;"></div>
                             </div>
                         </div>
                     </div>
