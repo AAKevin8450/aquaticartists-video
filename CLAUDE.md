@@ -113,6 +113,7 @@ python -m scripts.reconcile_proxies --no-dry-run --delete-orphans --yes
 python -m scripts.create_image_proxies --no-dry-run --limit 100
 python -m scripts.analyze_nova_failures
 python -m scripts.backfill_image_analysis_results --no-dry-run  # Fix image jobs missing analysis_jobs.results
+python -m scripts.backfill_video_thumbnails --no-dry-run  # Generate thumbnails for existing video proxies
 ```
 
 ## Critical Implementation Notes
@@ -142,3 +143,22 @@ python -m scripts.backfill_image_analysis_results --no-dry-run  # Fix image jobs
 **Dashboard routing** (app/templates/dashboard.html):
 - Uses `analysisType.startsWith('nova')` to handle both 'nova' and 'nova_image'
 - Routes to nova-dashboard.js which detects `content_type` field to render appropriately
+
+### Thumbnail Preview in Nova Dashboard
+**Automatic thumbnail generation for visual preview:**
+
+1. **Video Proxies** (app/routes/upload.py:132-158,579-596):
+   - `_extract_thumbnail_from_proxy()` extracts middle frame using FFmpeg
+   - Saved as `proxy_video/{name}_{file_id}_thumbnail.jpg` (320px wide JPEG)
+   - Stored in `proxy.metadata.thumbnail_path`
+   - Auto-generated during proxy creation
+
+2. **Image Proxies** (app/routes/upload.py:761):
+   - Uses existing proxy image as thumbnail (896px Nova-optimized version)
+   - `metadata.thumbnail_path = proxy_local_path`
+
+3. **Dashboard Display** (app/templates/dashboard.html:374-422, app/static/js/nova-dashboard.js:84-113):
+   - Fetches thumbnail via `/api/files/{file_id}` endpoint
+   - Shows in responsive col-lg-3 card with stats beside it
+   - Clickable to open full proxy in new tab
+   - Auto-hides if no thumbnail available

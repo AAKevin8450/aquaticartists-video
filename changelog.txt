@@ -1,3 +1,103 @@
+2026-01-01 22:09:23 - Updated by Claude Code
+
+[Category: Feature]
+Add thumbnail previews to Nova Analysis dashboard for both images and videos
+
+[Purpose]
+Enhance the Nova Analysis dashboard by adding visual previews of analyzed media. Users can now see image proxies or video thumbnails directly in the dashboard, providing immediate visual context for the analysis results. Thumbnails are clickable to open the full proxy file for detailed viewing.
+
+[Implementation]
+1. **Video Thumbnails** - Automatically extract middle frame from proxy videos as 320px JPEG thumbnails during proxy generation
+2. **Image Thumbnails** - Use existing proxy images (896px Nova-optimized versions) as thumbnails
+3. **Dashboard Display** - Show thumbnail in responsive card layout (col-lg-3) with stats cards beside it
+4. **Database Tracking** - Store thumbnail paths in proxy.metadata JSON (no schema changes required)
+5. **Backfill Support** - Created script to generate thumbnails for existing video proxies
+
+[Changes Made]
+
+**Backend - Proxy Generation** (app/routes/upload.py)
+- Added `_extract_thumbnail_from_proxy()` function (lines 132-158)
+  - Uses FFmpeg to extract middle frame: `-ss <duration/2> -vframes 1 -vf scale=320:-1`
+  - Saves as JPEG in proxy_video/{name}_{file_id}_thumbnail.jpg
+  - Returns bool for success/failure
+- Updated `create_proxy_internal()` to generate video thumbnails (lines 579-596)
+  - Extracts thumbnail after proxy creation and metadata extraction
+  - Uses video duration for midpoint calculation, falls back to 0.5s
+  - Stores thumbnail_path in proxy.metadata dict
+  - Error handling logs failures but continues proxy creation
+- Updated `create_image_proxy_internal()` to store image proxy as thumbnail (line 761)
+  - Sets metadata.thumbnail_path = proxy_local_path for images
+  - Image proxy serves dual purpose (Nova analysis + thumbnail)
+
+**API Layer** (app/routes/file_management/core.py:350)
+- Added `thumbnail_path` field to formatted_proxy response
+- Extracts from `proxy.get('metadata', {}).get('thumbnail_path')`
+- Frontend receives thumbnail path in /api/files/{id} endpoint
+
+**Frontend - Dashboard Template** (app/templates/dashboard.html:374-422)
+- Restructured Nova dashboard layout with thumbnail support
+- Added thumbnail column (col-lg-3) that shows/hides based on availability
+- Stats column adjusts between col-lg-9 (with thumbnail) and col-lg-12 (without)
+- Thumbnail card includes:
+  - Preview image with max-height: 300px, rounded corners, shadow
+  - Label showing "Image Preview" or "Video Thumbnail"
+  - Cursor pointer indicates clickability
+
+**Frontend - Dashboard JavaScript** (app/static/js/nova-dashboard.js)
+- Updated `initNovaDashboard()` to fetch file data (lines 33-47)
+  - Calls /api/files/{file_id} to get proxy data including thumbnail_path
+  - Stores in window.proxyData for access by render functions
+  - Handles fetch errors gracefully with fallback to empty object
+- Added `renderMediaThumbnail()` function (lines 84-113)
+  - Checks for thumbnail_path availability
+  - Shows/hides thumbnail column and adjusts stats column width
+  - Sets thumbnail src to relative path (Flask serves from project root)
+  - Detects content_type to label as "Image Preview" vs "Video Thumbnail"
+  - Adds click handler to open full proxy in new tab (presigned_url or local_path)
+- Called `renderMediaThumbnail()` in `renderNovaDashboard()` (line 66)
+
+**Backfill Script** (scripts/backfill_video_thumbnails.py - NEW)
+- Queries all video proxies: `WHERE is_proxy=1 AND file_type='video' AND local_path IS NOT NULL`
+- For each proxy:
+  - Parses filename to build thumbnail path: {name}_{file_id}_thumbnail.jpg
+  - Calls extract_thumbnail() with duration from database
+  - Updates proxy.metadata JSON with thumbnail_path
+- Supports command-line arguments:
+  - `--no-dry-run` to actually create files (default is dry-run)
+  - `--force` to regenerate existing thumbnails
+  - `--limit N` to process only N proxies
+- Comprehensive error handling and progress reporting
+
+[Files Modified]
+- app/routes/upload.py:132-158,579-596,761 (thumbnail extraction and metadata storage)
+- app/routes/file_management/core.py:350 (API response with thumbnail_path)
+- app/templates/dashboard.html:374-422 (thumbnail card layout)
+- app/static/js/nova-dashboard.js:33-47,66,84-113 (fetch file data and render thumbnail)
+- scripts/backfill_video_thumbnails.py (NEW - backfill script for existing proxies)
+
+[Technical Details]
+- **Video thumbnail extraction**:
+  - FFmpeg command: `ffmpeg -y -i <proxy> -ss <duration/2> -vframes 1 -vf scale=320:-1 -f image2 <thumbnail>`
+  - Timestamp: midpoint of video duration, or 0.5s if duration unavailable
+  - Resolution: 320px width, aspect ratio preserved (-1 for height)
+  - Format: JPEG for optimal file size
+- **Storage pattern**:
+  - Video thumbnails: proxy_video/{name}_{file_id}_thumbnail.jpg
+  - Image thumbnails: Reuse proxy_image/{name}_{file_id}_nova.{ext}
+  - Database: JSON field `files.metadata.thumbnail_path` (no schema changes)
+- **Frontend serving**:
+  - Relative paths work with Flask static file serving from project root
+  - No need for separate thumbnail serving endpoint
+  - S3 presigned URLs generated for proxy viewing when clicked
+
+[Testing]
+- New proxies: Create video/image proxy → verify thumbnail auto-generated
+- Existing proxies: Run `python -m scripts.backfill_video_thumbnails --no-dry-run`
+- Dashboard: View Nova analysis → thumbnail shows with click-to-open functionality
+- Responsive: Thumbnail column hides gracefully when no thumbnail available
+
+---
+
 2026-01-01 20:34:50 - Updated by Claude Code
 
 [Category: Bug Fix]

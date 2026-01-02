@@ -129,6 +129,35 @@ def _create_proxy_video(source_path: str, proxy_path: str):
         raise RuntimeError(result.stderr or 'ffmpeg failed')
 
 
+def _extract_thumbnail_from_proxy(proxy_path: str, thumbnail_path: str, duration_seconds: float = None) -> bool:
+    """
+    Extract middle frame from proxy video as JPEG thumbnail.
+
+    Args:
+        proxy_path: Path to proxy video file
+        thumbnail_path: Where to save thumbnail JPEG
+        duration_seconds: Video duration in seconds (uses midpoint if provided, else 0.5s)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    timestamp = duration_seconds / 2 if duration_seconds else 0.5
+
+    command = [
+        'ffmpeg',
+        '-y',
+        '-i', proxy_path,
+        '-ss', str(timestamp),
+        '-vframes', '1',
+        '-vf', 'scale=320:-1',
+        '-f', 'image2',
+        thumbnail_path
+    ]
+
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    return result.returncode == 0
+
+
 def _get_display_size_bytes(file_record):
     metadata = file_record.get('metadata') or {}
     return metadata.get('original_size_bytes', file_record.get('size_bytes'))
@@ -547,6 +576,25 @@ def create_proxy_internal(file_id: int, force: bool = False, upload_to_s3: bool 
             'bitrate': None
         }
 
+    # Extract thumbnail from proxy video
+    thumbnail_local_path = None
+    try:
+        # Build thumbnail filename: {name}_{file_id}_thumbnail.jpg
+        thumbnail_filename = f"{Path(source_filename).stem}_{file_id}_thumbnail.jpg"
+        thumbnail_dir = Path('proxy_video')
+        thumbnail_dir.mkdir(parents=True, exist_ok=True)
+        thumbnail_path = str(thumbnail_dir / thumbnail_filename)
+
+        # Extract thumbnail using duration from metadata
+        duration = proxy_metadata.get('duration_seconds')
+        if _extract_thumbnail_from_proxy(proxy_path, thumbnail_path, duration):
+            thumbnail_local_path = thumbnail_path
+            current_app.logger.info(f"Thumbnail created: {thumbnail_path}")
+        else:
+            current_app.logger.warning(f"Failed to extract thumbnail for proxy {proxy_filename}")
+    except Exception as e:
+        current_app.logger.error(f"Error extracting thumbnail: {e}", exc_info=True)
+
     # Create proxy file record in database
     proxy_id = db.create_proxy_file(
         source_file_id=file_id,
@@ -564,7 +612,8 @@ def create_proxy_internal(file_id: int, force: bool = False, upload_to_s3: bool 
         bitrate=proxy_metadata.get('bitrate'),
         metadata={
             'proxy_spec': proxy_spec,
-            'uploaded_to_s3': upload_to_s3
+            'uploaded_to_s3': upload_to_s3,
+            'thumbnail_path': thumbnail_local_path
         }
     )
 
@@ -708,7 +757,8 @@ def create_image_proxy_internal(file_id: int, force: bool = False) -> dict:
                 'target_dimension': 896,
                 'was_resized': result['was_resized'],
                 'format': result['format'],
-                'proxy_generated_at': datetime.utcnow().isoformat() + 'Z'
+                'proxy_generated_at': datetime.utcnow().isoformat() + 'Z',
+                'thumbnail_path': proxy_local_path  # Image proxy serves as thumbnail
             },
             file_type='image'
         )

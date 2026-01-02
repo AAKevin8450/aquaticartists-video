@@ -347,6 +347,7 @@ def get_file_details(file_id):
                 'size_display': format_file_size(proxy['size_bytes']),
                 'local_path': proxy.get('local_path'),
                 'presigned_url': presigned_url,
+                'thumbnail_path': proxy.get('metadata', {}).get('thumbnail_path'),
                 'uploaded_at': format_timestamp(proxy['uploaded_at'])
             }
 

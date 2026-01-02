@@ -30,6 +30,22 @@ export async function initNovaDashboard(jobId) {
         console.log('novaResults is array?', Array.isArray(novaResults));
         console.log('novaResults keys:', Object.keys(novaResults));
 
+        // Fetch file data to get thumbnail
+        try {
+            const fileResponse = await fetch(`/api/files/${jobData.file_id}`);
+            if (fileResponse.ok) {
+                const fileData = await fileResponse.json();
+                window.proxyData = fileData.proxy || {};
+                console.log('Proxy data:', window.proxyData);
+            } else {
+                console.warn('Failed to fetch file data for thumbnail');
+                window.proxyData = {};
+            }
+        } catch (error) {
+            console.error('Error fetching file data:', error);
+            window.proxyData = {};
+        }
+
         renderNovaDashboard();
 
         document.getElementById('loadingState').classList.add('d-none');
@@ -47,6 +63,7 @@ function renderNovaDashboard() {
     const contentType = novaResults.content_type || 'video';
     console.log('Content type:', contentType);
 
+    renderMediaThumbnail();
     renderNovaStats();
 
     if (contentType === 'image') {
@@ -62,6 +79,37 @@ function renderNovaDashboard() {
     }
 
     renderComparison();
+}
+
+function renderMediaThumbnail() {
+    const thumbnailColumn = document.getElementById('thumbnailColumn');
+    const statsColumn = document.getElementById('statsColumn');
+    const thumbImg = document.getElementById('novaMediaThumbnail');
+    const thumbType = document.getElementById('thumbnailType');
+
+    const thumbnailPath = window.proxyData?.thumbnail_path;
+    if (!thumbnailPath) {
+        // No thumbnail available - hide column and expand stats
+        thumbnailColumn.style.display = 'none';
+        statsColumn.className = 'col-lg-12';
+        return;
+    }
+
+    // Show thumbnail column and adjust stats column
+    thumbnailColumn.style.display = '';
+    statsColumn.className = 'col-lg-9';
+    thumbImg.src = thumbnailPath;
+
+    const contentType = novaResults.content_type || 'video';
+    thumbType.textContent = contentType === 'image' ? 'Image Preview' : 'Video Thumbnail';
+
+    // Click handler to open full proxy
+    thumbImg.onclick = () => {
+        const proxyUrl = window.proxyData?.presigned_url || window.proxyData?.local_path;
+        if (proxyUrl) {
+            window.open(proxyUrl, '_blank');
+        }
+    };
 }
 
 function renderNovaStats() {
