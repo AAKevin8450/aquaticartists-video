@@ -51,7 +51,10 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 
 ### Frontend
 - **Primary UI**: file_management.html (unified file browser with batch operations)
-- **JS**: file_management.js, search.js, dashboard.js, reports.js
+- **JS**: file_management.js, search.js, dashboard.js, nova-dashboard.js, reports.js
+- **Dashboards**:
+  - dashboard.html routes to nova-dashboard.js for 'nova' and 'nova_image' analysis types
+  - nova-dashboard.js handles both video (summary/chapters) and image (description/metadata) rendering
 - **Reports**: reports.html (Nova costs + AWS billing breakdown)
 
 ## Key Features
@@ -91,7 +94,9 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 ## Database Tables
 - **files**: Metadata (duration, resolution, codec, bitrate)
 - **transcripts**: Text, segments, transcript_summary
-- **nova_jobs**: Results (summary/chapters/elements/waterfall/description), search_metadata, raw_response, content_type (video/image)
+- **analysis_jobs**: Job tracking (job_id, status, **results** - compiled for dashboard display)
+- **nova_jobs**: Raw results (summary/chapters/elements/waterfall/description), search_metadata, raw_response, content_type (video/image)
+  - ⚠️ **Important**: Image analysis must populate BOTH nova_jobs (raw) AND analysis_jobs.results (compiled) for dashboard display
 - **nova_embeddings**: sqlite-vec vectors
 - **billing_cache/billing_cache_details**: Cost aggregation by service/operation/date
 - **rescan_jobs/import_jobs**: Async job tracking
@@ -107,4 +112,33 @@ python -m scripts.backfill_transcript_summaries --dry-run
 python -m scripts.reconcile_proxies --no-dry-run --delete-orphans --yes
 python -m scripts.create_image_proxies --no-dry-run --limit 100
 python -m scripts.analyze_nova_failures
+python -m scripts.backfill_image_analysis_results --no-dry-run  # Fix image jobs missing analysis_jobs.results
 ```
+
+## Critical Implementation Notes
+
+### Nova Image Analysis Results Storage
+**Must populate both tables for dashboard display:**
+
+1. **nova_jobs table** (raw storage):
+   - description_result, elements_result, waterfall_classification_result, search_metadata
+   - Stored as JSON strings
+
+2. **analysis_jobs.results** (compiled for dashboard):
+   ```python
+   compiled_results = {
+       'content_type': 'image',
+       'model': model,
+       'analysis_types': analysis_types,
+       'totals': {'tokens_total', 'cost_total_usd', 'processing_time_seconds'},
+       'description': {...},
+       'elements': {...},
+       'waterfall_classification': {...},
+       'metadata': {...}
+   }
+   db.update_analysis_job(analysis_job_id, status='COMPLETED', results=compiled_results)
+   ```
+
+**Dashboard routing** (app/templates/dashboard.html):
+- Uses `analysisType.startsWith('nova')` to handle both 'nova' and 'nova_image'
+- Routes to nova-dashboard.js which detects `content_type` field to render appropriately

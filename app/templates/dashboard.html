@@ -556,7 +556,8 @@
     const analysisType = '{{ job.analysis_type if job else "" }}'.toLowerCase();
 
     if (jobId && jobId !== 'None') {
-        if (analysisType === 'nova') {
+        // Check if it's a Nova job (handles both 'nova' and 'nova_image')
+        if (analysisType.startsWith('nova')) {
             NovaDashboard.initNovaDashboard(jobId);
         } else {
             Dashboard.initDashboard(jobId);
@@ -570,7 +571,7 @@
     // Export button handlers
     document.getElementById('exportExcelBtn').addEventListener('click', (e) => {
         e.preventDefault();
-        if (analysisType === 'nova') {
+        if (analysisType.startsWith('nova')) {
             NovaDashboard.exportResults(jobId, 'excel');
         } else {
             Dashboard.exportResults(jobId, 'excel');
@@ -579,7 +580,7 @@
 
     document.getElementById('exportJsonBtn').addEventListener('click', (e) => {
         e.preventDefault();
-        if (analysisType === 'nova') {
+        if (analysisType.startsWith('nova')) {
             NovaDashboard.exportResults(jobId, 'json');
         } else {
             Dashboard.exportResults(jobId, 'json');

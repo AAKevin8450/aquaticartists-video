@@ -1,3 +1,111 @@
+2026-01-01 20:34:50 - Updated by Claude Code
+
+[Category: Bug Fix]
+Fix Nova image analysis display - results were stored but not shown to users
+
+[Purpose]
+Thousands of image analysis jobs (6,209 completed) were processed and stored in the database, but the dashboard showed no results. This was caused by a storage format mismatch between video and image Nova analysis, where image results were stored in `nova_jobs` table but not compiled into `analysis_jobs.results` which the dashboard reads. Additionally, the dashboard router was sending image jobs to the wrong dashboard component, and the image-specific data structures caused JavaScript errors.
+
+[Root Cause]
+1. **Storage Mismatch**: Video Nova analysis compiled results into `analysis_jobs.results` for dashboard display, but image analysis only stored raw data in `nova_jobs` table (description_result, elements_result, etc.) without compiling into dashboard format
+2. **Wrong Dashboard Router**: Template checked `analysisType === 'nova'` which only matched video jobs ('nova'), not image jobs ('nova_image'), routing images to generic dashboard.js
+3. **Data Structure Differences**: Image elements are arrays of strings, video elements are arrays of objects - calling `.map(item => item.name)` on string arrays caused TypeError
+
+[Changes Made]
+1. **Backend - Compile Image Results** (app/routes/nova_image_analysis.py:179-201)
+   - Added result compilation matching video analysis format
+   - Creates `compiled_results` dict with content_type='image', model, analysis_types, totals
+   - Stores in `analysis_jobs.results` for dashboard consumption
+   - All new image analyses will automatically work
+
+2. **Backend - Backfill Script** (scripts/backfill_image_analysis_results.py)
+   - Created backfill script to fix 6,209 existing image jobs
+   - Queries image jobs where `analysis_jobs.results IS NULL`
+   - Compiles results from nova_jobs fields (description_result, elements_result, etc.)
+   - Successfully updated all 6,209 jobs with 0 errors
+
+3. **Frontend - Dashboard Router** (app/templates/dashboard.html:560,574,583)
+   - Changed `analysisType === 'nova'` to `analysisType.startsWith('nova')`
+   - Now correctly routes both 'nova' (video) and 'nova_image' (image) to nova-dashboard.js
+   - Fixed export button handlers to use same check
+
+4. **Frontend - Image-Specific Rendering** (app/static/js/nova-dashboard.js)
+   - Added `renderImageDescription()` - displays overview, detailed description, scene_type, primary_subject
+   - Added `renderImageMetadata()` - displays date/time, location, GPS, people, objects, activities, tags with source attribution
+   - Added `renderImageElements()` - handles image element structure (equipment, objects, structures, text_visible arrays)
+   - Updated `renderNovaDashboard()` - detects content_type and routes to image vs video renderers
+   - Added Array.isArray() checks before all .map() calls to prevent TypeErrors
+   - Cards hide automatically when content not applicable (chapters for images, etc.)
+
+[Files Modified]
+- app/routes/nova_image_analysis.py:179-201 - Added result compilation for dashboard
+- scripts/backfill_image_analysis_results.py - New backfill script (6,209 jobs updated)
+- app/templates/dashboard.html:560,574,583 - Fixed router to handle 'nova_image' type
+- app/static/js/nova-dashboard.js:40-247,326-487 - Added image rendering functions with safety checks
+
+[Technical Details]
+- Image analysis results structure:
+  ```
+  {
+    content_type: 'image',
+    model: 'lite',
+    analysis_types: ['description', 'elements', 'metadata'],
+    totals: {tokens_total, cost_total_usd, processing_time_seconds},
+    description: {overview, detailed, scene_type, primary_subject},
+    elements: {equipment: [], objects: [], structures: [], people: {}, text_visible: []},
+    metadata: {date, time, location, people: [], objects: [], activities: [], tags: []},
+    waterfall_classification: {...}
+  }
+  ```
+- Video elements are objects with {name, category, time_ranges}, image elements are simple string arrays
+- Backfill took ~15 seconds to update 6,209 records
+- All metadata fields include source attribution (path/filename/transcript/visual/exif) and confidence scores
+
+[Verification]
+- Queried 3 sample jobs - all show populated results with descriptions, totals, correct structure
+- Total image jobs with results: 6,209 (100% success rate)
+- Dashboard now displays: Image Description, Detected Elements, Extracted Metadata, Waterfall Classification, Cost/Token Statistics
+
+[Impact]
+✅ All 6,209 previously "invisible" image analyses are now viewable
+✅ New image analyses automatically work with fixed code
+✅ Dashboard correctly renders image-specific data (no more TypeErrors)
+✅ Users can now see the full value of their image analysis processing
+
+---
+
+2026-01-01 18:52:32 - Updated by Claude Code
+
+[Category: Bug Fix]
+Unify file extension filtering between Rescan Folder and Import Folder
+
+[Purpose]
+Import Folder was missing files that Rescan Folder found because the two features used different file extension lists. Rescan had hardcoded extensions including `.m4v` and `.tiff`, while Import used the app config which was missing these two extensions. This caused inconsistent behavior where files would appear in Rescan results but be skipped during Import.
+
+[Root Cause]
+- Rescan Service hardcoded: `.mp4`, `.mov`, `.avi`, `.mkv`, `.flv`, `.wmv`, `.webm`, `.m4v` (video) and `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff`, `.webp` (image)
+- App Config had: `mp4`, `mov`, `avi`, `mkv`, `wmv`, `flv`, `webm` (video) and `jpg`, `jpeg`, `png`, `gif`, `bmp`, `webp` (image)
+- Missing from config: `m4v` (video), `tiff` (image)
+
+[Changes]
+1. Added missing extensions to centralized config
+2. Updated Rescan Service to use app config instead of hardcoded values
+3. Fixed pre-existing bug where `import_file()` fallback defaults used dot-prefixed extensions but `get_file_type()` expects no dots
+
+[Files Modified]
+- app/config.py:52-53 - Added `m4v` to ALLOWED_VIDEO_EXTENSIONS, `tiff` to ALLOWED_IMAGE_EXTENSIONS
+- app/services/rescan_service.py:53-64 - `scan_directory()` now uses app config with fallback defaults
+- app/services/rescan_service.py:458-466 - `import_file()` fallback defaults corrected to no-dot format
+- app/services/rescan_service.py:549-560 - `scan_directory_with_progress()` now uses app config with fallback defaults
+
+[Technical Details]
+- Both services now use the same centralized extension list from config.py
+- Fallback defaults ensure functionality even without app context
+- Extensions are stored without dots in config (e.g., `mp4` not `.mp4`)
+- Rescan adds dot prefix when building supported_extensions set for Path.suffix comparison
+
+---
+
 2026-01-01 17:40:20 - Updated by Claude Code
 
 [Category: Feature Enhancement]

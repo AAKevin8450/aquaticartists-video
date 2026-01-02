@@ -175,7 +175,30 @@ def start_image_analysis():
 
             db.update_nova_job(nova_job_id, update_data)
             db.update_nova_job_completed_at(nova_job_id)
-            db.update_analysis_job(analysis_job_id, status='COMPLETED')
+
+            # Compile results for dashboard display (matching video analysis format)
+            compiled_results = {
+                'content_type': 'image',
+                'model': model,
+                'analysis_types': analysis_types,
+                'totals': {
+                    'tokens_total': result['tokens_total'],
+                    'cost_total_usd': result['cost_usd'],
+                    'processing_time_seconds': result['processing_time_seconds']
+                }
+            }
+
+            # Add analysis results
+            if 'description' in results:
+                compiled_results['description'] = results['description']
+            if 'elements' in results:
+                compiled_results['elements'] = results['elements']
+            if 'waterfall_classification' in results:
+                compiled_results['waterfall_classification'] = results['waterfall_classification']
+            if 'metadata' in results:
+                compiled_results['metadata'] = results['metadata']
+
+            db.update_analysis_job(analysis_job_id, status='COMPLETED', results=compiled_results)
 
             logger.info(f"Image analysis completed: job={nova_job_id}, cost=${result['cost_usd']:.6f}")
 

@@ -15,6 +15,7 @@ export async function initNovaDashboard(jobId) {
         }
 
         jobData = await response.json();
+        console.log('Received jobData:', jobData);
 
         if (jobData.status !== 'SUCCEEDED' && jobData.status !== 'COMPLETED') {
             showError(`Job status: ${jobData.status}. Dashboard only available for completed jobs.`);
@@ -25,6 +26,9 @@ export async function initNovaDashboard(jobId) {
             `${jobData.analysis_type_display} - ${jobData.file_name}`;
 
         novaResults = jobData.results || {};
+        console.log('novaResults type:', typeof novaResults);
+        console.log('novaResults is array?', Array.isArray(novaResults));
+        console.log('novaResults keys:', Object.keys(novaResults));
 
         renderNovaDashboard();
 
@@ -33,16 +37,30 @@ export async function initNovaDashboard(jobId) {
         document.getElementById('novaDashboardContent').classList.remove('d-none');
     } catch (error) {
         console.error('Nova dashboard initialization error:', error);
+        console.error('Error stack:', error.stack);
         showError(error.message);
     }
 }
 
 function renderNovaDashboard() {
+    console.log('renderNovaDashboard called with novaResults:', novaResults);
+    const contentType = novaResults.content_type || 'video';
+    console.log('Content type:', contentType);
+
     renderNovaStats();
-    renderSummary();
-    renderWaterfallClassification();
-    renderChapters();
-    renderElements();
+
+    if (contentType === 'image') {
+        renderImageDescription();
+        renderWaterfallClassification();
+        renderImageMetadata();
+        renderElements();
+    } else {
+        renderSummary();
+        renderWaterfallClassification();
+        renderChapters();
+        renderElements();
+    }
+
     renderComparison();
 }
 
@@ -79,12 +97,14 @@ function renderSummary() {
     const summary = novaResults.summary || null;
     const summaryContent = document.getElementById('novaSummaryContent');
     const summaryMeta = document.getElementById('novaSummaryMeta');
+    const summaryCard = document.getElementById('novaSummaryContent')?.closest('.card');
 
     if (!summary) {
-        summaryContent.textContent = 'No summary available.';
-        summaryMeta.innerHTML = '';
+        if (summaryCard) summaryCard.style.display = 'none';
         return;
     }
+
+    if (summaryCard) summaryCard.style.display = '';
 
     summaryContent.textContent = summary.text || 'No summary text returned.';
 
@@ -96,6 +116,141 @@ function renderSummary() {
     summaryMeta.innerHTML = metaParts.length
         ? `<span class="badge bg-light text-dark me-2">${metaParts.join('</span><span class="badge bg-light text-dark me-2">')}</span>`
         : '';
+}
+
+function renderImageDescription() {
+    const description = novaResults.description || null;
+    const summaryContent = document.getElementById('novaSummaryContent');
+    const summaryMeta = document.getElementById('novaSummaryMeta');
+    const summaryCard = document.getElementById('novaSummaryContent')?.closest('.card');
+    const summaryHeader = summaryCard?.querySelector('.card-header h5');
+
+    if (!description) {
+        if (summaryCard) summaryCard.style.display = 'none';
+        return;
+    }
+
+    if (summaryCard) summaryCard.style.display = '';
+    if (summaryHeader) summaryHeader.textContent = 'Image Description';
+
+    // Build description text from structured fields
+    let descriptionText = '';
+    if (description.overview) {
+        descriptionText += `Overview:\n${description.overview}\n\n`;
+    }
+    if (description.detailed) {
+        descriptionText += `Detailed Description:\n${description.detailed}\n\n`;
+    }
+    if (description.scene_type) {
+        descriptionText += `Scene Type: ${description.scene_type}\n`;
+    }
+    if (description.primary_subject) {
+        descriptionText += `Primary Subject: ${description.primary_subject}\n`;
+    }
+    if (description.composition_notes) {
+        descriptionText += `Composition: ${description.composition_notes}\n`;
+    }
+
+    summaryContent.textContent = descriptionText || 'No description available.';
+
+    const metaParts = [];
+    if (description.scene_type) metaParts.push(`Scene: ${description.scene_type}`);
+    if (description.primary_subject) metaParts.push(`Subject: ${description.primary_subject}`);
+
+    summaryMeta.innerHTML = metaParts.length
+        ? `<span class="badge bg-light text-dark me-2">${metaParts.join('</span><span class="badge bg-light text-dark me-2">')}</span>`
+        : '';
+}
+
+function renderImageMetadata() {
+    const metadata = novaResults.metadata || null;
+    const chaptersContainer = document.getElementById('novaChaptersList');
+    const chaptersCard = chaptersContainer?.closest('.card');
+    const chaptersHeader = chaptersCard?.querySelector('.card-header h5');
+
+    if (!metadata) {
+        if (chaptersCard) chaptersCard.style.display = 'none';
+        return;
+    }
+
+    if (chaptersCard) chaptersCard.style.display = '';
+    if (chaptersHeader) chaptersHeader.textContent = 'Extracted Metadata';
+
+    // Render metadata as structured list
+    let metadataHtml = '<div class="list-group list-group-flush">';
+
+    // Date and Time
+    if (metadata.date || metadata.time) {
+        metadataHtml += '<div class="list-group-item">';
+        metadataHtml += '<strong>Date & Time</strong><br>';
+        if (metadata.date) metadataHtml += `Date: ${escapeHtml(metadata.date)}<br>`;
+        if (metadata.time) metadataHtml += `Time: ${escapeHtml(metadata.time)}`;
+        if (metadata.date_source) metadataHtml += ` <span class="badge bg-info text-dark">${escapeHtml(metadata.date_source)}</span>`;
+        metadataHtml += '</div>';
+    }
+
+    // Location
+    if (metadata.location || metadata.latitude || metadata.longitude) {
+        metadataHtml += '<div class="list-group-item">';
+        metadataHtml += '<strong>Location</strong><br>';
+        if (metadata.location) metadataHtml += `${escapeHtml(metadata.location)}<br>`;
+        if (metadata.latitude && metadata.longitude) {
+            metadataHtml += `GPS: ${metadata.latitude.toFixed(6)}, ${metadata.longitude.toFixed(6)}`;
+            if (metadata.location_source) metadataHtml += ` <span class="badge bg-info text-dark">${escapeHtml(metadata.location_source)}</span>`;
+        }
+        metadataHtml += '</div>';
+    }
+
+    // People
+    if (metadata.people && Array.isArray(metadata.people) && metadata.people.length > 0) {
+        metadataHtml += '<div class="list-group-item">';
+        metadataHtml += '<strong>People</strong><br>';
+        metadataHtml += metadata.people.map(p => escapeHtml(p)).join(', ');
+        if (metadata.people_source) metadataHtml += ` <span class="badge bg-info text-dark">${escapeHtml(metadata.people_source)}</span>`;
+        metadataHtml += '</div>';
+    }
+
+    // Objects/Subjects
+    if (metadata.objects && Array.isArray(metadata.objects) && metadata.objects.length > 0) {
+        metadataHtml += '<div class="list-group-item">';
+        metadataHtml += '<strong>Objects</strong><br>';
+        metadataHtml += metadata.objects.map(o => escapeHtml(o)).join(', ');
+        if (metadata.objects_source) metadataHtml += ` <span class="badge bg-info text-dark">${escapeHtml(metadata.objects_source)}</span>`;
+        metadataHtml += '</div>';
+    }
+
+    // Activities/Actions
+    if (metadata.activities && Array.isArray(metadata.activities) && metadata.activities.length > 0) {
+        metadataHtml += '<div class="list-group-item">';
+        metadataHtml += '<strong>Activities</strong><br>';
+        metadataHtml += metadata.activities.map(a => escapeHtml(a)).join(', ');
+        if (metadata.activities_source) metadataHtml += ` <span class="badge bg-info text-dark">${escapeHtml(metadata.activities_source)}</span>`;
+        metadataHtml += '</div>';
+    }
+
+    // Environment/Setting
+    if (metadata.environment) {
+        metadataHtml += '<div class="list-group-item">';
+        metadataHtml += `<strong>Environment:</strong> ${escapeHtml(metadata.environment)}`;
+        if (metadata.environment_source) metadataHtml += ` <span class="badge bg-info text-dark">${escapeHtml(metadata.environment_source)}</span>`;
+        metadataHtml += '</div>';
+    }
+
+    // Tags
+    if (metadata.tags && Array.isArray(metadata.tags) && metadata.tags.length > 0) {
+        metadataHtml += '<div class="list-group-item">';
+        metadataHtml += '<strong>Tags</strong><br>';
+        metadataHtml += metadata.tags.map(t => `<span class="badge bg-secondary me-1">${escapeHtml(t)}</span>`).join('');
+        metadataHtml += '</div>';
+    }
+
+    metadataHtml += '</div>';
+
+    if (metadataHtml === '<div class="list-group list-group-flush"></div>') {
+        chaptersContainer.innerHTML = '<p class="text-muted">No metadata extracted.</p>';
+    } else {
+        chaptersContainer.innerHTML = metadataHtml;
+    }
 }
 
 function renderWaterfallClassification() {
@@ -143,13 +298,17 @@ function renderWaterfallClassification() {
 
 function renderChapters() {
     const chaptersContainer = document.getElementById('novaChaptersList');
+    const chaptersCard = chaptersContainer?.closest('.card');
     const chaptersResult = novaResults.chapters || {};
-    const chapters = chaptersResult.chapters || [];
+    const chapters = Array.isArray(chaptersResult.chapters) ? chaptersResult.chapters :
+                     (Array.isArray(chaptersResult) ? chaptersResult : []);
 
-    if (!chapters.length) {
-        chaptersContainer.innerHTML = '<p class="text-muted">No chapters detected.</p>';
+    if (!Array.isArray(chapters) || !chapters.length) {
+        if (chaptersCard) chaptersCard.style.display = 'none';
         return;
     }
+
+    if (chaptersCard) chaptersCard.style.display = '';
 
     const chapterCards = chapters.map((chapter) => {
         const start = chapter.start_time || '--';
@@ -174,18 +333,96 @@ function renderChapters() {
 
 function renderElements() {
     const elements = novaResults.elements || {};
-    renderEquipment(elements.equipment || []);
-    renderTopics(elements.topics_discussed || []);
-    renderSpeakers(elements.speakers || [], elements.people || {});
+    const contentType = novaResults.content_type || 'video';
+
+    if (contentType === 'image') {
+        renderImageElements(elements);
+    } else {
+        renderEquipment(elements.equipment || []);
+        renderTopics(elements.topics_discussed || []);
+        renderSpeakers(elements.speakers || [], elements.people || {});
+    }
+}
+
+function renderImageElements(elements) {
+    const tableBody = document.getElementById('novaEquipmentTable');
+    const equipmentCard = tableBody?.closest('.card');
+    const equipmentHeader = equipmentCard?.querySelector('.card-header h5');
+
+    if (equipmentHeader) equipmentHeader.textContent = 'Detected Elements';
+
+    // Build combined list of all detected elements
+    const elementsList = [];
+
+    if (elements.equipment && Array.isArray(elements.equipment) && elements.equipment.length > 0) {
+        elementsList.push({
+            category: 'Equipment',
+            items: elements.equipment
+        });
+    }
+
+    if (elements.objects && Array.isArray(elements.objects) && elements.objects.length > 0) {
+        elementsList.push({
+            category: 'Objects',
+            items: elements.objects
+        });
+    }
+
+    if (elements.structures && Array.isArray(elements.structures) && elements.structures.length > 0) {
+        elementsList.push({
+            category: 'Structures',
+            items: elements.structures
+        });
+    }
+
+    if (elements.text_visible && Array.isArray(elements.text_visible) && elements.text_visible.length > 0) {
+        elementsList.push({
+            category: 'Text/Labels',
+            items: elements.text_visible
+        });
+    }
+
+    if (elementsList.length === 0) {
+        tableBody.innerHTML = '<tr><td class="text-muted">No elements detected.</td></tr>';
+        return;
+    }
+
+    // Render as simplified table
+    tableBody.innerHTML = elementsList.map(group => `
+        <tr>
+            <td><strong>${escapeHtml(group.category)}</strong></td>
+            <td>${group.items.map(item => escapeHtml(item)).join(', ')}</td>
+        </tr>
+    `).join('');
+
+    // Hide topics and speakers sections for images
+    const topicsCard = document.getElementById('novaTopicsTable')?.closest('.card');
+    const speakersCard = document.getElementById('novaSpeakersTable')?.closest('.card');
+    if (topicsCard) topicsCard.style.display = 'none';
+    if (speakersCard) speakersCard.style.display = 'none';
+
+    // Show people info if available
+    if (elements.people) {
+        const peopleSummary = document.getElementById('novaPeopleSummary');
+        if (peopleSummary) {
+            peopleSummary.innerHTML = `
+                <div class="mb-2"><strong>People in Image:</strong> ${elements.people.count || 0}</div>
+                ${elements.people.description ? `<div class="mb-2">${escapeHtml(elements.people.description)}</div>` : ''}
+            `;
+        }
+    }
 }
 
 function renderEquipment(equipment) {
     const tableBody = document.getElementById('novaEquipmentTable');
+    const equipmentCard = tableBody?.closest('.card');
 
-    if (!equipment.length) {
-        tableBody.innerHTML = '<tr><td colspan="4" class="text-muted">No equipment detected.</td></tr>';
+    if (!Array.isArray(equipment) || !equipment.length) {
+        if (equipmentCard) equipmentCard.style.display = 'none';
         return;
     }
+
+    if (equipmentCard) equipmentCard.style.display = '';
 
     tableBody.innerHTML = equipment.map(item => {
         const timeRanges = (item.time_ranges || []).join(', ');
@@ -203,11 +440,14 @@ function renderEquipment(equipment) {
 
 function renderTopics(topics) {
     const tableBody = document.getElementById('novaTopicsTable');
+    const topicsCard = tableBody?.closest('.card');
 
-    if (!topics.length) {
-        tableBody.innerHTML = '<tr><td colspan="3" class="text-muted">No topics detected.</td></tr>';
+    if (!Array.isArray(topics) || !topics.length) {
+        if (topicsCard) topicsCard.style.display = 'none';
         return;
     }
+
+    if (topicsCard) topicsCard.style.display = '';
 
     tableBody.innerHTML = topics.map(topic => {
         const timeRanges = (topic.time_ranges || []).join(', ');
@@ -223,18 +463,23 @@ function renderTopics(topics) {
 
 function renderSpeakers(speakers, people) {
     const tableBody = document.getElementById('novaSpeakersTable');
+    const speakersCard = tableBody?.closest('.card');
     const peopleSummary = document.getElementById('novaPeopleSummary');
 
-    const maxCount = people.max_count ?? 'n/a';
-    const multiple = people.multiple_speakers ? 'Yes' : 'No';
-    peopleSummary.innerHTML = `
-        <div class="mb-2"><strong>Max People On Screen:</strong> ${maxCount}</div>
-        <div class="mb-2"><strong>Multiple Speakers:</strong> ${multiple}</div>
-    `;
-
-    if (!speakers.length) {
-        tableBody.innerHTML = '<tr><td colspan="3" class="text-muted">No speakers detected.</td></tr>';
+    if (!Array.isArray(speakers) || !speakers.length) {
+        if (speakersCard) speakersCard.style.display = 'none';
         return;
+    }
+
+    if (speakersCard) speakersCard.style.display = '';
+
+    const maxCount = people?.max_count ?? 'n/a';
+    const multiple = people?.multiple_speakers ? 'Yes' : 'No';
+    if (peopleSummary) {
+        peopleSummary.innerHTML = `
+            <div class="mb-2"><strong>Max People On Screen:</strong> ${maxCount}</div>
+            <div class="mb-2"><strong>Multiple Speakers:</strong> ${multiple}</div>
+        `;
     }
 
     tableBody.innerHTML = speakers.map(speaker => {

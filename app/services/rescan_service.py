@@ -50,10 +50,18 @@ class RescanService:
         if not directory.is_dir():
             raise ValueError(f"Path is not a directory: {directory_path}")
 
-        # Supported video and image extensions
-        video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.flv', '.wmv', '.webm', '.m4v'}
-        image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'}
-        supported_extensions = video_extensions | image_extensions
+        # Get allowed extensions from app config or use defaults
+        if self.app:
+            allowed_video = self.app.config.get('ALLOWED_VIDEO_EXTENSIONS',
+                {'mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm', 'm4v'})
+            allowed_image = self.app.config.get('ALLOWED_IMAGE_EXTENSIONS',
+                {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'})
+        else:
+            allowed_video = {'mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm', 'm4v'}
+            allowed_image = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'}
+
+        # Build supported extensions set (config uses no dots, add dot prefix)
+        supported_extensions = {f'.{ext}' for ext in allowed_video | allowed_image}
 
         # Scan directory
         pattern = '**/*' if recursive else '*'
@@ -447,15 +455,15 @@ class RescanService:
         abs_path = os.path.abspath(file_path)
         filename = os.path.basename(abs_path)
 
-        # Get allowed extensions from app config or use defaults
+        # Get allowed extensions from app config or use defaults (no dots, as get_file_type expects)
         if self.app:
             allowed_video = self.app.config.get('ALLOWED_VIDEO_EXTENSIONS',
-                {'.mp4', '.mov', '.avi', '.mkv', '.flv', '.wmv', '.webm', '.m4v'})
+                {'mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm', 'm4v'})
             allowed_image = self.app.config.get('ALLOWED_IMAGE_EXTENSIONS',
-                {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'})
+                {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'})
         else:
-            allowed_video = {'.mp4', '.mov', '.avi', '.mkv', '.flv', '.wmv', '.webm', '.m4v'}
-            allowed_image = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'}
+            allowed_video = {'mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm', 'm4v'}
+            allowed_image = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'}
 
         # Validate file type
         try:
@@ -538,10 +546,18 @@ class RescanService:
         if not directory.is_dir():
             raise ValueError(f"Path is not a directory: {directory_path}")
 
-        # Supported video and image extensions
-        video_extensions = {'.mp4', '.mov', '.avi', '.mkv', '.flv', '.wmv', '.webm', '.m4v'}
-        image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp'}
-        supported_extensions = video_extensions | image_extensions
+        # Get allowed extensions from app config or use defaults
+        if self.app:
+            allowed_video = self.app.config.get('ALLOWED_VIDEO_EXTENSIONS',
+                {'mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm', 'm4v'})
+            allowed_image = self.app.config.get('ALLOWED_IMAGE_EXTENSIONS',
+                {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'})
+        else:
+            allowed_video = {'mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'webm', 'm4v'}
+            allowed_image = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'}
+
+        # Build supported extensions set (config uses no dots, add dot prefix)
+        supported_extensions = {f'.{ext}' for ext in allowed_video | allowed_image}
 
         # Scan directory
         pattern = '**/*' if recursive else '*'
