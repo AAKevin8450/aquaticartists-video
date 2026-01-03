@@ -605,11 +605,13 @@ def get_nova_status(nova_job_id):
                 })
 
             if batch_state in ('COMPLETED', 'SUCCEEDED'):
+                options = _ensure_json_dict(job.get('user_options'))
                 results = nova_service.fetch_batch_results(
                     s3_prefix=job.get('batch_output_s3_prefix', ''),
                     model=job['model'],
                     analysis_types=_ensure_json_list(job.get('analysis_types')),
-                    options=_ensure_json_dict(job.get('user_options'))
+                    options=options,
+                    record_prefix=options.get('batch_record_prefix')
                 )
 
                 update_data = {

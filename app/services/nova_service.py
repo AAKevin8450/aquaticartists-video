@@ -8,6 +8,7 @@ import json
 import boto3
 import time
 import logging
+from botocore.exceptions import ClientError
 from botocore.config import Config
 from typing import Dict, Any, Optional, List, Tuple, Callable
 from datetime import datetime
@@ -287,7 +288,8 @@ class NovaVideoService:
         }
 
     def _build_batch_records(self, s3_key: str, analysis_types: List[str],
-                             options: Dict[str, Any]) -> List[Dict[str, Any]]:
+                             options: Dict[str, Any],
+                             record_prefix: Optional[str] = None) -> List[Dict[str, Any]]:
         """Build batch records for Nova batch inference."""
         requested_types, _, _ = self._resolve_analysis_types(analysis_types)
         s3_uri = self._build_s3_uri(s3_key)
@@ -317,8 +319,11 @@ class NovaVideoService:
             prompt = prompt_map.get(analysis_type)
             if not prompt:
                 continue
+            record_id = analysis_type
+            if record_prefix:
+                record_id = f"{record_prefix}{analysis_type}"
             records.append({
-                'recordId': analysis_type,
+                'recordId': record_id,
                 'modelInput': {
                     'messages': [
                         {
@@ -444,12 +449,28 @@ class NovaVideoService:
                              output_prefix: str,
                              job_name: str) -> Dict[str, Any]:
         """Submit a Nova batch inference job."""
+        records = self._build_batch_records(s3_key, analysis_types, options)
+        return self.start_batch_analysis_records(
+            records=records,
+            model=model,
+            role_arn=role_arn,
+            input_prefix=input_prefix,
+            output_prefix=output_prefix,
+            job_name=job_name
+        )
+
+    @handle_bedrock_errors
+    def start_batch_analysis_records(self, records: List[Dict[str, Any]], model: str,
+                                     role_arn: str, input_prefix: str, output_prefix: str,
+                                     job_name: str) -> Dict[str, Any]:
+        """Submit a Nova batch inference job using pre-built records."""
         if not role_arn:
             raise NovaError("BEDROCK_BATCH_ROLE_ARN is required for batch processing.")
+        if not records:
+            raise NovaError("No batch records provided for submission.")
 
         config = self.get_model_config(model)
         runtime_model_id = config.get('inference_profile_id', config['id'])
-        records = self._build_batch_records(s3_key, analysis_types, options)
 
         input_prefix = self._normalize_s3_prefix(input_prefix)
         output_prefix = self._normalize_s3_prefix(output_prefix)
@@ -465,13 +486,36 @@ class NovaVideoService:
             ContentType='application/json'
         )
 
-        job_arn = self._start_batch_job(
-            job_name=job_name,
-            model_id=runtime_model_id,
-            role_arn=role_arn,
-            input_s3_uri=self._build_s3_uri(input_key),
-            output_s3_uri=self._build_s3_uri(output_prefix_key)
-        )
+        max_retries = int(os.getenv('NOVA_BATCH_SUBMIT_MAX_RETRIES', '8'))
+        base_backoff = float(os.getenv('NOVA_BATCH_SUBMIT_BACKOFF_SECONDS', '10'))
+        max_backoff = float(os.getenv('NOVA_BATCH_SUBMIT_MAX_BACKOFF_SECONDS', '120'))
+        attempt = 0
+        while True:
+            try:
+                job_arn = self._start_batch_job(
+                    job_name=job_name,
+                    model_id=runtime_model_id,
+                    role_arn=role_arn,
+                    input_s3_uri=self._build_s3_uri(input_key),
+                    output_s3_uri=self._build_s3_uri(output_prefix_key)
+                )
+                break
+            except ClientError as e:
+                error_code = e.response.get('Error', {}).get('Code')
+                if error_code not in ('ServiceQuotaExceededException', 'ThrottlingException'):
+                    raise
+                if attempt >= max_retries:
+                    raise
+                sleep_seconds = min(max_backoff, base_backoff * (2 ** attempt))
+                logger.warning(
+                    "Bedrock batch submit quota hit (code=%s). Retrying in %ss (attempt %s/%s).",
+                    error_code,
+                    sleep_seconds,
+                    attempt + 1,
+                    max_retries
+                )
+                time.sleep(sleep_seconds)
+                attempt += 1
 
         return {
             'batch_job_arn': job_arn,
@@ -493,7 +537,8 @@ class NovaVideoService:
 
     def fetch_batch_results(self, s3_prefix: str, model: str,
                             analysis_types: List[str],
-                            options: Dict[str, Any]) -> Dict[str, Any]:
+                            options: Dict[str, Any],
+                            record_prefix: Optional[str] = None) -> Dict[str, Any]:
         """Fetch and parse batch results from S3."""
         requested_types, effective_types, use_combined = self._resolve_analysis_types(analysis_types)
         results = {
@@ -521,12 +566,22 @@ class NovaVideoService:
             lines.extend([line for line in body.splitlines() if line.strip()])
 
         record_outputs = {}
+        if record_prefix is not None and not isinstance(record_prefix, str):
+            record_prefix = str(record_prefix)
         for line in lines:
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 continue
             record_id = payload.get('recordId') or payload.get('record_id')
+            if not record_id:
+                continue
+            if record_prefix:
+                if not isinstance(record_id, str):
+                    record_id = str(record_id)
+                if not record_id.startswith(record_prefix):
+                    continue
+                record_id = record_id[len(record_prefix):]
             output = payload.get('modelOutput') or payload.get('output') or payload.get('response') or {}
             record_outputs[record_id] = output
 

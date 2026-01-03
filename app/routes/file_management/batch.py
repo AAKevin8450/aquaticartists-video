@@ -991,6 +991,17 @@ def _run_batch_nova(app, job: BatchJob):
         if not image_analysis_types:
             image_analysis_types = ['description', 'elements', 'metadata']
 
+        if processing_mode == 'batch':
+            _run_batch_nova_batch_mode(
+                job=job,
+                model_key=model_key,
+                analysis_types=analysis_types,
+                user_options=user_options,
+                file_types=file_types,
+                image_analysis_types=image_analysis_types
+            )
+            return
+
         for file_id in job.file_ids:
             if job.status == 'CANCELLED':
                 break
@@ -1080,6 +1091,295 @@ def _run_batch_nova(app, job: BatchJob):
         job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
         job.end_time = time.time()
         job.current_file = None
+
+
+def _run_batch_nova_batch_mode(job: BatchJob, model_key: str, analysis_types, user_options,
+                               file_types, image_analysis_types):
+    """Submit Nova batch analysis as shared Bedrock batch jobs (chunked when needed)."""
+    from datetime import datetime
+    import json
+    from app.routes.nova_analysis import get_nova_service
+    from app.routes.upload import create_proxy_internal
+    from app.services.s3_service import S3Service
+
+    try:
+        db = get_db()
+        nova_service = get_nova_service()
+
+        role_arn = current_app.config.get('BEDROCK_BATCH_ROLE_ARN')
+        if not role_arn:
+            raise Exception("BEDROCK_BATCH_ROLE_ARN is required for batch processing.")
+
+        base_options = dict(user_options or {})
+        base_options['processing_mode'] = 'batch'
+
+        requested_types = analysis_types or ['summary']
+        if 'combined' in requested_types:
+            effective_types = ['combined']
+            base_options['combined'] = True
+        else:
+            effective_types = requested_types
+
+        records_per_file = max(1, len(effective_types))
+        max_records = int(os.getenv('NOVA_BATCH_MAX_RECORDS', '500'))
+        max_files_per_job = max(1, max_records // records_per_file)
+
+        s3_service = S3Service(
+            bucket_name=current_app.config['S3_BUCKET_NAME'],
+            region=current_app.config['AWS_REGION']
+        )
+
+        file_cache = {}
+        video_ids = []
+
+        for file_id in job.file_ids:
+            if job.status == 'CANCELLED':
+                break
+
+            file = db.get_file(file_id)
+            if not file:
+                job.failed_files += 1
+                job.errors.append({
+                    'file_id': file_id,
+                    'filename': f'File {file_id}',
+                    'error': f'File {file_id} not found'
+                })
+                continue
+
+            file_cache[file_id] = file
+            file_type = file_types.get(file_id, file.get('file_type', 'video'))
+
+            if file_type == 'image':
+                job.current_file = file['filename']
+                try:
+                    payload = _process_nova_image(
+                        current_app._get_current_object(), db, file_id, file, model_key, image_analysis_types
+                    )
+                    results_summary = payload.get('results_summary', {})
+                    tokens_used = results_summary.get('tokens_used', 0) or payload.get('tokens_total', 0)
+                    cost_usd = results_summary.get('cost_usd', 0.0) or payload.get('actual_cost', 0.0)
+
+                    if tokens_used > 0:
+                        job.total_tokens += tokens_used
+                        job.processed_files_tokens.append(tokens_used)
+
+                    if cost_usd > 0:
+                        job.total_cost_usd += cost_usd
+                        job.processed_files_costs.append(cost_usd)
+
+                    job.completed_files += 1
+                    job.results.append({
+                        'file_id': file_id,
+                        'filename': file['filename'],
+                        'file_type': file_type,
+                        'success': True,
+                        'nova_job_id': payload.get('nova_job_id'),
+                        'analysis_job_id': payload.get('analysis_job_id'),
+                        'status': payload.get('status'),
+                        'tokens_used': tokens_used,
+                        'cost_usd': cost_usd
+                    })
+                except Exception as e:
+                    job.failed_files += 1
+                    job.errors.append({
+                        'file_id': file_id,
+                        'filename': file.get('filename', f'File {file_id}'),
+                        'error': str(e)
+                    })
+                    current_app.logger.error(f"Batch Nova error for file {file_id}: {e}")
+            else:
+                video_ids.append(file_id)
+
+        def _chunk_items(items, size):
+            for index in range(0, len(items), size):
+                yield items[index:index + size]
+
+        for chunk_index, chunk in enumerate(_chunk_items(video_ids, max_files_per_job), start=1):
+            if job.status == 'CANCELLED':
+                break
+
+            batch_records = []
+            batch_jobs = []
+
+            for file_id in chunk:
+                if job.status == 'CANCELLED':
+                    break
+
+                file = file_cache.get(file_id) or db.get_file(file_id)
+                if not file:
+                    job.failed_files += 1
+                    job.errors.append({
+                        'file_id': file_id,
+                        'filename': f'File {file_id}',
+                        'error': f'File {file_id} not found'
+                    })
+                    continue
+
+                job.current_file = file['filename']
+
+                try:
+                    proxy = db.get_proxy_for_source(file_id)
+                    if not proxy:
+                        proxy_result = create_proxy_internal(file_id, upload_to_s3=False)
+                        proxy = db.get_file(proxy_result['proxy_id'])
+                    if not proxy:
+                        raise Exception(f'Proxy not found for file {file_id}')
+
+                    s3_key = _ensure_s3_key(db, proxy, s3_service)
+                    record_prefix = f"file-{file_id}:"
+                    per_file_options = dict(base_options)
+                    per_file_options['batch_record_prefix'] = record_prefix
+
+                    records = nova_service._build_batch_records(
+                        s3_key=s3_key,
+                        analysis_types=effective_types,
+                        options=per_file_options,
+                        record_prefix=record_prefix
+                    )
+
+                    analysis_job_id = db.create_analysis_job(
+                        file_id=file_id,
+                        job_id=f"nova-{file_id}-{datetime.utcnow().timestamp()}",
+                        analysis_type='nova',
+                        status='SUBMITTED',
+                        parameters=json.dumps({
+                            'model': model_key,
+                            'analysis_types': effective_types,
+                            'options': per_file_options,
+                            'processing_mode': 'batch'
+                        })
+                    )
+                    nova_job_id = db.create_nova_job(
+                        analysis_job_id=analysis_job_id,
+                        model=model_key,
+                        analysis_types=effective_types,
+                        user_options=per_file_options
+                    )
+
+                    batch_jobs.append({
+                        'file_id': file_id,
+                        'filename': file['filename'],
+                        'analysis_job_id': analysis_job_id,
+                        'nova_job_id': nova_job_id,
+                        'estimated_duration_seconds': file.get('metadata', {}).get('duration_seconds', 300)
+                    })
+                    batch_records.extend(records)
+                except Exception as e:
+                    job.failed_files += 1
+                    job.errors.append({
+                        'file_id': file_id,
+                        'filename': file.get('filename', f'File {file_id}'),
+                        'error': str(e)
+                    })
+                    current_app.logger.error(f"Batch Nova error for file {file_id}: {e}")
+
+            if not batch_records:
+                continue
+
+            job_name = f"nova-batch-{job.job_id}-{chunk_index}-{int(datetime.utcnow().timestamp())}"
+
+            try:
+                batch_response = nova_service.start_batch_analysis_records(
+                    records=batch_records,
+                    model=model_key,
+                    role_arn=role_arn,
+                    input_prefix=current_app.config.get('NOVA_BATCH_INPUT_PREFIX', 'nova/batch/input'),
+                    output_prefix=current_app.config.get('NOVA_BATCH_OUTPUT_PREFIX', 'nova/batch/output'),
+                    job_name=job_name
+                )
+            except Exception as e:
+                error_msg = str(e)
+                for entry in batch_jobs:
+                    db.update_nova_job(entry['nova_job_id'], {
+                        'status': 'FAILED',
+                        'error_message': error_msg,
+                        'batch_status': 'FAILED'
+                    })
+                    db.update_analysis_job(
+                        entry['analysis_job_id'],
+                        status='FAILED',
+                        error_message=error_msg
+                    )
+                    job.failed_files += 1
+                    job.errors.append({
+                        'file_id': entry['file_id'],
+                        'filename': entry['filename'],
+                        'error': error_msg
+                    })
+                continue
+
+            for entry in batch_jobs:
+                db.update_nova_job(entry['nova_job_id'], {
+                    'status': 'IN_PROGRESS',
+                    'progress_percent': 0,
+                    'batch_mode': 1,
+                    'batch_job_arn': batch_response['batch_job_arn'],
+                    'batch_status': 'SUBMITTED',
+                    'batch_input_s3_key': batch_response['batch_input_s3_key'],
+                    'batch_output_s3_prefix': batch_response['batch_output_s3_prefix']
+                })
+                db.update_nova_job_started_at(entry['nova_job_id'])
+                db.update_analysis_job(entry['analysis_job_id'], status='IN_PROGRESS')
+
+                cost_estimate = nova_service.estimate_cost(
+                    model=model_key,
+                    video_duration_seconds=entry.get('estimated_duration_seconds', 300),
+                    batch_mode=True
+                )
+                estimated_cost = cost_estimate.get('total_cost_usd', 0.0)
+                if estimated_cost > 0:
+                    job.total_cost_usd += estimated_cost
+                    job.processed_files_costs.append(estimated_cost)
+
+                job.completed_files += 1
+                job.results.append({
+                    'file_id': entry['file_id'],
+                    'filename': entry['filename'],
+                    'file_type': 'video',
+                    'success': True,
+                    'nova_job_id': entry['nova_job_id'],
+                    'analysis_job_id': entry['analysis_job_id'],
+                    'status': 'SUBMITTED',
+                    'batch_job_arn': batch_response['batch_job_arn']
+                })
+
+        job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+    except Exception as e:
+        job.status = 'FAILED' if job.status != 'CANCELLED' else 'CANCELLED'
+        job.errors.append({
+            'file_id': None,
+            'filename': None,
+            'error': str(e)
+        })
+        current_app.logger.error(f"Batch Nova error: {e}", exc_info=True)
+    finally:
+        job.end_time = time.time()
+        job.current_file = None
+
+
+def _ensure_s3_key(db, file_record, s3_service):
+    """Ensure an S3 key exists for a file record, uploading if needed."""
+    s3_key = file_record.get('s3_key')
+    if s3_key and not str(s3_key).startswith('local://'):
+        return s3_key
+
+    local_path = file_record.get('local_path')
+    if not local_path or not os.path.isfile(local_path):
+        raise Exception('File must be available locally to upload to S3 for Nova analysis.')
+
+    filename = os.path.basename(local_path)
+    prefix = 'proxies' if file_record.get('is_proxy') else 'uploads'
+    s3_key = f'{prefix}/{filename}'
+    content_type = file_record.get('content_type') or 'video/mp4'
+
+    with open(local_path, 'rb') as file_obj:
+        s3_service.upload_file(file_obj, s3_key, content_type)
+
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('UPDATE files SET s3_key = ? WHERE id = ?', (s3_key, file_record['id']))
+
+    return s3_key
 
 
 def _process_nova_image(app, db, file_id, file, model_key, analysis_types):

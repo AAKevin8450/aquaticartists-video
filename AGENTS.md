@@ -1,12 +1,14 @@
 # AGENTS
 
-Last Updated: 2025-12-25 18:37:48
+Last Updated: 2026-01-03 18:06:47
 
 Nova batch processing
 - Enable async batch mode by setting `BEDROCK_BATCH_ROLE_ARN`, `NOVA_BATCH_INPUT_PREFIX`, `NOVA_BATCH_OUTPUT_PREFIX` in `.env`.
+- Batch Nova processing aggregates video files into shared Bedrock batch jobs, chunked by `NOVA_BATCH_MAX_RECORDS`.
+- Batch results are scoped per file using a `batch_record_prefix` stored in Nova job options.
 - Batch submissions use Bedrock batch jobs; results are finalized when `/api/nova/status/<nova_job_id>` is polled.
 - Batch cost estimates apply a 50% discount and are surfaced in the Nova UI.
-- Batch Nova runs auto-create proxies when missing and reuse the core Nova start flow.
+- Batch Nova runs auto-create proxies when missing; images still use the realtime image analysis flow.
 - Nova analysis types accept `combined` for a single-pass prompt; prompt schema is documented in `docs/nova_combined.md`.
 
 Nova transcription & embeddings

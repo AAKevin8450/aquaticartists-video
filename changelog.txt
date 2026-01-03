@@ -1,3 +1,35 @@
+2026-01-03 18:06:47 - Updated by Codex
+
+[Category: Feature/Bug Fix]
+Batch Nova now submits multi-file Bedrock batch jobs (with chunking when needed) instead of per-file jobs, reducing quota pressure and aligning with the intended queueing workflow.
+
+[Purpose]
+Shift Batch Nova processing to a shared Bedrock batch submission so large file sets are queued together. This prevents per-file CreateModelInvocationJob calls that quickly exhaust concurrent job quotas, while preserving per-file Nova job tracking and results.
+
+[Implementation]
+1. **Batch Aggregation** - Collect video files into a shared JSONL and submit as a single Bedrock batch job per chunk
+2. **Record Prefixing** - Prefix batch record IDs per file to allow per-file result extraction from shared outputs
+3. **Result Filtering** - Fetch batch results using record prefixes stored in user options
+4. **Batch Limits** - Added an env-configurable max record limit to chunk large batches
+5. **Submission Helper** - Added a record-based batch submit path and reused it for single-file submissions
+
+[Files Modified]
+- .env.example - Added `NOVA_BATCH_MAX_RECORDS` configuration for batch chunk sizing
+- app/routes/file_management/batch.py - Aggregate batch submissions, per-file record prefixes, and chunked Bedrock batch creation
+- app/routes/nova_analysis.py - Pass batch record prefix when parsing shared batch outputs
+- app/services/nova_service.py - Support record prefixes, record-based batch submission, and filtered batch result parsing
+- plan.md - **DELETED** obsolete local planning file
+
+[Technical Details]
+- Batch chunk size is derived from `NOVA_BATCH_MAX_RECORDS` and per-file analysis types
+- Per-file `batch_record_prefix` is stored in Nova job user options to scope batch result parsing
+- Shared batch submissions reuse the same backoff and retry logic for Bedrock job creation
+
+[Impact]
+- Lowered risk of Bedrock batch job quota errors during large runs
+- Maintains per-file Nova job status and results while sharing a single batch submission
+- Breaking changes: None
+
 2026-01-03 17:14:30 - Updated by Claude Code
 
 [Category: Infrastructure/Codebase Cleanup]
