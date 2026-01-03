@@ -1,3 +1,161 @@
+2026-01-03 09:28:10 - Updated by Claude Code
+
+[Category: Feature Enhancement]
+Consolidate video and image proxy generation into single unified "Generate Proxies" button
+
+[Purpose]
+Simplify the user interface by combining separate "Generate Proxies" and "Image Proxies (Nova)" buttons into a single unified action that intelligently handles both video and image files in mixed batches. This reduces UI clutter, eliminates user confusion about which button to use, and follows the existing pattern established by Nova Analysis for handling mixed file types.
+
+[Implementation]
+1. **Unified Backend Endpoint** - Modified `/api/batch/proxy` to accept both videos and images with file type routing
+2. **Mixed Batch Support** - Worker routes each file to appropriate processor (FFmpeg for videos, Pillow for images)
+3. **Separate Tracking** - Maintains distinct counters for video vs image proxy generation (completed/failed)
+4. **Dynamic UI** - Progress modal adapts title and shows breakdown based on batch composition
+5. **Backward Compatibility** - Deprecated `/api/batch/image-proxy` endpoint redirects to unified endpoint
+6. **Force Option** - Added `force` parameter support to recreate existing proxies for both types
+
+[Changes Made]
+
+**Backend - BatchJob Class** (app/routes/file_management/shared.py)
+- Added tracking fields to `__init__()` (lines 43-48):
+  - `self.completed_videos = 0` - Count of successfully created video proxies
+  - `self.completed_images = 0` - Count of successfully created image proxies
+  - `self.failed_videos = 0` - Count of failed video proxy attempts
+  - `self.failed_images = 0` - Count of failed image proxy attempts
+  - `self.total_video_proxy_size = 0` - Total bytes of generated video proxies
+  - `self.total_image_proxy_size = 0` - Total bytes of generated image proxies
+  - `self.options = {}` - Dict for storing file_types mapping and other options
+- Updated `to_dict()` method (lines 105-110) to include all new fields in API responses
+
+**Backend - Unified Proxy Endpoint** (app/routes/file_management/batch.py:51-158)
+- Updated docstring to document support for both videos and images
+- Added `file_types = {}` dict initialization (line 90) to track which files are videos vs images
+- Modified validation loop (lines 99-117):
+  - Changed filter from `file_type == 'video'` to `file_type in ('video', 'image')`
+  - Store file type in `file_types[file_id] = file_type` for routing
+- Added `force` parameter support (line 80, 110-114):
+  - Extracts `force` from request body
+  - Skips existing proxy check when `force=True`
+  - Allows recreating proxies for both videos and images
+- Store options in job (line 128): `job.options = {'file_types': file_types, 'force': force}`
+- Enhanced response (lines 141-149):
+  - Calculate `video_count` and `image_count` from file_types
+  - Return both counts in response for frontend display
+  - Message format: "Batch proxy creation started for X video(s) and Y image(s)"
+
+**Backend - Unified Proxy Worker** (app/routes/file_management/batch.py:681-805)
+- Updated function signature and imports (lines 681-692):
+  - Import both `create_proxy_internal` and `create_image_proxy_internal`
+  - Extract `file_types` dict and `force` flag from job.options
+- Modified processing loop (lines 733-760):
+  - Determine file type: `file_type = file_types.get(file_id, file.get('file_type', 'video'))`
+  - Route to appropriate processor:
+    - Images: `create_image_proxy_internal(file_id, force=force)` → 896px Pillow resize
+    - Videos: `create_proxy_internal(file_id, upload_to_s3=False)` → 720p/15fps FFmpeg
+  - Track size by type: `job.total_video_proxy_size` vs `job.total_image_proxy_size`
+  - Increment appropriate counter: `job.completed_videos++` or `job.completed_images++`
+- Enhanced error handling (lines 764-790):
+  - Track failures by file type: `job.failed_videos++` or `job.failed_images++`
+  - Include file_type in error dict for detailed reporting
+- Updated completion logging (lines 796-799):
+  - Log format: "X videos, Y images succeeded, Z videos, W images failed"
+
+**Backend - Deprecated Endpoint** (app/routes/file_management/batch.py:161-189)
+- Updated `/api/batch/image-proxy` with deprecation notice
+- Simplified to single line: `return batch_create_proxy()`
+- Redirects all image-proxy requests to unified endpoint
+- Maintains backward compatibility for any existing API consumers
+
+**Frontend - UI Simplification** (app/templates/file_management.html)
+- Removed "Image Proxies (Nova)" button (old lines 236-238)
+- Kept only unified "Generate Proxies" button (line 233-235)
+- Simplified batch options popup (lines 571-575):
+  - Removed redundant "Proxy Generation" heading and bordered box
+  - Changed to single clean message: "Proxies will be generated for all eligible files: 720p/15fps for videos, 896px optimized for images. No additional options required."
+- Added file type breakdown display to progress modal (lines 829-842):
+  - Shows "Videos: X completed, Y failed | Images: Z completed, W failed"
+  - Only displays when processing proxy batches with type data
+  - Uses Bootstrap text-success and text-danger classes
+
+**Frontend - JavaScript Updates** (app/static/js/file_management.js)
+- Removed image-proxy event listener (deleted old line 92)
+- Updated batch description (line 2345):
+  - Changed from separate video/image descriptions
+  - New: "Generate proxies for all eligible files: 720p/15fps for videos, 896px optimized for images."
+  - Removed 'image-proxy' entry entirely
+- Enhanced `showBatchProgressModal()` function (lines 2790-2814):
+  - Added `videoCount` and `imageCount` parameters (default to 0)
+  - Dynamic title logic based on batch composition:
+    - Mixed batch (both > 0): "Generating Proxies"
+    - Images only: "Generating Image Proxies"
+    - Videos only: "Generating Video Proxies"
+  - Preserves existing titles for other action types
+- Updated modal call site (lines 2306-2311):
+  - Pass `data.video_count || 0` and `data.image_count || 0` from API response
+  - Enables dynamic title selection
+- Added type breakdown display logic in `updateBatchProgress()` (lines 2892-2903):
+  - Check if `currentBatchActionType === 'proxy'` and type data exists
+  - Update breakdown element text content from API response
+  - Show breakdown div only for proxy jobs, hide for others
+  - Populates: batchVideoCount, batchVideoFailed, batchImageCount, batchImageFailed
+
+[Files Modified]
+- app/routes/file_management/shared.py:41-48,105-110 (BatchJob tracking fields)
+- app/routes/file_management/batch.py:51-158,161-189,681-805 (unified endpoint and worker, deprecated old endpoint)
+- app/templates/file_management.html:233-238,571-575,829-842 (removed button, simplified options, added breakdown)
+- app/static/js/file_management.js:91-92,2345-2349,2790-2814,2306-2311,2892-2903 (event handlers, descriptions, dynamic title, breakdown display)
+
+[Technical Details]
+- **File Type Routing Pattern**: Follows existing Nova Analysis implementation (batch.py:414-517, 1019-1141)
+  - Uses `file_types` dict to map file_id → 'video' or 'image'
+  - Worker checks file type and routes to appropriate function
+  - Maintains separate metrics for each type
+- **Force Parameter Support**:
+  - Videos: Previously did not support force recreation
+  - Images: Already supported force via old endpoint
+  - Unified: Both types now support `force=true` to recreate existing proxies
+- **Proxy Processing**:
+  - Videos: FFmpeg NVENC 720p/15fps (unchanged from existing implementation)
+  - Images: Pillow 896px resize for Nova 2 Lite (unchanged from existing implementation)
+  - Local-first strategy: `upload_to_s3=False` during batch to avoid S3 rate limits
+- **API Response Enhancement**:
+  - Old: `{job_id, total_files, message}`
+  - New: `{job_id, total_files, video_count, image_count, message}`
+  - Enables frontend to show appropriate title before first progress update
+- **Progress Tracking**:
+  - Combined metrics: `completed_files`, `failed_files`, `total_proxy_size` (sum of both types)
+  - Separate metrics: `completed_videos`, `completed_images`, `total_video_proxy_size`, `total_image_proxy_size`
+  - Allows displaying both overall progress and type-specific breakdown
+
+[Breaking Changes]
+None - fully backward compatible:
+- Old `/api/batch/image-proxy` endpoint still works (redirects to unified)
+- Existing API consumers continue to function
+- No database schema changes required
+
+[Benefits]
+1. **Simplified UX**: Single "Generate Proxies" button instead of two separate buttons
+2. **Mixed Batch Support**: Can process videos and images together in one operation
+3. **Intelligent UI**: Progress modal adapts based on batch composition
+4. **Detailed Tracking**: Separate stats for videos vs images (completed/failed counts, sizes)
+5. **Code Reuse**: Leverages existing Nova Analysis pattern for mixed batches
+6. **Cleaner Interface**: Reduced button clutter, simplified batch options popup
+
+[Testing Scenarios]
+1. **Video-only batch**: Filter for videos → click "Generate Proxies" → verify title "Generating Video Proxies"
+2. **Image-only batch**: Filter for images → click "Generate Proxies" → verify title "Generating Image Proxies"
+3. **Mixed batch**: Select both types → click "Generate Proxies" → verify:
+   - Title shows "Generating Proxies"
+   - Breakdown displays: "Videos: X completed, Y failed | Images: Z completed, W failed"
+   - Videos route to FFmpeg, images route to Pillow
+   - Separate size tracking works (total_video_proxy_size, total_image_proxy_size)
+4. **Existing proxies**: Files with proxies already → verify skipped with message
+5. **Force recreation**: Set `force=true` → verify recreates both video and image proxies
+6. **Partial failures**: Include files with missing local paths → verify failures tracked by type
+7. **Cancellation**: Start mixed batch → cancel midway → verify cleanup and CANCELLED status
+8. **Backward compatibility**: Call deprecated `/api/batch/image-proxy` → verify redirects to unified endpoint
+
+---
 2026-01-01 22:09:23 - Updated by Claude Code
 
 [Category: Feature]

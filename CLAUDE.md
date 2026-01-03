@@ -61,7 +61,12 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 
 ### Batch Operations
 - Fetch all filtered files (500/request), real-time progress with ETA
-- Action types: proxy, image-proxy, transcribe, transcript-summary, nova, embeddings
+- Action types: proxy (unified for videos+images), transcribe, transcript-summary, nova, embeddings
+- **Unified Proxy Generation**: Single "Generate Proxies" button handles both videos (720p/15fps FFmpeg) and images (896px Pillow)
+  - Mixed batch support with file type routing
+  - Separate progress tracking for videos vs images (completed/failed counts, sizes)
+  - Dynamic progress modal title adapts to batch composition
+  - Deprecated `/api/batch/image-proxy` redirects to `/api/batch/proxy` for backward compatibility
 
 ### Folder Rescan & Directory Import
 - Async operations with progress tracking, ETA, cancellation

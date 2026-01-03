@@ -165,27 +165,28 @@ def backfill_thumbnails(dry_run=True, limit=None, force=False):
         try:
             success = extract_thumbnail(local_path, thumbnail_path, duration_seconds)
             if success:
-                print(f"           ✓ Thumbnail created")
+                print(f"           [OK] Thumbnail created")
 
                 # Update metadata
                 metadata['thumbnail_path'] = thumbnail_path
 
                 # Update database
-                cursor = db.get_connection().cursor()
-                cursor.execute(
-                    "UPDATE files SET metadata = ? WHERE id = ?",
-                    (json.dumps(metadata), proxy_id)
-                )
-                db.get_connection().commit()
+                with db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE files SET metadata = ? WHERE id = ?",
+                        (json.dumps(metadata), proxy_id)
+                    )
+                    conn.commit()
 
-                print(f"           ✓ Database updated")
+                print(f"           [OK] Database updated")
                 created += 1
                 processed += 1
             else:
-                print(f"           ✗ Failed to create thumbnail")
+                print(f"           [FAIL] Failed to create thumbnail")
                 errors += 1
         except Exception as e:
-            print(f"           ✗ Error: {e}")
+            print(f"           [ERROR] {e}")
             errors += 1
 
         print()

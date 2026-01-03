@@ -233,9 +233,6 @@
             <button class="btn btn-primary" id="batchProxyBtn">
                 <i class="bi bi-badge-hd"></i> Generate Proxies
             </button>
-            <button class="btn btn-outline-primary" id="batchImageProxyBtn">
-                <i class="bi bi-image"></i> Image Proxies (Nova)
-            </button>
             <button class="btn btn-info" id="batchTranscribeBtn">
                 <i class="bi bi-mic"></i> Transcribe
             </button>
@@ -572,12 +569,9 @@
 
                 <form id="batchOptionsForm">
                     <div class="batch-options-group" data-action="proxy">
-                        <div class="border rounded p-3 bg-light">
-                            <h6 class="mb-2">Proxy Generation</h6>
-                            <p class="mb-0 text-muted small">
-                                Proxies are generated at 720p/15fps for eligible videos. No additional options.
-                            </p>
-                        </div>
+                        <p class="text-muted mb-0">
+                            Proxies will be generated for all eligible files: 720p/15fps for videos, 896px optimized for images. No additional options required.
+                        </p>
                     </div>
 
                     <div class="batch-options-group" data-action="transcribe" style="display: none;">
@@ -826,6 +820,21 @@
                             <small class="text-muted">Elapsed</small>
                             <h5 class="mb-0" id="batchElapsed">0s</h5>
                         </div>
+                    </div>
+                </div>
+
+                <!-- File Type Breakdown (for mixed proxy batches) -->
+                <div id="batchTypeBreakdown" class="row text-center mb-3" style="display: none;">
+                    <div class="col-12">
+                        <small class="text-muted">
+                            <strong>Videos:</strong>
+                            <span id="batchVideoCount" class="text-success">0</span> completed,
+                            <span id="batchVideoFailed" class="text-danger">0</span> failed
+                            &nbsp;|&nbsp;
+                            <strong>Images:</strong>
+                            <span id="batchImageCount" class="text-success">0</span> completed,
+                            <span id="batchImageFailed" class="text-danger">0</span> failed
+                        </small>
                     </div>
                 </div>
 

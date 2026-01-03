@@ -38,6 +38,14 @@ class BatchJob:
         self.processed_files_tokens = []  # Tokens for each processed file (Nova only)
         self.total_cost_usd = 0.0  # Total cost in USD (Nova only)
         self.processed_files_costs = []  # Cost for each processed file (Nova only)
+        self.options = {}  # Additional options (e.g., file_types dict for mixed batches)
+        # Video/image specific tracking for unified proxy generation
+        self.completed_videos = 0
+        self.completed_images = 0
+        self.failed_videos = 0
+        self.failed_images = 0
+        self.total_video_proxy_size = 0
+        self.total_image_proxy_size = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON response."""
@@ -93,7 +101,13 @@ class BatchJob:
             'total_cost_usd': round(self.total_cost_usd, 2) if self.total_cost_usd is not None else None,
             'avg_cost_per_file': round(avg_cost_per_file, 4) if avg_cost_per_file is not None else None,
             'errors': self.errors,
-            'results': self.results
+            'results': self.results,
+            'completed_videos': self.completed_videos,
+            'completed_images': self.completed_images,
+            'failed_videos': self.failed_videos,
+            'failed_images': self.failed_images,
+            'total_video_proxy_size': self.total_video_proxy_size,
+            'total_image_proxy_size': self.total_image_proxy_size
         }
 
 

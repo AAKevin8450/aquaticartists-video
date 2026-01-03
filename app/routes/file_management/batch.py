@@ -53,24 +53,31 @@ def batch_create_proxy():
     """
     Create proxies for specified files (from currently filtered view).
 
+    Supports both video and image files in the same batch:
+    - Videos: 720p/15fps proxies using FFmpeg NVENC
+    - Images: 896px optimized proxies for Nova 2 Lite using Pillow
+
     Request body:
         {
-            "file_ids": [1, 2, 3, ...]  # List of file IDs to process
+            "file_ids": [1, 2, 3, ...]  # List of file IDs to process (videos and/or images)
         }
 
     Returns:
         {
             "job_id": "batch-xxx",
             "total_files": 10,
-            "message": "Batch proxy creation started"
+            "video_count": 7,
+            "image_count": 3,
+            "message": "Batch proxy creation started for 7 video(s) and 3 image(s)"
         }
     """
     try:
         data = request.get_json() or {}
         current_app.logger.info(f"Batch proxy request received with data: {data}")
 
-        # Get file IDs from request
+        # Get file IDs and options from request
         file_ids = data.get('file_ids', [])
+        force = bool(data.get('force', False))
 
         if not file_ids:
             current_app.logger.warning("No file IDs provided")
@@ -81,6 +88,7 @@ def batch_create_proxy():
         # Validate files exist and are eligible for proxy creation
         db = get_db()
         eligible_file_ids = []
+        file_types = {}  # Track which files are videos vs images
 
         for file_id in file_ids:
             file = db.get_file(file_id)
@@ -88,106 +96,10 @@ def batch_create_proxy():
                 current_app.logger.warning(f"File {file_id} not found, skipping")
                 continue
 
-            # Check if it's a video with local path
-            if file.get('file_type') != 'video':
-                current_app.logger.warning(f"File {file_id} is not a video, skipping")
-                continue
-
-            if not file.get('local_path'):
-                current_app.logger.warning(f"File {file_id} has no local path, skipping")
-                continue
-
-            # Check if proxy already exists
-            existing_proxy = db.get_proxy_for_source(file_id)
-            if existing_proxy:
-                current_app.logger.info(f"File {file_id} already has a proxy, skipping")
-                continue
-
-            eligible_file_ids.append(file_id)
-
-        if not eligible_file_ids:
-            current_app.logger.warning("No eligible files for proxy creation")
-            return jsonify({'error': 'No eligible files for proxy creation (need videos with local paths, without existing proxies)'}), 404
-
-        current_app.logger.info(f"Found {len(eligible_file_ids)} eligible files for proxy creation")
-
-        # Create batch job
-        job_id = f"batch-proxy-{uuid.uuid4().hex[:8]}"
-        job = BatchJob(job_id, 'proxy', len(eligible_file_ids), eligible_file_ids)
-
-        set_batch_job(job_id, job)
-
-        current_app.logger.info(f"Created batch job {job_id} for {len(eligible_file_ids)} files")
-
-        # Start background thread
-        app = current_app._get_current_object()
-        thread = threading.Thread(target=_run_batch_proxy, args=(app, job))
-        thread.daemon = True
-        thread.start()
-
-        current_app.logger.info(f"Started background thread for batch job {job_id}")
-
-        return jsonify({
-            'job_id': job_id,
-            'total_files': len(eligible_file_ids),
-            'message': f'Batch proxy creation started for {len(eligible_file_ids)} file(s)'
-        }), 200
-
-    except Exception as e:
-        current_app.logger.error(f"Batch proxy error: {e}", exc_info=True)
-        import traceback
-        current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
-        return jsonify({'error': f'Batch proxy error: {str(e)}'}), 500
-
-
-@bp.route('/api/batch/image-proxy', methods=['POST'])
-def batch_create_image_proxy():
-    """
-    Create optimized image proxies for Nova 2 Lite analysis.
-
-    Image proxies are resized to 896px on the shorter side (Nova's minimum threshold),
-    reducing S3 storage costs, network transfer time, and API payload sizes.
-
-    Request body:
-        {
-            "file_ids": [1, 2, 3, ...],
-            "force": false  // Recreate even if proxy exists
-        }
-
-    Returns:
-        {
-            "job_id": "batch-image-proxy-xxx",
-            "total_files": 10,
-            "message": "Batch image proxy creation started"
-        }
-    """
-    try:
-        data = request.get_json() or {}
-        current_app.logger.info(f"Batch image proxy request received with data: {data}")
-
-        # Get file IDs from request
-        file_ids = data.get('file_ids', [])
-        force = bool(data.get('force', False))
-
-        if not file_ids:
-            current_app.logger.warning("No file IDs provided")
-            return jsonify({'error': 'No file IDs provided'}), 400
-
-        current_app.logger.info(f"Processing batch image proxy for {len(file_ids)} file IDs")
-
-        # Validate files exist and are eligible for image proxy creation
-        db = get_db()
-        eligible_file_ids = []
-
-        for file_id in file_ids:
-            file = db.get_file(file_id)
-            if not file:
-                current_app.logger.warning(f"File {file_id} not found, skipping")
-                continue
-
-            # Check if it's an image with local path
-            if file.get('file_type') != 'image':
-                current_app.logger.warning(f"File {file_id} is not an image, skipping")
+            # Check if it's a video or image with local path
+            file_type = file.get('file_type')
+            if file_type not in ('video', 'image'):
+                current_app.logger.warning(f"File {file_id} is neither video nor image, skipping")
                 continue
 
             if not file.get('local_path'):
@@ -201,21 +113,19 @@ def batch_create_image_proxy():
                     current_app.logger.info(f"File {file_id} already has a proxy, skipping")
                     continue
 
+            file_types[file_id] = file_type
             eligible_file_ids.append(file_id)
 
         if not eligible_file_ids:
-            current_app.logger.warning("No eligible files for image proxy creation")
-            return jsonify({
-                'error': 'No eligible files for image proxy creation '
-                         '(need images with local paths, without existing proxies unless force=true)'
-            }), 404
+            current_app.logger.warning("No eligible files for proxy creation")
+            return jsonify({'error': 'No eligible files for proxy creation (need videos or images with local paths, without existing proxies)'}), 404
 
-        current_app.logger.info(f"Found {len(eligible_file_ids)} eligible files for image proxy creation")
+        current_app.logger.info(f"Found {len(eligible_file_ids)} eligible files for proxy creation")
 
         # Create batch job
-        job_id = f"batch-image-proxy-{uuid.uuid4().hex[:8]}"
-        job = BatchJob(job_id, 'image-proxy', len(eligible_file_ids), eligible_file_ids)
-        job.options = {'force': force}
+        job_id = f"batch-proxy-{uuid.uuid4().hex[:8]}"
+        job = BatchJob(job_id, 'proxy', len(eligible_file_ids), eligible_file_ids)
+        job.options = {'file_types': file_types, 'force': force}  # Store file type mapping and options for routing
 
         set_batch_job(job_id, job)
 
@@ -223,23 +133,60 @@ def batch_create_image_proxy():
 
         # Start background thread
         app = current_app._get_current_object()
-        thread = threading.Thread(target=_run_batch_image_proxy, args=(app, job))
+        thread = threading.Thread(target=_run_batch_proxy, args=(app, job))
         thread.daemon = True
         thread.start()
 
         current_app.logger.info(f"Started background thread for batch job {job_id}")
 
+        # Calculate counts for response
+        video_count = sum(1 for ft in file_types.values() if ft == 'video')
+        image_count = sum(1 for ft in file_types.values() if ft == 'image')
+
         return jsonify({
             'job_id': job_id,
             'total_files': len(eligible_file_ids),
-            'message': f'Batch image proxy creation started for {len(eligible_file_ids)} file(s)'
+            'video_count': video_count,
+            'image_count': image_count,
+            'message': f'Batch proxy creation started for {video_count} video(s) and {image_count} image(s)'
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Batch image proxy error: {e}", exc_info=True)
+        current_app.logger.error(f"Batch proxy error: {e}", exc_info=True)
         import traceback
         current_app.logger.error(f"Full traceback:\n{traceback.format_exc()}")
-        return jsonify({'error': f'Batch image proxy error: {str(e)}'}), 500
+        return jsonify({'error': f'Batch proxy error: {str(e)}'}), 500
+
+
+@bp.route('/api/batch/image-proxy', methods=['POST'])
+def batch_create_image_proxy():
+    """
+    DEPRECATED: Use /api/batch/proxy instead (supports both videos and images).
+
+    Kept for backward compatibility. This endpoint now redirects to the unified
+    proxy endpoint which handles both videos and images in the same batch.
+
+    Image proxies are resized to 896px on the shorter side (Nova's minimum threshold),
+    reducing S3 storage costs, network transfer time, and API payload sizes.
+
+    Request body:
+        {
+            "file_ids": [1, 2, 3, ...],
+            "force": false  // Recreate even if proxy exists
+        }
+
+    Returns:
+        {
+            "job_id": "batch-proxy-xxx",
+            "total_files": 10,
+            "video_count": 0,
+            "image_count": 10,
+            "message": "Batch proxy creation started for 0 video(s) and 10 image(s)"
+        }
+    """
+    current_app.logger.info(f"DEPRECATED batch image-proxy endpoint called, redirecting to unified proxy endpoint")
+    # Simply redirect to the unified proxy endpoint which handles both videos and images
+    return batch_create_proxy()
 
 
 @bp.route('/api/batch/transcribe', methods=['POST'])
@@ -663,14 +610,18 @@ def cancel_batch_job(job_id: str):
 # ============================================================================
 
 def _run_batch_proxy(app, job: BatchJob):
-    """Background worker for batch proxy creation."""
+    """Background worker for batch proxy creation (supports both videos and images)."""
     with app.app_context():
-        from app.routes.upload import create_proxy_internal
+        from app.routes.upload import create_proxy_internal, create_image_proxy_internal
         from pathlib import Path
         import traceback
         import logging
 
         logger = logging.getLogger('app')
+        options = job.options or {}
+        file_types = options.get('file_types', {})
+        force = bool(options.get('force', False))
+
         logger.info(f"Batch proxy worker started for job {job.job_id} with {len(job.file_ids)} files")
         print(f"[BATCH PROXY] Worker started for job {job.job_id} with {len(job.file_ids)} files", flush=True)
 
@@ -700,41 +651,61 @@ def _run_batch_proxy(app, job: BatchJob):
                     raise Exception(f'File {file_id} not found')
 
                 job.current_file = file['filename']
-                logger.info(f"Processing file {file_id}: {file['filename']}")
-                print(f"[BATCH PROXY] Processing file {file_id}: {file['filename']}", flush=True)
+                file_type = file_types.get(file_id, file.get('file_type', 'video'))
+
+                logger.info(f"Processing {file_type} file {file_id}: {file['filename']}")
+                print(f"[BATCH PROXY] Processing {file_type} file {file_id}: {file['filename']}", flush=True)
 
                 # Get source file size for tracking
                 source_file_size = 0
                 if file.get('local_path') and Path(file['local_path']).exists():
                     source_file_size = Path(file['local_path']).stat().st_size
 
-                # Create proxy (local only, no S3 upload)
-                result = create_proxy_internal(file_id, upload_to_s3=False)
+                # Route to appropriate proxy creation function based on file type
+                if file_type == 'image':
+                    result = create_image_proxy_internal(file_id, force=force)
+                    proxy_size = result.get('proxy_size_bytes', 0)
+                    job.total_image_proxy_size += proxy_size
+                    job.completed_images += 1
+                else:  # video
+                    result = create_proxy_internal(file_id, upload_to_s3=False)
+                    proxy_size = result.get('size_bytes', 0)
+                    job.total_video_proxy_size += proxy_size
+                    job.completed_videos += 1
 
                 # Track processed source file size
                 job.processed_files_sizes.append(source_file_size)
 
-                # Track generated proxy size
-                if result.get('size_bytes'):
-                    job.total_proxy_size += result['size_bytes']
+                # Track total proxy size (combined)
+                job.total_proxy_size += proxy_size
 
                 job.completed_files += 1
                 job.results.append({
                     'file_id': file_id,
                     'filename': file['filename'],
+                    'file_type': file_type,
                     'success': True,
                     'result': result
                 })
-                logger.info(f"Successfully created proxy for file {file_id}: {file['filename']}")
-                print(f"[BATCH PROXY] Successfully created proxy for file {file_id}: {file['filename']}", flush=True)
+                logger.info(f"Successfully created {file_type} proxy for file {file_id}: {file['filename']}")
+                print(f"[BATCH PROXY] Successfully created {file_type} proxy for file {file_id}: {file['filename']}", flush=True)
 
             except Exception as e:
                 job.failed_files += 1
+                file_type = file_types.get(file_id, file.get('file_type', 'unknown') if 'file' in locals() else 'unknown')
+
+                # Track failures by type
+                if file_type == 'image':
+                    job.failed_images += 1
+                elif file_type == 'video':
+                    job.failed_videos += 1
+
                 error_msg = str(e)
                 tb = traceback.format_exc()
                 job.errors.append({
                     'file_id': file_id,
-                    'filename': file.get('filename', f'File {file_id}') if file else f'File {file_id}',
+                    'filename': file.get('filename', f'File {file_id}') if 'file' in locals() and file else f'File {file_id}',
+                    'file_type': file_type,
                     'error': error_msg
                 })
 
@@ -745,8 +716,8 @@ def _run_batch_proxy(app, job: BatchJob):
                 except Exception:
                     pass
 
-                logger.error(f"Batch proxy error for file {file_id}: {e}", exc_info=True)
-                print(f"[BATCH PROXY ERROR] File {file_id}: {e}", flush=True)
+                logger.error(f"Batch proxy error for {file_type} file {file_id}: {e}", exc_info=True)
+                print(f"[BATCH PROXY ERROR] {file_type} file {file_id}: {e}", flush=True)
                 print(f"[BATCH PROXY ERROR] Full traceback:\n{tb}", flush=True)
 
         # Mark job as complete
@@ -754,12 +725,14 @@ def _run_batch_proxy(app, job: BatchJob):
         job.end_time = time.time()
         job.current_file = None
         logger.info(
-            f"Batch proxy job {job.job_id} completed: {job.completed_files} succeeded, "
-            f"{job.failed_files} failed, status: {job.status}"
+            f"Batch proxy job {job.job_id} completed: "
+            f"{job.completed_videos} videos, {job.completed_images} images succeeded, "
+            f"{job.failed_videos} videos, {job.failed_images} images failed, status: {job.status}"
         )
         print(
-            f"[BATCH PROXY] Job {job.job_id} completed: {job.completed_files} succeeded, "
-            f"{job.failed_files} failed, status: {job.status}", flush=True
+            f"[BATCH PROXY] Job {job.job_id} completed: "
+            f"{job.completed_videos} videos, {job.completed_images} images succeeded, "
+            f"{job.failed_videos} videos, {job.failed_images} images failed, status: {job.status}", flush=True
         )
 
 

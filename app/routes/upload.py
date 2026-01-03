@@ -28,8 +28,9 @@ DEFAULT_PROXY_SPEC = '720p15'
 
 def _build_proxy_filename(source_filename: str, source_file_id: int, proxy_spec: str) -> str:
     name_parts = Path(source_filename)
-    suffix = name_parts.suffix or '.mp4'
-    return f"{name_parts.stem}_{source_file_id}_{proxy_spec}{suffix}"
+    # Always use .mp4 for proxy videos since we encode with H.264 (h264_nvenc)
+    # which requires MP4 container (WebM only supports VP8/VP9/AV1)
+    return f"{name_parts.stem}_{source_file_id}_{proxy_spec}.mp4"
 
 
 def _format_duration_seconds(duration_seconds):

@@ -89,7 +89,6 @@ function initializeEventListeners() {
 
     // Batch action buttons
     document.getElementById('batchProxyBtn').addEventListener('click', () => startBatchAction('proxy'));
-    document.getElementById('batchImageProxyBtn').addEventListener('click', () => startBatchAction('image-proxy'));
     document.getElementById('batchTranscribeBtn').addEventListener('click', () => startBatchAction('transcribe'));
     document.getElementById('batchTranscriptSummaryBtn').addEventListener('click', () => startBatchAction('transcript-summary'));
     document.getElementById('batchNovaBtn').addEventListener('click', () => startBatchAction('nova'));
@@ -2303,8 +2302,13 @@ async function startBatchAction(actionType) {
         currentBatchJob = data.job_id;
         currentBatchActionType = actionType;  // Store action type
 
-        // Show progress modal
-        showBatchProgressModal(actionType, data.total_files);
+        // Show progress modal with video/image counts for proxy jobs
+        showBatchProgressModal(
+            actionType,
+            data.total_files,
+            data.video_count || 0,
+            data.image_count || 0
+        );
 
         // Start polling for progress
         startBatchProgressPolling();
@@ -2343,8 +2347,7 @@ async function getBatchOptions(actionType) {
 
         const description = document.getElementById('batchOptionsDescription');
         const descriptions = {
-            proxy: 'Generate 720p/15fps proxies for all eligible videos in the current view.',
-            'image-proxy': 'Generate optimized image proxies (896px) for Nova 2 Lite analysis, reducing storage and transfer costs.',
+            proxy: 'Generate proxies for all eligible files: 720p/15fps for videos, 896px optimized for images.',
             transcribe: 'Configure Whisper transcription settings for the current file set.',
             'transcript-summary': 'Generate Nova transcript summaries for files with completed transcripts.',
             nova: 'Choose Nova model and analysis types for videos and images.',
@@ -2789,20 +2792,31 @@ async function loadNovaModels() {
     }
 }
 
-function showBatchProgressModal(actionType, totalFiles) {
+function showBatchProgressModal(actionType, totalFiles, videoCount = 0, imageCount = 0) {
     // Initialize modal if not already done
     if (!batchProgressModal) {
         batchProgressModal = new bootstrap.Modal(document.getElementById('batchProgressModal'));
     }
 
-    // Set title
-    const titles = {
-        'proxy': 'Generating Proxy Videos',
-        'transcribe': 'Transcribing Videos',
-        'transcript-summary': 'Generating Transcript Summaries',
-        'nova': 'Running Nova Analysis'
-    };
-    document.getElementById('batchActionTitle').textContent = titles[actionType] || 'Processing...';
+    // Set title dynamically based on batch composition
+    let title;
+    if (actionType === 'proxy') {
+        if (videoCount > 0 && imageCount > 0) {
+            title = 'Generating Proxies';
+        } else if (imageCount > 0) {
+            title = 'Generating Image Proxies';
+        } else {
+            title = 'Generating Video Proxies';
+        }
+    } else {
+        const titles = {
+            'transcribe': 'Transcribing Videos',
+            'transcript-summary': 'Generating Transcript Summaries',
+            'nova': 'Running Nova Analysis'
+        };
+        title = titles[actionType] || 'Processing...';
+    }
+    document.getElementById('batchActionTitle').textContent = title;
 
     // Reset progress
     updateBatchProgress({
@@ -2873,6 +2887,19 @@ function updateBatchProgress(data) {
         document.getElementById('batchCompleted').textContent = data.completed_files;
         document.getElementById('batchFailed').textContent = data.failed_files;
         document.getElementById('batchElapsed').textContent = formatDuration(data.elapsed_seconds);
+    }
+
+    // File type breakdown for mixed proxy batches
+    if (currentBatchActionType === 'proxy' &&
+        (data.completed_videos !== undefined || data.completed_images !== undefined)) {
+
+        document.getElementById('batchVideoCount').textContent = data.completed_videos || 0;
+        document.getElementById('batchVideoFailed').textContent = data.failed_videos || 0;
+        document.getElementById('batchImageCount').textContent = data.completed_images || 0;
+        document.getElementById('batchImageFailed').textContent = data.failed_images || 0;
+        document.getElementById('batchTypeBreakdown').style.display = 'flex';
+    } else {
+        document.getElementById('batchTypeBreakdown').style.display = 'none';
     }
 
     // Detailed statistics (for transcription, proxy, and nova jobs)
