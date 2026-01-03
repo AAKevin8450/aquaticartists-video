@@ -35,12 +35,6 @@ def upload_page():
     return render_template('upload.html')
 
 
-@bp.route('/collections')
-def collections_page():
-    """Face collections page."""
-    return render_template('collections.html')
-
-
 @bp.route('/history')
 def history_page():
     """Job history page."""

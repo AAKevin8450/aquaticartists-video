@@ -66,7 +66,6 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
   - Mixed batch support with file type routing
   - Separate progress tracking for videos vs images (completed/failed counts, sizes)
   - Dynamic progress modal title adapts to batch composition
-  - Deprecated `/api/batch/image-proxy` redirects to `/api/batch/proxy` for backward compatibility
 
 ### Folder Rescan & Directory Import
 - Async operations with progress tracking, ETA, cancellation
@@ -75,7 +74,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - Endpoints: POST → job_id, GET /status, POST /cancel, POST /apply
 
 ### Search
-- **Keyword**: UNION across files, transcripts, Nova results, collections
+- **Keyword**: UNION across files, transcripts, Nova results
 - **Semantic**: Nova Embeddings with sqlite-vec KNN (sub-500ms)
 
 ### Nova Analysis

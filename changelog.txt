@@ -1,3 +1,72 @@
+2026-01-03 17:14:30 - Updated by Claude Code
+
+[Category: Infrastructure/Codebase Cleanup]
+Major codebase cleanup - removed legacy face collections feature and 27 obsolete root directory scripts
+
+[Purpose]
+Eliminate dead code, unused database tables, and legacy scripts accumulated during early development. The face_collections feature was planned but never fully implemented (UI already removed previously). The root directory contained numerous one-time migration and debug scripts no longer relevant to current operations. This cleanup improves code maintainability, reduces confusion, and aligns the codebase with actual deployed functionality.
+
+[Implementation]
+1. **Face Collections Complete Removal** - Removed all backend code for never-implemented feature
+2. **Root Directory Cleanup** - Deleted 27 legacy migration, debug, and ad-hoc test scripts
+3. **Search UI Cleanup** - Removed Collections filter checkbox from search interface
+4. **Deprecated Endpoint Removal** - Deleted `/api/batch/image-proxy` redirect endpoint
+5. **Test Artifacts Cleanup** - Removed test fixtures and empty test directories
+6. **Database Migration** - Created and executed migration to drop face_collections table
+
+[Files Modified]
+
+**Database Layer** (app/database/)
+- base.py:182-192 - Removed face_collections table creation
+- base.py:375 - Removed idx_collections_created_at index from search_indexes list
+- __init__.py:22 - Removed CollectionsMixin import statement
+- __init__.py:35 - Removed CollectionsMixin from Database class inheritance
+- __init__.py:50 - Removed CollectionsMixin from class docstring
+- collections.py - **DELETED** entire file (48 lines of unused collection operations)
+
+**Routes & Templates**
+- routes/file_management/batch.py:161-189 - Removed deprecated `/api/batch/image-proxy` endpoint (29 lines)
+- templates/search.html:96-101 - Removed Collections checkbox from search filters
+
+**Migrations**
+- migrations/011_remove_face_collections.sql - **CREATED** new migration script to drop table and index
+
+**Root Directory Scripts** (27 files deleted, ~2,300 lines removed)
+- Migration scripts (7): migrate_db.py, migrate_transcripts.py, migrate_transcript_metadata.py, run_migration.py, run_migration_004.py, backfill_file_timestamps.py, fix_file_hash.py
+- Debug scripts (6): check_completeness.py, check_database_status.py, check_db.py, check_duration_summary.py, verify_schema.py, verify_migration.py
+- Ad-hoc test scripts (14): test_api_simple.py, test_duration_query.py, test_endpoints.py, test_escape_fix.py, test_final_verification.py, test_fix_simple.py, test_image_analysis.py, test_migration.py, test_multiselect.py, test_new_methods.py, test_nova_setup.py, test_summary.py
+
+**Test Artifacts** (4 files deleted)
+- tests/IntroVideo.json - Test fixture JSON (3MB)
+- tests/job-d5feb45a5a1c1b9e4beea439162323406bece4f5775f87e0d1e27541f86a1abc-results.xlsx - Test output
+- tests/Robinson.jpg - Test image
+- tests/Two_puppet_friends_202507101845.mp4 - Test video (10MB)
+- tests/test_routes/ - **DELETED** empty directory
+- tests/test_services/ - **DELETED** empty directory
+
+[Technical Details]
+- Database migration executed successfully - face_collections table and index removed from data/app.db
+- Database backup created at data/app.db.backup before migration
+- Verified no remaining references to face_collection, CollectionsMixin, or /api/batch/image-proxy in codebase
+- Database module imports successfully after CollectionsMixin removal
+- Active test files retained: test_nova_context.py, test_nova_integration.py
+- Kept essential root files: run.py (entry point), fix_s3_cors.py (deployment utility), requirements.txt, config files
+
+[Impact]
+- Total files removed: 32 files (1 mixin + 27 root scripts + 4 test artifacts)
+- Lines of code removed: ~2,327 lines across all files
+- Risk level: Low - removed code was non-functional or already completed one-time operations
+- Breaking changes: None - deprecated endpoint already redirected, no external dependencies
+- UI improvement: Cleaner search interface without non-functional Collections filter
+
+[Verification]
+- grep verification confirmed no face_collection or CollectionsMixin references in app/
+- Python import test confirmed Database class loads correctly
+- Database query verified face_collections table successfully removed
+- Application structure verified with only essential files remaining
+
+---
+
 2026-01-03 09:28:10 - Updated by Claude Code
 
 [Category: Feature Enhancement]

@@ -158,37 +158,6 @@ def batch_create_proxy():
         return jsonify({'error': f'Batch proxy error: {str(e)}'}), 500
 
 
-@bp.route('/api/batch/image-proxy', methods=['POST'])
-def batch_create_image_proxy():
-    """
-    DEPRECATED: Use /api/batch/proxy instead (supports both videos and images).
-
-    Kept for backward compatibility. This endpoint now redirects to the unified
-    proxy endpoint which handles both videos and images in the same batch.
-
-    Image proxies are resized to 896px on the shorter side (Nova's minimum threshold),
-    reducing S3 storage costs, network transfer time, and API payload sizes.
-
-    Request body:
-        {
-            "file_ids": [1, 2, 3, ...],
-            "force": false  // Recreate even if proxy exists
-        }
-
-    Returns:
-        {
-            "job_id": "batch-proxy-xxx",
-            "total_files": 10,
-            "video_count": 0,
-            "image_count": 10,
-            "message": "Batch proxy creation started for 0 video(s) and 10 image(s)"
-        }
-    """
-    current_app.logger.info(f"DEPRECATED batch image-proxy endpoint called, redirecting to unified proxy endpoint")
-    # Simply redirect to the unified proxy endpoint which handles both videos and images
-    return batch_create_proxy()
-
-
 @bp.route('/api/batch/transcribe', methods=['POST'])
 def batch_transcribe():
     """

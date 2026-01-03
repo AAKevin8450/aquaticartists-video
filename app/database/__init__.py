@@ -20,7 +20,6 @@ from app.database.analysis_jobs import AnalysisJobsMixin
 from app.database.async_jobs import AsyncJobsMixin
 from app.database.search import SearchMixin
 from app.database.billing_cache import BillingCacheMixin
-from app.database.collections import CollectionsMixin
 
 
 class Database(
@@ -32,8 +31,7 @@ class Database(
     AnalysisJobsMixin,
     AsyncJobsMixin,
     SearchMixin,
-    BillingCacheMixin,
-    CollectionsMixin
+    BillingCacheMixin
 ):
     """
     Unified database interface combining all domain-specific mixins.
@@ -48,7 +46,6 @@ class Database(
         - AsyncJobsMixin: Rescan and import job operations
         - SearchMixin: Search and statistics operations
         - BillingCacheMixin: AWS billing cache operations
-        - CollectionsMixin: Collection operations
     """
     pass
 

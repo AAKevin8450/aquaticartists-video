@@ -179,18 +179,6 @@ class DatabaseBase:
                 )
             ''')
 
-            # Face collections table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS face_collections (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    collection_id TEXT UNIQUE NOT NULL,
-                    collection_arn TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    face_count INTEGER DEFAULT 0,
-                    metadata JSON
-                )
-            ''')
-
             # Transcripts table (redesigned for multi-model support)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS transcripts (
@@ -372,7 +360,6 @@ class DatabaseBase:
                 ('idx_nova_jobs_completed_at', 'nova_jobs', 'completed_at DESC'),
                 ('idx_nova_jobs_analysis_job_id', 'nova_jobs', 'analysis_job_id'),
                 ('idx_transcripts_completed_at', 'transcripts', 'completed_at DESC'),
-                ('idx_collections_created_at', 'face_collections', 'created_at DESC'),
             ]
 
             # Performance indexes for file filtering EXISTS subqueries

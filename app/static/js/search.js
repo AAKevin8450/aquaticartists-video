@@ -9,7 +9,7 @@ let currentQuery = '';
 let currentPage = 1;
 let semanticEnabled = false;  // AI semantic search toggle
 let currentFilters = {
-    sources: ['file', 'transcript', 'nova', 'collection'],
+    sources: ['file', 'transcript', 'nova'],
     file_type: '',
     from_date: '',
     to_date: '',
@@ -44,8 +44,7 @@ const errorState = document.getElementById('errorState');
 const sourceIcons = {
     file: 'bi-file-earmark',
     transcript: 'bi-card-text',
-    nova: 'bi-stars',
-    face_collection: 'bi-people'
+    nova: 'bi-stars'
 };
 
 // Initialize
@@ -232,7 +231,7 @@ function resetFilters() {
 
     // Reset state
     currentFilters = {
-        sources: ['file', 'transcript', 'nova', 'collection'],
+        sources: ['file', 'transcript', 'nova'],
         file_type: '',
         from_date: '',
         to_date: '',
@@ -387,7 +386,6 @@ function displayResults(data) {
     if (data.results_by_source.file > 0) breakdown.push(`Files: ${data.results_by_source.file}`);
     if (data.results_by_source.transcript > 0) breakdown.push(`Transcripts: ${data.results_by_source.transcript}`);
     if (data.results_by_source.nova > 0) breakdown.push(`Nova: ${data.results_by_source.nova}`);
-    if (data.results_by_source.collection > 0) breakdown.push(`Collections: ${data.results_by_source.collection}`);
     resultsBreakdown.textContent = breakdown.join(' • ');
 
     // Update search time
@@ -420,8 +418,6 @@ function getTitleOnClick(result) {
         return `openTranscriptDetails(${sourceId})`;
     } else if (sourceType === 'nova') {
         return `viewAnalysisResult(${sourceId}, 'nova')`;
-    } else if (sourceType === 'face_collection') {
-        return `window.location.href='/collections?id=${sourceId}'`;
     }
     return '';
 }
@@ -495,11 +491,6 @@ function buildActionButtons(result) {
         buttons.push(`<button class="btn btn-outline-primary" onclick="viewAnalysisResult(${sourceId}, 'nova')">
             <i class="bi bi-stars"></i> View Analysis
         </button>`);
-    } else if (sourceType === 'face_collection') {
-        // Collections navigate to collections page (external)
-        buttons.push(`<a href="/collections?id=${sourceId}" class="btn btn-outline-primary">
-            <i class="bi bi-people"></i> View Collection
-        </a>`);
     }
 
     // Dashboard link (opens in new tab)

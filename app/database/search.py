@@ -619,11 +619,7 @@ class SearchMixin:
             ''')
             top_analysis_types = [dict(row) for row in cursor.fetchall()]
 
-            # 8. Face Collections Count
-            cursor.execute('SELECT COUNT(*) as collection_count FROM face_collections')
-            collection_count = cursor.fetchone()['collection_count']
-
-            # 9. Nova Analysis Count
+            # 8. Nova Analysis Count
             cursor.execute('SELECT COUNT(*) as nova_count FROM nova_jobs')
             nova_count = cursor.fetchone()['nova_count']
 
@@ -671,10 +667,7 @@ class SearchMixin:
 
                 # Analysis Breakdown
                 'nova_count': nova_count,
-                'top_analysis_types': top_analysis_types,
-
-                # Collections
-                'collection_count': collection_count
+                'top_analysis_types': top_analysis_types
             }
 
     # Search methods
@@ -858,33 +851,6 @@ class SearchMixin:
 
                 union_queries.append(nova_query)
 
-            # 5. Search in face collections
-            if 'collection' in active_sources:
-                collection_query = '''
-                SELECT
-                    'face_collection' as source_type,
-                    id as source_id,
-                    collection_id as title,
-                    'Face Collection' as category,
-                    created_at as timestamp,
-                    'collection' as match_field,
-                    NULL as size_bytes,
-                    NULL as duration_seconds
-                FROM face_collections
-                WHERE collection_id LIKE ?
-                '''
-                params.append(search_pattern)
-
-                # Add date range filters
-                if from_date:
-                    collection_query += ' AND created_at >= ?'
-                    params.append(from_date)
-                if to_date:
-                    collection_query += ' AND created_at <= ?'
-                    params.append(to_date)
-
-                union_queries.append(collection_query)
-
             # Combine with UNION ALL
             if not union_queries:
                 return []
@@ -1034,25 +1000,6 @@ class SearchMixin:
                 cursor.execute(query_str, params)
                 counts['nova'] = cursor.fetchone()['count']
                 total += counts['nova']
-
-            # Count collections
-            if 'collection' in active_sources:
-                query_str = '''
-                SELECT COUNT(*) as count FROM face_collections
-                WHERE collection_id LIKE ?
-                '''
-                params = [search_pattern]
-
-                if from_date:
-                    query_str += ' AND created_at >= ?'
-                    params.append(from_date)
-                if to_date:
-                    query_str += ' AND created_at <= ?'
-                    params.append(to_date)
-
-                cursor.execute(query_str, params)
-                counts['collection'] = cursor.fetchone()['count']
-                total += counts['collection']
 
             counts['total'] = total
             return counts

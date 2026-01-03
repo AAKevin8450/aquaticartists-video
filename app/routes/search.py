@@ -140,7 +140,7 @@ def extract_preview_text(source_type: str, row: Dict[str, Any], query: str, max_
                         project = metadata.get('project', {})
                         location = metadata.get('location', {})
                         water_feature = metadata.get('water_feature', {})
-                        
+
                         if project.get('customer_name') and project.get('customer_name') != 'unknown':
                             parts.append(f"Customer: {project['customer_name']}")
                         if project.get('project_name') and project.get('project_name') != 'unknown':
@@ -152,13 +152,10 @@ def extract_preview_text(source_type: str, row: Dict[str, Any], query: str, max_
                             parts.append(f"Loc: {loc}")
                         if water_feature.get('family') and water_feature.get('family') != 'unknown':
                             parts.append(f"WF: {water_feature['family']}")
-                            
+
                         text = " | ".join(parts) or "Metadata found"
         if not text:
             text = row.get('title', '')
-
-    elif source_type == 'face_collection':
-        text = f"Face Collection: {row.get('title', '')}"
 
     # Truncate to max_length
     if len(text) > max_length:
@@ -273,9 +270,6 @@ def build_action_links(source_type: str, row: Dict[str, Any]) -> Dict[str, str]:
     elif source_type == 'nova':
         actions['view'] = f'/files?nova_id={source_id}'
         actions['view_results'] = f'/api/nova/results/{source_id}'
-
-    elif source_type == 'face_collection':
-        actions['view'] = f'/collections?id={source_id}'
 
     return actions
 
@@ -451,8 +445,7 @@ def search():
             'results_by_source': {
                 'file': counts.get('file', 0),
                 'transcript': counts.get('transcript', 0),
-                'nova': counts.get('nova', 0),
-                'collection': counts.get('collection', 0)
+                'nova': counts.get('nova', 0)
             },
             'results': response_results,
             'pagination': {
@@ -635,7 +628,7 @@ def semantic_search(
         search_time_ms = int((time.time() - start_time) * 1000)
 
         # Count results by source
-        source_counts = {'transcript': 0, 'nova': 0, 'file': 0, 'collection': 0}
+        source_counts = {'transcript': 0, 'nova': 0, 'file': 0}
         for r in results:
             if r['source_type'] == 'transcript':
                 source_counts['transcript'] += 1
