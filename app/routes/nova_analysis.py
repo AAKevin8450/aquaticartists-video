@@ -13,10 +13,32 @@ import traceback
 import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 import os
+import time
+from functools import wraps
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('nova_analysis', __name__, url_prefix='/api/nova')
+
+
+def retry_with_backoff(max_retries=3, base_delay=1.0, max_delay=10.0):
+    """Decorator for retrying a function with exponential backoff."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        delay = min(max_delay, base_delay * (2 ** attempt))
+                        logger.warning(f"Retry {attempt + 1}/{max_retries} after {delay}s: {e}")
+                        time.sleep(delay)
+            raise last_exception
+        return wrapper
+    return decorator
 
 
 def get_nova_service():
@@ -595,24 +617,78 @@ def get_nova_status(nova_job_id):
             }
 
         if job.get('batch_job_arn') and job['status'] not in ('COMPLETED', 'FAILED'):
-            nova_service = get_nova_service()
-            batch_status = nova_service.get_batch_job_status(job['batch_job_arn'])
-            response['batch_status'] = batch_status['status']
-            batch_state = (batch_status['status'] or '').upper()
-            if batch_status['status']:
-                db.update_nova_job(nova_job_id, {
-                    'batch_status': batch_status['status']
+            batch_job_arn = job['batch_job_arn']
+
+            # Check if we have a cached status that's still fresh
+            bedrock_job = db.get_bedrock_batch_job_by_arn(batch_job_arn)
+
+            if bedrock_job and bedrock_job.get('status') in ('COMPLETED', 'SUCCEEDED'):
+                # Use cached completed status - process results
+                batch_state = bedrock_job['status'].upper()
+                batch_status = {'status': bedrock_job['status'], 'failure_message': None}
+            elif bedrock_job and bedrock_job.get('status') == 'FAILED':
+                # Use cached failed status
+                batch_state = 'FAILED'
+                batch_status = {'status': 'FAILED', 'failure_message': bedrock_job.get('failure_message')}
+            elif db.should_check_bedrock_batch_status(batch_job_arn, cache_seconds=30):
+                # Time to re-check with Bedrock API
+                nova_service = get_nova_service()
+                batch_status = nova_service.get_batch_job_status(batch_job_arn)
+                response['batch_status'] = batch_status['status']
+                batch_state = (batch_status['status'] or '').upper()
+
+                # Update cache
+                db.mark_bedrock_batch_checked(batch_job_arn)
+                db.update_bedrock_batch_job(batch_job_arn, {
+                    'status': batch_status['status'],
+                    'failure_message': batch_status.get('failure_message')
                 })
+
+                if batch_state in ('COMPLETED', 'SUCCEEDED', 'FAILED'):
+                    db.update_bedrock_batch_job(batch_job_arn, {
+                        'completed_at': datetime.utcnow().isoformat()
+                    })
+
+                if batch_status['status']:
+                    db.update_nova_job(nova_job_id, {
+                        'batch_status': batch_status['status']
+                    })
+            else:
+                # Use cached status (not time to re-check yet)
+                batch_state = (bedrock_job.get('status') or '').upper()
+                response['batch_status'] = bedrock_job.get('status')
 
             if batch_state in ('COMPLETED', 'SUCCEEDED'):
                 options = _ensure_json_dict(job.get('user_options'))
-                results = nova_service.fetch_batch_results(
-                    s3_prefix=job.get('batch_output_s3_prefix', ''),
-                    model=job['model'],
-                    analysis_types=_ensure_json_list(job.get('analysis_types')),
-                    options=options,
-                    record_prefix=options.get('batch_record_prefix')
-                )
+                nova_service = get_nova_service()
+
+                @retry_with_backoff(max_retries=3, base_delay=2.0)
+                def fetch_results_with_retry():
+                    return nova_service.fetch_batch_results(
+                        s3_prefix=job.get('batch_output_s3_prefix', ''),
+                        model=job['model'],
+                        analysis_types=_ensure_json_list(job.get('analysis_types')),
+                        options=options,
+                        record_prefix=options.get('batch_record_prefix')
+                    )
+
+                try:
+                    results = fetch_results_with_retry()
+                except Exception as e:
+                    logger.error(f"Failed to fetch batch results after retries: {e}")
+                    db.update_nova_job(nova_job_id, {
+                        'status': 'FAILED',
+                        'error_message': f'Failed to fetch results: {str(e)}',
+                        'batch_status': 'RESULT_FETCH_FAILED'
+                    })
+                    db.update_analysis_job(
+                        job['analysis_job_id'],
+                        status='FAILED',
+                        error_message=f'Failed to fetch batch results: {str(e)}'
+                    )
+                    response['status'] = 'FAILED'
+                    response['error_message'] = f'Failed to fetch results: {str(e)}'
+                    return jsonify(response), 200
 
                 update_data = {
                     'status': 'COMPLETED',
@@ -640,6 +716,9 @@ def get_nova_status(nova_job_id):
                 # Store raw API responses for debugging/auditing
                 if 'raw_responses' in results:
                     update_data['raw_response'] = json.dumps(results['raw_responses'])
+
+                if 'search_metadata' in results:
+                    update_data['search_metadata'] = json.dumps(results['search_metadata'])
 
                 db.update_nova_job(nova_job_id, update_data)
                 db.update_nova_job_completed_at(nova_job_id)
@@ -687,6 +766,70 @@ def get_nova_status(nova_job_id):
 
     except Exception as e:
         logger.error(f"Error getting Nova status: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/batch/pending', methods=['GET'])
+def get_pending_batch_jobs():
+    """
+    Get all pending Bedrock batch jobs.
+
+    Returns:
+        {
+            "pending_jobs": [
+                {
+                    "id": 1,
+                    "batch_job_arn": "arn:aws:...",
+                    "job_name": "nova-batch-...",
+                    "status": "IN_PROGRESS",
+                    "model": "lite",
+                    "total_records": 15,
+                    "submitted_at": "2025-01-03T10:00:00",
+                    "nova_job_count": 5
+                }
+            ],
+            "total_pending": 1
+        }
+    """
+    try:
+        db = get_db()
+        pending_jobs = db.get_pending_bedrock_batch_jobs()
+
+        # Optionally refresh status for stale jobs
+        nova_service = get_nova_service()
+        for job in pending_jobs:
+            if db.should_check_bedrock_batch_status(job['batch_job_arn'], cache_seconds=60):
+                try:
+                    status = nova_service.get_batch_job_status(job['batch_job_arn'])
+                    job['status'] = status['status']
+                    db.mark_bedrock_batch_checked(job['batch_job_arn'])
+                    db.update_bedrock_batch_job(job['batch_job_arn'], {
+                        'status': status['status']
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to refresh batch status: {e}")
+
+        response_jobs = []
+        for job in pending_jobs:
+            response_jobs.append({
+                'id': job['id'],
+                'batch_job_arn': job['batch_job_arn'],
+                'job_name': job['job_name'],
+                'status': job['status'],
+                'model': job['model'],
+                'total_records': job['total_records'],
+                'submitted_at': job['submitted_at'],
+                'last_checked_at': job.get('last_checked_at'),
+                'nova_job_count': len(job.get('nova_job_ids', []))
+            })
+
+        return jsonify({
+            'pending_jobs': response_jobs,
+            'total_pending': len(response_jobs)
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting pending batch jobs: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 

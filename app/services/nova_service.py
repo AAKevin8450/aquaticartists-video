@@ -743,6 +743,26 @@ class NovaVideoService:
             total_tokens += usage['total_tokens']
             total_cost += classification_result['cost_usd']
 
+        # Handle search_metadata if present in combined results
+        if 'search_metadata' in record_outputs:
+            output = record_outputs['search_metadata']
+            metadata_text = self._extract_text_from_batch_output(output) or '{}'
+            try:
+                parsed = self._parse_json_response(metadata_text)
+            except NovaError as e:
+                logger.error(f"Failed to parse search_metadata batch response: {e}")
+                parsed = {}
+
+            # Validate and normalize search_metadata structure
+            search_metadata = {
+                'project': parsed.get('project', {}),
+                'location': parsed.get('location', {}),
+                'content': parsed.get('content', {}),
+                'keywords': parsed.get('keywords', []),
+                'dates': parsed.get('dates', {})
+            }
+            results['search_metadata'] = search_metadata
+
         results['totals'] = {
             'tokens_total': total_tokens,
             'cost_total_usd': round(total_cost, 4),

@@ -279,12 +279,47 @@ class DatabaseBase:
                 ('nova_jobs', 'raw_response', 'TEXT'),
                 ('nova_jobs', 'content_type', "VARCHAR(10) DEFAULT 'video'"),
                 ('nova_jobs', 'description_result', 'TEXT'),
+                ('nova_jobs', 'batch_mode', 'INTEGER DEFAULT 0'),
+                ('nova_jobs', 'batch_job_arn', 'TEXT'),
+                ('nova_jobs', 'batch_status', 'TEXT'),
+                ('nova_jobs', 'batch_input_s3_key', 'TEXT'),
+                ('nova_jobs', 'batch_output_s3_prefix', 'TEXT'),
             ]
             for table, column, col_type in nova_job_columns:
                 try:
                     cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}')
                 except sqlite3.OperationalError:
                     pass
+
+            # Bedrock batch jobs tracking table (for aggregated batch submissions)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bedrock_batch_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    batch_job_arn TEXT UNIQUE NOT NULL,
+                    job_name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'SUBMITTED',
+                    model TEXT NOT NULL,
+                    input_s3_key TEXT,
+                    output_s3_prefix TEXT,
+                    nova_job_ids TEXT,
+                    total_records INTEGER DEFAULT 0,
+                    submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_checked_at TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    failure_message TEXT,
+                    results_cached INTEGER DEFAULT 0,
+                    cached_results TEXT
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_bedrock_batch_jobs_status
+                ON bedrock_batch_jobs(status)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_bedrock_batch_jobs_arn
+                ON bedrock_batch_jobs(batch_job_arn)
+            ''')
 
             # Rescan jobs table (for folder rescan operations with progress tracking)
             cursor.execute('''

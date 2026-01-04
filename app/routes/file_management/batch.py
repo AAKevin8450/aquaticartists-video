@@ -1287,6 +1287,18 @@ def _run_batch_nova_batch_mode(job: BatchJob, model_key: str, analysis_types, us
                     output_prefix=current_app.config.get('NOVA_BATCH_OUTPUT_PREFIX', 'nova/batch/output'),
                     job_name=job_name
                 )
+
+                # Create tracking record for the Bedrock batch job
+                nova_job_ids = [entry['nova_job_id'] for entry in batch_jobs]
+                db.create_bedrock_batch_job(
+                    batch_job_arn=batch_response['batch_job_arn'],
+                    job_name=job_name,
+                    model=model_key,
+                    input_s3_key=batch_response['batch_input_s3_key'],
+                    output_s3_prefix=batch_response['batch_output_s3_prefix'],
+                    nova_job_ids=nova_job_ids,
+                    total_records=len(batch_records)
+                )
             except Exception as e:
                 error_msg = str(e)
                 for entry in batch_jobs:

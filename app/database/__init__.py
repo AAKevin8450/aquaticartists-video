@@ -20,6 +20,7 @@ from app.database.analysis_jobs import AnalysisJobsMixin
 from app.database.async_jobs import AsyncJobsMixin
 from app.database.search import SearchMixin
 from app.database.billing_cache import BillingCacheMixin
+from app.database.batch_jobs import BedrockBatchJobsMixin
 
 
 class Database(
@@ -31,7 +32,8 @@ class Database(
     AnalysisJobsMixin,
     AsyncJobsMixin,
     SearchMixin,
-    BillingCacheMixin
+    BillingCacheMixin,
+    BedrockBatchJobsMixin
 ):
     """
     Unified database interface combining all domain-specific mixins.
@@ -46,6 +48,7 @@ class Database(
         - AsyncJobsMixin: Rescan and import job operations
         - SearchMixin: Search and statistics operations
         - BillingCacheMixin: AWS billing cache operations
+        - BedrockBatchJobsMixin: Bedrock batch job tracking operations
     """
     pass
 
