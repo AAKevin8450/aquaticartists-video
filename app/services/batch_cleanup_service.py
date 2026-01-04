@@ -1,4 +1,5 @@
 """Service for cleaning up old batch processing files from S3."""
+import os
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
@@ -82,16 +83,17 @@ class BatchCleanupService:
             'output_files': {'count': 0, 'total_bytes': 0}
         }
 
-        # Check input prefix
-        input_prefix = 'nova/batch/input/'
+        # Check bucket root for batch input files (pattern: batch_input_*.jsonl)
+        # Input files are now at bucket root instead of nested folder
         paginator = self.s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(Bucket=self.bucket_name, Prefix=input_prefix):
+        for page in paginator.paginate(Bucket=self.bucket_name, Prefix='batch_input_'):
             for obj in page.get('Contents', []):
-                stats['input_files']['count'] += 1
-                stats['input_files']['total_bytes'] += obj.get('Size', 0)
+                if obj['Key'].endswith('.jsonl'):
+                    stats['input_files']['count'] += 1
+                    stats['input_files']['total_bytes'] += obj.get('Size', 0)
 
-        # Check output prefix
-        output_prefix = 'nova/batch/output/'
+        # Check output prefix (from config or default)
+        output_prefix = os.getenv('NOVA_BATCH_OUTPUT_PREFIX', 'nova/batch/output/')
         for page in paginator.paginate(Bucket=self.bucket_name, Prefix=output_prefix):
             for obj in page.get('Contents', []):
                 stats['output_files']['count'] += 1

@@ -472,10 +472,13 @@ class NovaVideoService:
         config = self.get_model_config(model)
         runtime_model_id = config.get('inference_profile_id', config['id'])
 
-        input_prefix = self._normalize_s3_prefix(input_prefix)
+        # Normalize output prefix only (input will be at bucket root)
         output_prefix = self._normalize_s3_prefix(output_prefix)
 
-        input_key = f"{input_prefix}/{job_name}.jsonl"
+        # CRITICAL FIX: Upload JSONL to bucket root so InputDataConfig can point to root folder
+        # Bedrock requires InputDataConfig to be a folder containing BOTH JSONL and all S3 resources
+        # Since videos are in proxies/, source_files/, etc., the only common parent is bucket root
+        input_key = f"batch_input_{job_name}.jsonl"  # Bucket root - flat file
         output_prefix_key = f"{output_prefix}/{job_name}/"
 
         jsonl_body = "\n".join(json.dumps(record) for record in records)
@@ -492,11 +495,13 @@ class NovaVideoService:
         attempt = 0
         while True:
             try:
+                # InputDataConfig must point to a FOLDER (not file) containing all resources
+                # Use bucket root with trailing slash to indicate folder
                 job_arn = self._start_batch_job(
                     job_name=job_name,
                     model_id=runtime_model_id,
                     role_arn=role_arn,
-                    input_s3_uri=self._build_s3_uri(input_key),
+                    input_s3_uri=f"s3://{self.bucket_name}/",  # FOLDER (bucket root with trailing slash)
                     output_s3_uri=self._build_s3_uri(output_prefix_key)
                 )
                 break

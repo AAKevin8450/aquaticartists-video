@@ -1,3 +1,66 @@
+2026-01-04 01:40:04 - Updated by Claude Code
+
+[Category: Bug Fix]
+Fix Bedrock batch processing S3 path configuration for InputDataConfig folder requirement
+
+[Purpose]
+Resolve Error 400 batch job failures caused by incorrect InputDataConfig S3 path structure. AWS Bedrock batch inference requires InputDataConfig to point to a folder containing all necessary resources (JSONL manifest + referenced video files), not a single file. This fix enables discounted batch processing (50% cost reduction) to function correctly.
+
+[Implementation]
+
+1. **S3 Upload Path Change** (app/services/nova_service.py:475-506)
+   - Changed batch input JSONL upload from nested folder to bucket root
+   - Old: s3://bucket/batch_inputs/batch_input_TIMESTAMP.jsonl
+   - New: s3://bucket/batch_input_TIMESTAMP.jsonl
+   - InputDataConfig now points to bucket root folder: s3://bucket/
+   - Allows Bedrock to access both JSONL and video files in proxy_video/ subfolder
+
+2. **Cleanup Service Update** (app/services/batch_cleanup_service.py:2,85-95)
+   - Updated list_batch_input_files() to search bucket root instead of batch_inputs/ prefix
+   - Changed S3 list_objects_v2 Prefix from 'batch_inputs/' to ''
+   - Added filter for batch_input_*.jsonl pattern in bucket root
+   - Maintains cleanup functionality with new S3 structure
+
+3. **Configuration Deprecation** (app/config.py:29-32)
+   - Added deprecation comment for NOVA_BATCH_INPUT_PREFIX
+   - Documents that batch inputs now upload to bucket root
+   - Preserves config for backward compatibility reference
+
+[Files Modified]
+- app/services/nova_service.py:475-506 (submit_batch_job function - S3 path logic)
+- app/services/batch_cleanup_service.py:2,85-95 (list_batch_input_files function)
+- app/config.py:29-32 (NOVA_BATCH_INPUT_PREFIX deprecation note)
+
+[Technical Details]
+
+**Root Cause:**
+AWS Bedrock batch inference InputDataConfig requires an S3 folder URI (s3://bucket/prefix/) that contains:
+1. Input manifest JSONL file with record IDs and modelInput
+2. All referenced resources (videos) accessible from that folder context
+
+**Previous Behavior:**
+- JSONL uploaded to: s3://bucket/batch_inputs/batch_input_20260104_014000.jsonl
+- InputDataConfig: s3://bucket/batch_inputs/batch_input_20260104_014000.jsonl (file path)
+- Videos located at: s3://bucket/proxy_video/filename_720p15.mp4
+- Result: Bedrock couldn't access videos from batch_inputs/ folder context
+
+**New Behavior:**
+- JSONL uploaded to: s3://bucket/batch_input_20260104_014000.jsonl
+- InputDataConfig: s3://bucket/ (folder path)
+- Videos located at: s3://bucket/proxy_video/filename_720p15.mp4
+- Result: Bedrock can access both JSONL and proxy_video/ from bucket root
+
+**Impact:**
+- Enables 50% cost reduction via batch processing for Nova video analysis
+- No breaking changes to existing functionality
+- Cleanup service maintains compatibility with new structure
+
+[Testing Considerations]
+- Test batch submission with multiple video files
+- Verify cleanup service finds and removes old batch input files from bucket root
+- Confirm batch job status transitions to Completed without Error 400
+- Validate result retrieval from output S3 prefix
+
 2026-01-03 21:27:59 - Updated by Claude Code
 
 [Category: Feature/Infrastructure]

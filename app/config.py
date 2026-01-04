@@ -26,6 +26,9 @@ class Config:
     AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
     S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
     BEDROCK_BATCH_ROLE_ARN = os.getenv('BEDROCK_BATCH_ROLE_ARN')
+    # NOTE: NOVA_BATCH_INPUT_PREFIX is deprecated - batch input files are now uploaded to bucket root
+    # Bedrock requires InputDataConfig to point to a folder containing ALL resources (JSONL + videos)
+    # Since videos are in proxies/, source_files/, etc., we use bucket root as the common parent
     NOVA_BATCH_INPUT_PREFIX = os.getenv('NOVA_BATCH_INPUT_PREFIX', 'nova/batch/input')
     NOVA_BATCH_OUTPUT_PREFIX = os.getenv('NOVA_BATCH_OUTPUT_PREFIX', 'nova/batch/output')
     NOVA_SONIC_MODEL_ID = os.getenv('NOVA_SONIC_MODEL_ID', 'amazon.nova-2-sonic-v1:0')
