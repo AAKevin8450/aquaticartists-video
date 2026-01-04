@@ -1,3 +1,77 @@
+2026-01-04 13:13:32 - Updated by Claude Code
+
+[Category: Bug Fix]
+Fix critical batch processing issues: Nova analysis filtering, status tracking, and S3 upload verification
+
+[Purpose]
+Resolve three critical bugs preventing Bedrock batch processing from functioning correctly:
+1. Files with pending/failed batch jobs incorrectly shown as having Nova analysis (breaks filtering)
+2. Batch jobs prematurely marked COMPLETED immediately after submission (misleading UI status)
+3. Missing S3 proxy files causing batch job failures (references non-existent S3 keys)
+
+These fixes enable accurate file filtering, proper status tracking for long-running batch jobs, and ensure all referenced S3 files exist before submission.
+
+[Implementation]
+
+1. **Nova Analysis Filtering Fix** (app/database/search.py:105-415)
+   - Added status check to only count COMPLETED jobs as having Nova analysis
+   - Modified 3 functions: list_all_files_with_stats, count_all_files, get_all_files_summary
+   - Changed EXISTS query: `WHERE aj.file_id = f.id AND aj.status = 'COMPLETED'`
+   - Impact: Files with pending/failed batch jobs now correctly show "Nova=No" in filters
+
+2. **Batch Job Status Tracking** (app/routes/file_management/batch.py:538-586,1400-1416)
+   - Changed batch status from COMPLETED to IN_PROGRESS after Bedrock submission
+   - Added polling logic in get_batch_status() to check Bedrock job completion
+   - Polls Bedrock batch jobs with 30-second cache, marks batch COMPLETED only when all jobs finish
+   - Removed premature end_time setting (preserves accurate duration calculation)
+   - Impact: UI now shows accurate "Running" status instead of false "Completed in 13s"
+
+3. **S3 Upload Verification** (app/routes/file_management/batch.py:1425-1458)
+   - Enhanced _ensure_s3_key() to verify files actually exist in S3 before batch submission
+   - Added s3_client.head_object() check before assuming file is uploaded
+   - Auto-uploads missing proxy videos if local file exists
+   - Added comprehensive logging for upload tracking (verified/re-uploaded)
+   - Impact: Prevents batch job failures caused by references to non-existent S3 keys
+
+[Files Modified]
+- app/database/search.py:105-415 (Nova analysis status filtering in 3 SQL query functions)
+- app/routes/file_management/batch.py:538-586 (Bedrock batch polling in get_batch_status)
+- app/routes/file_management/batch.py:1400-1416 (Status logic in _run_batch_nova_batch_mode)
+- app/routes/file_management/batch.py:1425-1458 (S3 verification in _ensure_s3_key)
+
+[Technical Details]
+
+**Nova Filtering Bug:**
+- Previous query counted all analysis_jobs regardless of status
+- Files with status='IN_PROGRESS' or 'FAILED' incorrectly matched has_nova_analysis=true
+- New query: `aj.status = 'COMPLETED'` ensures only successful analyses count
+
+**Batch Status Bug:**
+- Previous code set status='COMPLETED' immediately after submit_batch_job() returned
+- Bedrock batch jobs take hours to process, but UI showed "Completed in 13s"
+- New behavior: Keeps status='IN_PROGRESS', polls Bedrock every 30s via cached status checks
+- Marks COMPLETED only when all bedrock_batch_jobs reach terminal state
+
+**S3 Upload Bug:**
+- Previous code assumed s3_key presence meant file existed in S3
+- Proxy videos often missing from S3 (created locally but never uploaded)
+- New behavior: Verifies with head_object(), uploads if missing, logs all operations
+- Prevents batch job failures from references to non-existent S3 URIs
+
+[Breaking Changes]
+None - all changes are bug fixes to existing functionality
+
+[Testing Considerations]
+- Test Nova filter with files in COMPLETED, IN_PROGRESS, FAILED states
+- Verify batch job UI shows "Running" status during Bedrock processing
+- Confirm batch status updates to COMPLETED after all Bedrock jobs finish
+- Test _ensure_s3_key() with missing S3 files (should auto-upload)
+- Verify batch job submissions succeed when proxy videos were previously missing
+
+[Known Issues]
+- Bedrock bucket root approach will fail if total bucket size >5GB (validation error)
+- Previous batch submissions before this fix may have missing S3 files (will fail during processing)
+
 2026-01-04 01:40:04 - Updated by Claude Code
 
 [Category: Bug Fix]

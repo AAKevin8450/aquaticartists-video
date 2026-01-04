@@ -105,9 +105,9 @@ class SearchMixin:
 
             if has_nova_analysis is not None:
                 if has_nova_analysis:
-                    query += ' AND EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+                    query += ' AND EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id AND aj.status = \'COMPLETED\')'
                 else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id AND aj.status = \'COMPLETED\')'
 
             if has_nova_embeddings is not None:
                 if has_nova_embeddings:
@@ -261,9 +261,9 @@ class SearchMixin:
 
             if has_nova_analysis is not None:
                 if has_nova_analysis:
-                    query += ' AND EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+                    query += ' AND EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id AND aj.status = \'COMPLETED\')'
                 else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id AND aj.status = \'COMPLETED\')'
 
             if has_nova_embeddings is not None:
                 if has_nova_embeddings:
@@ -413,9 +413,9 @@ class SearchMixin:
 
             if has_nova_analysis is not None:
                 if has_nova_analysis:
-                    query += ' AND EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+                    query += ' AND EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id AND aj.status = \'COMPLETED\')'
                 else:
-                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id)'
+                    query += ' AND NOT EXISTS (SELECT 1 FROM nova_jobs nj JOIN analysis_jobs aj ON nj.analysis_job_id = aj.id WHERE aj.file_id = f.id AND aj.status = \'COMPLETED\')'
 
             if has_nova_embeddings is not None:
                 if has_nova_embeddings:

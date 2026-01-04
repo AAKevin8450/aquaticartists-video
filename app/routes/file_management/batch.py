@@ -538,6 +538,51 @@ def get_batch_status(job_id: str):
         if not job:
             return jsonify({'error': 'Batch job not found'}), 404
 
+        # Check if this is a Bedrock batch Nova job that's still in progress
+        if (job.status == 'IN_PROGRESS' and
+            job.action_type == 'nova' and
+            job.options and
+            job.options.get('processing_mode') == 'batch'):
+
+            # Check Bedrock batch job status
+            db = get_db()
+            bedrock_jobs = db.get_pending_bedrock_batch_jobs()
+
+            # Count completed/failed Bedrock jobs for this batch
+            all_bedrock_complete = True
+            for bedrock_job in bedrock_jobs:
+                # Skip if job status is already terminal
+                if bedrock_job['status'] in ('COMPLETED', 'SUCCEEDED', 'FAILED'):
+                    continue
+
+                # Check if we should poll Bedrock
+                if db.should_check_bedrock_batch_status(bedrock_job['batch_job_arn'], cache_seconds=30):
+                    from app.routes.nova_analysis import get_nova_service
+                    nova_service = get_nova_service()
+
+                    try:
+                        batch_status = nova_service.get_batch_job_status(bedrock_job['batch_job_arn'])
+                        status = batch_status.get('status', '').upper()
+
+                        db.mark_bedrock_batch_checked(bedrock_job['batch_job_arn'])
+                        db.update_bedrock_batch_job(bedrock_job['batch_job_arn'], {
+                            'status': status,
+                            'failure_message': batch_status.get('failure_message')
+                        })
+
+                        if status not in ('COMPLETED', 'SUCCEEDED', 'FAILED'):
+                            all_bedrock_complete = False
+                    except Exception as e:
+                        current_app.logger.error(f"Error checking Bedrock batch status: {e}")
+                        all_bedrock_complete = False
+                else:
+                    all_bedrock_complete = False
+
+            # If all Bedrock jobs are complete, mark the batch job as complete
+            if all_bedrock_complete and bedrock_jobs:
+                job.status = 'COMPLETED'
+                job.end_time = time.time()
+
         return jsonify(job.to_dict()), 200
 
     except Exception as e:
@@ -1355,7 +1400,15 @@ def _run_batch_nova_batch_mode(job: BatchJob, model_key: str, analysis_types, us
                     'batch_job_arn': batch_response['batch_job_arn']
                 })
 
-        job.status = 'COMPLETED' if job.status != 'CANCELLED' else 'CANCELLED'
+        # IMPORTANT: Don't mark as COMPLETED - Bedrock batch jobs take hours to process
+        # Keep job IN_PROGRESS so UI shows the batch is still running
+        # A separate polling mechanism will update status when Bedrock batch completes
+        if job.status != 'CANCELLED':
+            job.status = 'IN_PROGRESS'
+            # Don't set end_time - job is still running in Bedrock
+        else:
+            job.status = 'CANCELLED'
+            job.end_time = time.time()
     except Exception as e:
         job.status = 'FAILED' if job.status != 'CANCELLED' else 'CANCELLED'
         job.errors.append({
@@ -1364,26 +1417,36 @@ def _run_batch_nova_batch_mode(job: BatchJob, model_key: str, analysis_types, us
             'error': str(e)
         })
         current_app.logger.error(f"Batch Nova error: {e}", exc_info=True)
-    finally:
         job.end_time = time.time()
+    finally:
         job.current_file = None
 
 
 def _ensure_s3_key(db, file_record, s3_service):
     """Ensure an S3 key exists for a file record, uploading if needed."""
     s3_key = file_record.get('s3_key')
+
+    # Check if we have a valid S3 key and verify the file actually exists in S3
     if s3_key and not str(s3_key).startswith('local://'):
-        return s3_key
+        # Verify the file exists in S3
+        try:
+            s3_service.s3_client.head_object(Bucket=s3_service.bucket_name, Key=s3_key)
+            current_app.logger.info(f"S3 file verified: {s3_key}")
+            return s3_key
+        except Exception as e:
+            current_app.logger.warning(f"S3 file not found ({s3_key}), will re-upload: {e}")
+            # File doesn't exist in S3, need to upload
 
     local_path = file_record.get('local_path')
     if not local_path or not os.path.isfile(local_path):
-        raise Exception('File must be available locally to upload to S3 for Nova analysis.')
+        raise Exception(f'File must be available locally to upload to S3 for Nova analysis. Local path: {local_path}')
 
     filename = os.path.basename(local_path)
     prefix = 'proxies' if file_record.get('is_proxy') else 'uploads'
     s3_key = f'{prefix}/{filename}'
     content_type = file_record.get('content_type') or 'video/mp4'
 
+    current_app.logger.info(f"Uploading to S3: {local_path} -> {s3_key}")
     with open(local_path, 'rb') as file_obj:
         s3_service.upload_file(file_obj, s3_key, content_type)
 
@@ -1391,6 +1454,7 @@ def _ensure_s3_key(db, file_record, s3_service):
         cursor = conn.cursor()
         cursor.execute('UPDATE files SET s3_key = ? WHERE id = ?', (s3_key, file_record['id']))
 
+    current_app.logger.info(f"Successfully uploaded to S3: {s3_key}")
     return s3_key
 
 
