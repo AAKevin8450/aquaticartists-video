@@ -188,3 +188,68 @@ class BedrockBatchJobsMixin:
                 WHERE id = ?
             ''', (job_id,))
             conn.commit()
+
+    def get_pending_batch_jobs_for_polling(self, check_interval_seconds: int = 30) -> List[Dict[str, Any]]:
+        """
+        Get batch jobs that need status checking.
+
+        Returns jobs that are:
+        - Status is SUBMITTED or IN_PROGRESS
+        - Haven't been checked recently (or never checked)
+
+        Args:
+            check_interval_seconds: Minimum seconds between status checks
+
+        Returns:
+            List of batch job records
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM bedrock_batch_jobs
+                WHERE status IN ('SUBMITTED', 'IN_PROGRESS')
+                  AND (last_checked_at IS NULL
+                       OR last_checked_at < datetime('now', '-' || ? || ' seconds'))
+                ORDER BY submitted_at ASC
+            ''', (check_interval_seconds,))
+            jobs = []
+            for row in cursor.fetchall():
+                job = dict(row)
+                if job.get('nova_job_ids'):
+                    job['nova_job_ids'] = json.loads(job['nova_job_ids'])
+                jobs.append(job)
+            return jobs
+
+    def mark_results_fetched(self, batch_job_arn: str):
+        """Mark that results have been successfully fetched."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE bedrock_batch_jobs
+                SET results_fetched_at = CURRENT_TIMESTAMP
+                WHERE batch_job_arn = ?
+            ''', (batch_job_arn,))
+
+    def increment_fetch_attempts(self, batch_job_arn: str, error: str = None):
+        """
+        Increment retry counter and optionally store error.
+
+        Args:
+            batch_job_arn: Batch job ARN
+            error: Optional error message to store
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if error:
+                cursor.execute('''
+                    UPDATE bedrock_batch_jobs
+                    SET results_fetch_attempts = COALESCE(results_fetch_attempts, 0) + 1,
+                        last_error = ?
+                    WHERE batch_job_arn = ?
+                ''', (error, batch_job_arn))
+            else:
+                cursor.execute('''
+                    UPDATE bedrock_batch_jobs
+                    SET results_fetch_attempts = COALESCE(results_fetch_attempts, 0) + 1
+                    WHERE batch_job_arn = ?
+                ''', (batch_job_arn,))

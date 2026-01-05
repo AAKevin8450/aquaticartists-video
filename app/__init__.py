@@ -47,6 +47,27 @@ def create_app(config_name=None):
         app.logger.warning(f"AWS configuration warning: {e}")
         app.logger.warning("Some features may not work without proper AWS configuration")
 
+    # Start background batch poller (only in main process, not reloader)
+    import os
+    if os.environ.get('WERKZEUG_RUN_MAIN') == 'true' or not app.config['DEBUG']:
+        try:
+            from app.services.batch_poller_service import BatchPollerService
+            batch_poller = BatchPollerService(app)
+            batch_poller.start()
+
+            # Store poller instance in app config for access by endpoints
+            app.config['BATCH_POLLER'] = batch_poller
+
+            # Register shutdown handler
+            import atexit
+            atexit.register(batch_poller.stop)
+
+            app.logger.info("Batch poller service started")
+        except Exception as e:
+            app.logger.warning(f"Failed to start batch poller: {e}")
+    else:
+        app.logger.info("Batch poller skipped (reloader process)")
+
     # Register blueprints
     from app.routes import (
         main, upload,

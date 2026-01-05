@@ -18,6 +18,7 @@ class BatchChunk:
 
 
 # Configuration Constants
+MIN_FILES_PER_BATCH = 100  # Bedrock minimum requirement
 MAX_FILES_PER_BATCH = 150
 MAX_SIZE_BYTES = 5 * 1024 * 1024 * 1024  # 5GB
 SAFETY_MARGIN = 0.9  # Use 90% of max to leave buffer
@@ -107,6 +108,28 @@ def split_batch_by_size(
             total_size_bytes=current_total_size,
             s3_folder=f"nova_batch/job_{timestamp}_{chunk_index:03d}"
         ))
+
+    # Handle minimum batch size requirement
+    if len(chunks) >= 2 and len(chunks[-1].file_ids) < MIN_FILES_PER_BATCH:
+        # Merge undersized last chunk with previous chunk
+        last_chunk = chunks.pop()
+        prev_chunk = chunks.pop()
+
+        merged = BatchChunk(
+            chunk_index=prev_chunk.chunk_index,
+            file_ids=prev_chunk.file_ids + last_chunk.file_ids,
+            proxy_s3_keys=prev_chunk.proxy_s3_keys + last_chunk.proxy_s3_keys,
+            proxy_sizes=prev_chunk.proxy_sizes + last_chunk.proxy_sizes,
+            total_size_bytes=prev_chunk.total_size_bytes + last_chunk.total_size_bytes,
+            s3_folder=prev_chunk.s3_folder
+        )
+        chunks.append(merged)
+    elif len(chunks) == 1 and len(chunks[0].file_ids) < MIN_FILES_PER_BATCH:
+        # Single chunk with < 100 files - batch mode not suitable
+        raise ValueError(
+            f"Batch mode requires at least {MIN_FILES_PER_BATCH} files. "
+            f"Got {len(chunks[0].file_ids)} files. Use individual processing instead."
+        )
 
     return chunks
 

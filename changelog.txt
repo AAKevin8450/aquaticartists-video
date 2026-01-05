@@ -1,3 +1,137 @@
+2026-01-05 16:40:42 - Updated by Claude Code
+
+[Category: Infrastructure / Feature]
+Implement Background Batch Poller Service for Automated Bedrock Job Processing
+
+[Purpose]
+Replace manual job status checking with automatic background polling to:
+1. Continuously monitor pending Bedrock batch jobs and fetch results when complete
+2. Automatically cleanup S3 proxy files after successful result storage
+3. Recover from application restarts by detecting orphaned completed jobs
+4. Provide admin API for monitoring and controlling the poller service
+
+[Implementation]
+
+1. **BatchPollerService Class** (app/services/batch_poller_service.py - NEW)
+   - Background thread polls pending jobs every 60 seconds (configurable)
+   - Automatic result fetching when Bedrock jobs complete
+   - S3 cleanup triggers after successful result storage
+   - Statistics tracking (polls_count, jobs_completed, jobs_failed, etc.)
+   - Graceful shutdown with atexit handler
+   - Methods: start(), stop(), get_stats(), _poll_cycle(), _check_and_process_job()
+
+2. **Crash Recovery on Startup**
+   - _check_orphaned_jobs() runs on service initialization
+   - Queries all non-terminal jobs (IN_PROGRESS, SUBMITTED) from database
+   - Checks Bedrock status and processes any that completed while app was down
+   - Ensures no results are lost during application downtime
+
+3. **Database Schema Extensions** (app/database/base.py)
+   - New columns in bedrock_batch_jobs table:
+     - results_fetched_at (TIMESTAMP) - Tracks when results were successfully retrieved
+     - results_fetch_attempts (INTEGER) - Retry counter for failed fetches
+     - last_error (TEXT) - Last error message for debugging
+
+4. **Database Query Methods** (app/database/batch_jobs.py)
+   - get_pending_batch_jobs_for_polling(): Returns jobs needing status check
+     - Filters by status (SUBMITTED/IN_PROGRESS) and last_checked_at timestamp
+     - Respects check_interval to avoid excessive Bedrock API calls
+   - mark_results_fetched(): Updates results_fetched_at timestamp
+   - increment_fetch_attempts(): Increments retry counter and stores error
+
+5. **Flask Application Integration** (app/__init__.py)
+   - Auto-starts poller only in main process (not reloader)
+   - Checks WERKZEUG_RUN_MAIN environment variable
+   - Stores poller instance in app.config['BATCH_POLLER']
+   - Registers atexit shutdown handler for graceful cleanup
+
+6. **Admin API Endpoints** (app/routes/nova_analysis.py)
+   - GET /api/nova/batch/poller/status - Returns poller stats and config
+   - POST /api/nova/batch/poller/start - Manually start poller
+   - POST /api/nova/batch/poller/stop - Manually stop poller
+   - POST /api/nova/batch/poller/process-completed - Trigger immediate poll cycle
+
+7. **Environment Variable Configuration** (.env.example)
+   - BATCH_POLLER_ENABLED=true - Enable/disable automatic polling
+   - BATCH_POLLER_INTERVAL=60 - Seconds between poll cycles
+   - BATCH_CHECK_INTERVAL=30 - Minimum seconds before rechecking same job
+   - BATCH_AUTO_CLEANUP=true - Enable automatic S3 cleanup after result fetch
+   - BATCH_RESULT_FETCH_MAX_RETRIES=3 - Max retries before marking RESULT_FETCH_FAILED
+
+8. **Intelligent Error Handling**
+   - Classifies errors into transient vs permanent
+   - Transient (ThrottlingException, ServiceUnavailable): Retry next cycle
+   - Permanent (ResourceNotFoundException): Mark job as FAILED immediately
+   - Max retry tracking prevents infinite retry loops
+   - Error history stored in stats['errors'] (last 10 errors)
+
+9. **CLAUDE.md Documentation Update**
+   - Added comprehensive "Background Batch Poller" section
+   - Documented configuration options, API endpoints, database schema
+   - Updated retry logic section to include poller behavior
+
+[Files Modified]
+- app/services/batch_poller_service.py (NEW - 457 lines, background polling service)
+- app/database/base.py (added 3 columns to bedrock_batch_jobs)
+- app/database/batch_jobs.py (added 3 query methods: get_pending_batch_jobs_for_polling, mark_results_fetched, increment_fetch_attempts)
+- app/__init__.py (Flask integration with startup/shutdown hooks)
+- app/routes/nova_analysis.py (added 4 admin API endpoints)
+- .env.example (added 5 batch poller configuration variables)
+- CLAUDE.md (expanded Bedrock Batch Processing Infrastructure section)
+- app/services/batch_splitter_service.py (minor: added logging import)
+- app/services/nova_service.py (minor: import cleanup)
+- plan.md (updated with implementation details)
+
+[Technical Details]
+
+**Poller Architecture:**
+- Daemon thread runs _poll_loop() continuously until app shutdown
+- Sleeps in 1-second increments for fast shutdown response
+- Uses Flask app_context() for database access in background thread
+- Thread-safe with get_db() connection management
+
+**Job Processing Flow:**
+1. get_pending_batch_jobs_for_polling() queries jobs due for check
+2. For each job: Call Bedrock GetModelInvocationJob API
+3. Map Bedrock status → internal status (SUBMITTED/IN_PROGRESS/COMPLETED/FAILED)
+4. On COMPLETED: _fetch_and_store_results() → _cleanup_batch_files()
+5. On FAILED: Update linked nova_jobs to FAILED status
+6. Update last_checked_at to prevent immediate recheck
+
+**Result Fetching Details:**
+- Calls NovaVideoService.fetch_batch_results() for each nova_job_id
+- Parses batch output from S3 (nova/batch/output/{s3_folder}/)
+- Updates both nova_jobs and analysis_jobs tables
+- Returns success count vs fail count for monitoring
+
+**Cleanup Integration:**
+- Only triggered if BATCH_AUTO_CLEANUP=true and s3_folder exists
+- Uses BatchS3Manager.cleanup_batch_folder()
+- Marks cleanup_completed_at timestamp in database
+- Cleanup failure doesn't fail the job (can retry manually)
+
+**Stats Tracking:**
+- polls_count: Total poll cycles executed
+- jobs_checked: Individual jobs processed
+- jobs_completed: Jobs that reached COMPLETED status
+- jobs_failed: Jobs that reached FAILED status
+- results_fetched: Successful result fetch operations
+- cleanups_performed: Successful S3 cleanup operations
+- last_poll_time: ISO timestamp of last poll
+- errors: Array of last 10 errors with timestamps
+
+[Breaking Changes]
+- None - poller is backward compatible with existing batch jobs
+- Existing jobs will be picked up on next poll cycle
+
+[Testing Recommendations]
+- Monitor poller stats via GET /api/nova/batch/poller/status
+- Test crash recovery by stopping app during batch processing
+- Verify S3 cleanup with Reports page → Batch Processing Storage
+- Check error handling with intentional Bedrock throttling
+
+---
+
 2026-01-05 10:24:01 - Updated by Claude Code
 
 [Category: Infrastructure / Feature]

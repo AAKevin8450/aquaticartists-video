@@ -632,7 +632,9 @@ class NovaVideoService:
             input_s3_uri = f"s3://{self.bucket_name}/{chunk.s3_folder}/"
             output_s3_uri = f"s3://{self.bucket_name}/nova/batch/output/{chunk.s3_folder}/"
 
-            job_name = f"nova-batch-{chunk.s3_folder.replace('/', '-')}"
+            # Bedrock job names must match: [a-zA-Z0-9]{1,63}(-*[a-zA-Z0-9\+\-\.]){0,63}
+            # Replace slashes and underscores with hyphens
+            job_name = f"nova-batch-{chunk.s3_folder.replace('/', '-').replace('_', '-')}"
 
             # Use existing _start_batch_job method
             runtime_model_id = self._get_model_id(model)

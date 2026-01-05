@@ -1131,3 +1131,138 @@ def generate_embeddings():
         logger.error(f"Error generating embeddings: {str(e)}")
         logger.error(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
+
+
+# ============================================================================
+# Batch Poller Admin API
+# ============================================================================
+
+@bp.route('/batch/poller/status', methods=['GET'])
+def get_batch_poller_status():
+    """
+    Get batch poller status and statistics.
+
+    Returns:
+        JSON with poller status, stats, and configuration
+    """
+    try:
+        batch_poller = current_app.config.get('BATCH_POLLER')
+
+        if not batch_poller:
+            return jsonify({
+                'enabled': False,
+                'running': False,
+                'message': 'Batch poller not initialized (may be disabled or in reloader process)'
+            }), 200
+
+        stats = batch_poller.get_stats()
+
+        return jsonify({
+            'success': True,
+            'status': stats
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error getting poller status: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/batch/poller/start', methods=['POST'])
+def start_batch_poller():
+    """
+    Manually start the batch poller.
+
+    Returns:
+        JSON with success status
+    """
+    try:
+        batch_poller = current_app.config.get('BATCH_POLLER')
+
+        if not batch_poller:
+            return jsonify({
+                'error': 'Batch poller not initialized'
+            }), 400
+
+        if batch_poller.running:
+            return jsonify({
+                'message': 'Batch poller is already running'
+            }), 200
+
+        batch_poller.start()
+
+        return jsonify({
+            'success': True,
+            'message': 'Batch poller started'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error starting poller: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/batch/poller/stop', methods=['POST'])
+def stop_batch_poller():
+    """
+    Manually stop the batch poller.
+
+    Returns:
+        JSON with success status
+    """
+    try:
+        batch_poller = current_app.config.get('BATCH_POLLER')
+
+        if not batch_poller:
+            return jsonify({
+                'error': 'Batch poller not initialized'
+            }), 400
+
+        if not batch_poller.running:
+            return jsonify({
+                'message': 'Batch poller is already stopped'
+            }), 200
+
+        batch_poller.stop()
+
+        return jsonify({
+            'success': True,
+            'message': 'Batch poller stopped'
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error stopping poller: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@bp.route('/batch/poller/process-completed', methods=['POST'])
+def process_completed_batches():
+    """
+    Manually trigger processing of completed batches.
+
+    This will check all pending batch jobs and process any that have completed.
+
+    Returns:
+        JSON with processing results
+    """
+    try:
+        batch_poller = current_app.config.get('BATCH_POLLER')
+
+        if not batch_poller:
+            return jsonify({
+                'error': 'Batch poller not initialized'
+            }), 400
+
+        # Trigger an immediate poll cycle
+        logger.info("Manual trigger: processing completed batches")
+
+        with current_app.app_context():
+            batch_poller._poll_cycle()
+
+        return jsonify({
+            'success': True,
+            'message': 'Batch processing triggered',
+            'stats': batch_poller.get_stats()
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Error processing completed batches: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500

@@ -328,6 +328,9 @@ class DatabaseBase:
                 ('bedrock_batch_jobs', 'total_chunks', 'INTEGER'),
                 ('bedrock_batch_jobs', 's3_folder', 'TEXT'),
                 ('bedrock_batch_jobs', 'cleanup_completed_at', 'TIMESTAMP'),
+                ('bedrock_batch_jobs', 'results_fetched_at', 'TIMESTAMP'),
+                ('bedrock_batch_jobs', 'results_fetch_attempts', 'INTEGER DEFAULT 0'),
+                ('bedrock_batch_jobs', 'last_error', 'TEXT'),
             ]
             for table, column, col_type in bedrock_batch_columns:
                 try:

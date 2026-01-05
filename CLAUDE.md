@@ -151,25 +151,49 @@ python -m scripts.cleanup_batch_folders --no-dry-run  # Clean completed batch jo
    - Links batch_job_arn to array of nova_job_ids for result distribution
    - cleanup_completed_at tracks S3 folder cleanup status
 
-4. **Intelligent Status Polling** (app/routes/file_management/batch.py, nova_analysis.py):
-   - get_batch_status() checks Bedrock job completion every 30s
+4. **Background Batch Poller** (app/services/batch_poller_service.py):
+   - **Automatic polling**: Background thread checks pending Bedrock jobs every 60s
+   - **Auto result fetching**: When jobs complete, results are fetched and stored automatically
+   - **Auto cleanup**: S3 proxy files deleted after successful result storage
+   - **Crash recovery**: On startup, checks for orphaned jobs that completed while app was down
+   - **Configuration**: Environment variables in .env
+     - `BATCH_POLLER_ENABLED=true` - Enable/disable poller
+     - `BATCH_POLLER_INTERVAL=60` - Seconds between poll cycles
+     - `BATCH_CHECK_INTERVAL=30` - Seconds before rechecking same job
+     - `BATCH_AUTO_CLEANUP=true` - Enable automatic S3 cleanup
+     - `BATCH_RESULT_FETCH_MAX_RETRIES=3` - Max retries for result fetching
+   - **Admin API endpoints** (app/routes/nova_analysis.py):
+     - `GET /api/nova/batch/poller/status` - Get poller status and stats
+     - `POST /api/nova/batch/poller/start` - Manually start poller
+     - `POST /api/nova/batch/poller/stop` - Manually stop poller
+     - `POST /api/nova/batch/poller/process-completed` - Manually trigger processing
+   - **Database tracking**: New columns in bedrock_batch_jobs
+     - `results_fetched_at` - When results were successfully fetched
+     - `results_fetch_attempts` - Retry counter for failed fetches
+     - `last_error` - Last error message for debugging
+
+5. **Status Caching** (app/routes/file_management/batch.py, nova_analysis.py):
+   - get_batch_status() checks Bedrock job completion with intelligent caching
    - Bedrock status cache: 30s for in-progress, permanent for completed/failed
    - Reduces Bedrock GetBatchJob API calls by ~95%
 
-5. **Batch Result Parsing** (app/services/nova_service.py):
+6. **Batch Result Parsing** (app/services/nova_service.py):
    - fetch_batch_results() accepts .jsonl.out extension (AWS Bedrock batch output format)
    - Must parse search_metadata from batch outputs for semantic search
    - Stored in nova_jobs.search_metadata as JSON
 
-6. **S3 Cleanup Service** (app/services/batch_cleanup_service.py):
+7. **S3 Cleanup Service** (app/services/batch_cleanup_service.py, batch_s3_manager.py):
+   - **Automatic cleanup**: Background poller triggers cleanup after successful result fetch
    - cleanup_completed_batch_jobs(): Cleans s3_folder-based jobs after completion
    - Legacy cleanup_old_batch_files(): For old batch_input_*.jsonl files
    - **UI Access**: Reports page → "Batch Processing Storage" section
    - **CLI**: `python -m scripts.cleanup_batch_folders --no-dry-run`
 
-7. **Retry Logic** (app/routes/nova_analysis.py):
+8. **Retry Logic** (app/routes/nova_analysis.py, batch_poller_service.py):
    - Exponential backoff for S3 result fetching (max 3 retries, 2-10s delay)
    - Updates job status to RESULT_FETCH_FAILED if exhausted
+   - Transient errors (throttling, service unavailable) trigger automatic retry
+   - Permanent errors (resource not found, access denied) fail job immediately
 
 ### Nova Image Analysis Results Storage
 **Must populate both tables for dashboard display:**
