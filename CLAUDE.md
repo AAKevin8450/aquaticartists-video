@@ -130,12 +130,15 @@ python -m scripts.cleanup_batch_files --no-dry-run --retention-days 7  # Clean o
 ### Bedrock Batch Processing Infrastructure
 **Production-ready batch processing with tracking, caching, and cleanup:**
 
-1. **S3 Path Structure** (app/services/nova_service.py:475-506):
+1. **S3 Path Structure & URL Encoding** (app/services/nova_service.py:164-170, 475-506):
    - Batch input JSONL uploaded to bucket root: s3://bucket/batch_input_TIMESTAMP.jsonl
    - InputDataConfig points to folder: s3://bucket/ (enables access to JSONL + proxy_video/ files)
    - Required for Bedrock batch inference to locate all resources (JSONL manifest + videos)
    - NOVA_BATCH_INPUT_PREFIX deprecated (batch inputs now in bucket root)
    - ⚠️ **Limitation**: Bucket size >5GB causes Bedrock validation failure
+   - **URL Encoding**: S3 keys are URL-encoded via urllib.parse.quote() to handle spaces, commas, special chars
+   - Example: "Video Nov 14 2025, 10 02 14 AM.mov" → "Video%20Nov%2014%202025%2C%2010%2002%2014%20AM.mov"
+   - Applies to all Nova API calls (on-demand and batch), preserves original filenames in S3
 
 2. **Batch Job Tracking** (app/database/batch_jobs.py):
    - `bedrock_batch_jobs` table tracks aggregated batch submissions
@@ -156,9 +159,10 @@ python -m scripts.cleanup_batch_files --no-dry-run --retention-days 7  # Clean o
    - Prevents batch job failures from references to non-existent S3 keys
    - Comprehensive logging for upload tracking
 
-5. **Search Metadata Parsing** (app/services/nova_service.py:746-763):
-   - **Critical**: `fetch_batch_results()` must parse search_metadata from batch outputs
-   - Structure: {project, location, content, keywords, dates}
+5. **Batch Result Parsing** (app/services/nova_service.py:564-572, 746-763):
+   - **Critical**: `fetch_batch_results()` accepts .jsonl.out extension (AWS Bedrock batch output format)
+   - Previous bug: only checked .jsonl extension, causing all batch results to be ignored
+   - Must parse search_metadata from batch outputs: {project, location, content, keywords, dates}
    - Enables semantic search for batch-analyzed videos
    - Stored in nova_jobs.search_metadata as JSON
 

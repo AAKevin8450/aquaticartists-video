@@ -162,8 +162,12 @@ class NovaVideoService:
         return estimate_cost(model, video_duration_seconds, estimated_output_tokens, batch_mode)
 
     def _build_s3_uri(self, s3_key: str) -> str:
-        """Build S3 URI from bucket and key."""
-        return f"s3://{self.bucket_name}/{s3_key}"
+        """Build S3 URI from bucket and key with URL encoding for special characters."""
+        from urllib.parse import quote
+        # URL-encode the S3 key to handle spaces, commas, and other special characters
+        # safe='/' preserves forward slashes in the path
+        encoded_key = quote(s3_key, safe='/')
+        return f"s3://{self.bucket_name}/{encoded_key}"
 
     def _get_video_format(self, s3_key: str) -> str:
         """Extract video format from S3 key."""
@@ -564,7 +568,8 @@ class NovaVideoService:
         lines = []
         for obj in objects:
             key = obj['Key']
-            if not key.endswith('.jsonl'):
+            # Batch outputs end in .jsonl.out
+            if not (key.endswith('.jsonl') or key.endswith('.jsonl.out')):
                 continue
             obj_data = self.s3_client.get_object(Bucket=self.bucket_name, Key=key)
             body = obj_data['Body'].read().decode('utf-8')
