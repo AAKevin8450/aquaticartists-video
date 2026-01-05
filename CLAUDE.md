@@ -40,6 +40,8 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 | nova_embeddings_service.py | Semantic search vectors (1024 dim) |
 | billing_service.py | AWS CUR Parquet parsing, cost aggregation |
 | batch_cleanup_service.py | S3 cleanup for old batch input/output files |
+| batch_splitter_service.py | Split batches by count (150) and size (4.5GB) |
+| batch_s3_manager.py | Copy files with sanitized names, cleanup folders |
 
 ### Key Routes (app/routes/)
 | Route | Key Endpoints |
@@ -48,7 +50,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 | nova_image_analysis.py | /api/nova/image/analyze, /status, /results, /models (image) |
 | file_management/ | /api/files, /api/batch/*, /api/files/rescan, /api/files/import-directory |
 | search.py | /api/search?semantic=true |
-| reports.py | /reports/api/summary, /api/billing/summary |
+| reports.py | /reports/api/summary, /api/billing/summary, /api/storage/batch, /api/storage/batch/cleanup |
 
 ### Frontend
 - **Primary UI**: file_management.html (unified file browser with batch operations)
@@ -56,7 +58,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - **Dashboards**:
   - dashboard.html routes to nova-dashboard.js for 'nova' and 'nova_image' analysis types
   - nova-dashboard.js handles both video (summary/chapters) and image (description/metadata) rendering
-- **Reports**: reports.html (Nova costs + AWS billing breakdown)
+- **Reports**: reports.html (Nova costs + AWS billing + batch storage management)
 
 ## Key Features
 
@@ -104,7 +106,7 @@ BILLING_BUCKET_NAME, BILLING_CUR_PREFIX=/hourly_reports/ (optional)
 - **nova_jobs**: Raw results (summary/chapters/elements/waterfall/description), search_metadata, raw_response, content_type (video/image)
   - ⚠️ **Important**: Image analysis must populate BOTH nova_jobs (raw) AND analysis_jobs.results (compiled) for dashboard display
   - **Batch fields**: batch_mode, batch_job_arn, batch_status, batch_input_s3_key, batch_output_s3_prefix
-- **bedrock_batch_jobs**: Aggregated batch submission tracking (batch_job_arn, status, model, nova_job_ids, timestamps)
+- **bedrock_batch_jobs**: Aggregated batch submission tracking (batch_job_arn, status, model, nova_job_ids, timestamps, parent_batch_id, chunk_index, total_chunks, s3_folder, cleanup_completed_at)
 - **nova_embeddings**: sqlite-vec vectors
 - **billing_cache/billing_cache_details**: Cost aggregation by service/operation/date
 - **rescan_jobs/import_jobs**: Async job tracking
@@ -123,65 +125,51 @@ python -m scripts.analyze_nova_failures
 python -m scripts.backfill_image_analysis_results --no-dry-run  # Fix image jobs missing analysis_jobs.results
 python -m scripts.backfill_video_thumbnails --no-dry-run  # Generate thumbnails for existing video proxies
 python -m scripts.cleanup_batch_files --no-dry-run --retention-days 7  # Clean old S3 batch files
+python -m scripts.cleanup_batch_folders --no-dry-run  # Clean completed batch job S3 folders
 ```
 
 ## Critical Implementation Notes
 
 ### Bedrock Batch Processing Infrastructure
-**Production-ready batch processing with tracking, caching, and cleanup:**
+**Production-ready multi-chunk batch processing with filename sanitization:**
 
-1. **S3 Path Structure & URL Encoding** (app/services/nova_service.py:164-170, 475-506):
-   - Batch input JSONL uploaded to bucket root: s3://bucket/batch_input_TIMESTAMP.jsonl
-   - InputDataConfig points to folder: s3://bucket/ (enables access to JSONL + proxy_video/ files)
-   - Required for Bedrock batch inference to locate all resources (JSONL manifest + videos)
-   - NOVA_BATCH_INPUT_PREFIX deprecated (batch inputs now in bucket root)
-   - ⚠️ **Limitation**: Bucket size >5GB causes Bedrock validation failure
-   - **URL Encoding**: S3 keys are URL-encoded via urllib.parse.quote() to handle spaces, commas, special chars
-   - Example: "Video Nov 14 2025, 10 02 14 AM.mov" → "Video%20Nov%2014%202025%2C%2010%2002%2014%20AM.mov"
-   - Applies to all Nova API calls (on-demand and batch), preserves original filenames in S3
+1. **Multi-Chunk Architecture** (app/services/batch_splitter_service.py, batch_s3_manager.py):
+   - Splits batches by count (MAX_FILES_PER_BATCH=150) OR size (4.5GB effective limit)
+   - Copies proxy files to isolated S3 folders with sanitized filenames
+   - Folder structure: `nova_batch/job_YYYYMMDD_HHMMSS_NNN/files/` + `manifest.jsonl`
+   - Output: `nova/batch/output/nova_batch/job_YYYYMMDD_HHMMSS_NNN/`
+   - **Why not URL encoding**: Bedrock looks for literal keys, encoded keys don't exist in S3
 
-2. **Batch Job Tracking** (app/database/batch_jobs.py):
+2. **Filename Sanitization** (app/utils/filename_sanitizer.py):
+   - sanitize_filename(): Removes spaces→underscores, commas, parentheses, special chars
+   - Example: "Video Nov 14 2025, 10 02 14 AM.mov" → "Video_Nov_14_2025_10_02_14_AM.mov"
+   - Only sanitizes during batch copy, preserves original filenames in S3
+
+3. **Batch Job Tracking** (app/database/batch_jobs.py):
    - `bedrock_batch_jobs` table tracks aggregated batch submissions
+   - **Multi-job fields**: parent_batch_id, chunk_index, total_chunks, s3_folder
    - Links batch_job_arn to array of nova_job_ids for result distribution
-   - Stores I/O S3 paths (input_s3_key, output_s3_prefix) for cleanup
-   - Tracks submission, completion, last_checked timestamps
+   - cleanup_completed_at tracks S3 folder cleanup status
 
-3. **Intelligent Status Polling** (app/routes/file_management/batch.py:538-586, nova_analysis.py:617-717):
-   - **Batch job polling**: get_batch_status() checks Bedrock job completion every 30s
-   - Marks batch IN_PROGRESS after submission (not COMPLETED), updates to COMPLETED when all Bedrock jobs finish
-   - **Bedrock status cache**: 30s cache for in-progress jobs, permanent cache for completed/failed
+4. **Intelligent Status Polling** (app/routes/file_management/batch.py, nova_analysis.py):
+   - get_batch_status() checks Bedrock job completion every 30s
+   - Bedrock status cache: 30s for in-progress, permanent for completed/failed
    - Reduces Bedrock GetBatchJob API calls by ~95%
-   - Cache invalidation via `mark_bedrock_batch_checked()`
 
-4. **S3 Upload Verification** (app/routes/file_management/batch.py:1425-1458):
-   - `_ensure_s3_key()` verifies files exist in S3 via head_object() before batch submission
-   - Auto-uploads missing proxy videos if local file exists
-   - Prevents batch job failures from references to non-existent S3 keys
-   - Comprehensive logging for upload tracking
-
-5. **Batch Result Parsing** (app/services/nova_service.py:564-572, 746-763):
-   - **Critical**: `fetch_batch_results()` accepts .jsonl.out extension (AWS Bedrock batch output format)
-   - Previous bug: only checked .jsonl extension, causing all batch results to be ignored
-   - Must parse search_metadata from batch outputs: {project, location, content, keywords, dates}
-   - Enables semantic search for batch-analyzed videos
+5. **Batch Result Parsing** (app/services/nova_service.py):
+   - fetch_batch_results() accepts .jsonl.out extension (AWS Bedrock batch output format)
+   - Must parse search_metadata from batch outputs for semantic search
    - Stored in nova_jobs.search_metadata as JSON
 
 6. **S3 Cleanup Service** (app/services/batch_cleanup_service.py):
-   - Automated cleanup of old batch JSONL input/output files
-   - Default retention: 7 days (completed), 30 days (active jobs)
-   - Dry-run mode with size/cost reporting
-   - CLI: `python -m scripts.cleanup_batch_files --no-dry-run`
-   - **Note**: Cleanup searches bucket root for batch_input_*.jsonl files (not batch_inputs/ prefix)
+   - cleanup_completed_batch_jobs(): Cleans s3_folder-based jobs after completion
+   - Legacy cleanup_old_batch_files(): For old batch_input_*.jsonl files
+   - **UI Access**: Reports page → "Batch Processing Storage" section
+   - **CLI**: `python -m scripts.cleanup_batch_folders --no-dry-run`
 
-7. **Retry Logic** (app/routes/nova_analysis.py:24-40):
+7. **Retry Logic** (app/routes/nova_analysis.py):
    - Exponential backoff for S3 result fetching (max 3 retries, 2-10s delay)
-   - Handles transient S3 failures during batch result retrieval
    - Updates job status to RESULT_FETCH_FAILED if exhausted
-
-8. **Pending Jobs Endpoint** (GET /api/nova/batch/pending):
-   - Returns all in-progress Bedrock batch jobs
-   - Auto-refreshes stale statuses (>60s since last check)
-   - Useful for monitoring large batch submissions
 
 ### Nova Image Analysis Results Storage
 **Must populate both tables for dashboard display:**

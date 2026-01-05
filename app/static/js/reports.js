@@ -648,6 +648,138 @@
         hideZeroUsageToggle.addEventListener('change', applyBillingFilters);
     }
 
+    // =====================================================================
+    // Storage Management
+    // =====================================================================
+
+    const loadStorageStats = async () => {
+        try {
+            const response = await fetch('/reports/api/storage/batch');
+            if (!response.ok) {
+                throw new Error('Failed to load storage stats');
+            }
+
+            const data = await response.json();
+
+            // Update UI
+            document.getElementById('storageBatchFolders').textContent = formatNumber(data.batch_folders?.count || 0);
+            document.getElementById('storageBatchFoldersSize').textContent = formatBytes(data.batch_folders?.total_bytes || 0);
+
+            document.getElementById('storageInputFiles').textContent = formatNumber(data.input_files?.count || 0);
+            document.getElementById('storageInputFilesSize').textContent = formatBytes(data.input_files?.total_bytes || 0);
+
+            document.getElementById('storageOutputFiles').textContent = formatNumber(data.output_files?.count || 0);
+            document.getElementById('storageOutputFilesSize').textContent = formatBytes(data.output_files?.total_bytes || 0);
+
+            document.getElementById('storageCleanableJobs').textContent = formatNumber(data.cleanable_jobs || 0);
+
+            // Enable/disable cleanup buttons based on cleanable jobs
+            const previewBtn = document.getElementById('previewCleanupBtn');
+            const cleanupBtn = document.getElementById('runCleanupBtn');
+            const hasCleanable = data.cleanable_jobs > 0;
+
+            if (previewBtn) previewBtn.disabled = !hasCleanable;
+            if (cleanupBtn) cleanupBtn.disabled = !hasCleanable;
+
+        } catch (error) {
+            console.error('Error loading storage stats:', error);
+            document.getElementById('storageBatchFolders').textContent = 'Error';
+            document.getElementById('storageInputFiles').textContent = 'Error';
+            document.getElementById('storageOutputFiles').textContent = 'Error';
+            document.getElementById('storageCleanableJobs').textContent = 'Error';
+        }
+    };
+
+    const runCleanup = async (dryRun = true) => {
+        const resultDiv = document.getElementById('cleanupResult');
+        const alertDiv = document.getElementById('cleanupResultAlert');
+        const messageDiv = document.getElementById('cleanupResultMessage');
+
+        try {
+            // Disable buttons during operation
+            const previewBtn = document.getElementById('previewCleanupBtn');
+            const cleanupBtn = document.getElementById('runCleanupBtn');
+            if (previewBtn) previewBtn.disabled = true;
+            if (cleanupBtn) cleanupBtn.disabled = true;
+
+            // Show loading state
+            resultDiv.style.display = 'block';
+            alertDiv.className = 'alert alert-info';
+            messageDiv.innerHTML = '<i class="bi bi-hourglass-split"></i> ' +
+                (dryRun ? 'Calculating cleanup preview...' : 'Running cleanup...');
+
+            const response = await fetch('/reports/api/storage/batch/cleanup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ dry_run: dryRun })
+            });
+
+            if (!response.ok) {
+                throw new Error('Cleanup request failed');
+            }
+
+            const data = await response.json();
+
+            // Build result message
+            let message = '';
+            if (dryRun) {
+                alertDiv.className = 'alert alert-warning';
+                message = `<strong><i class="bi bi-eye"></i> Preview:</strong> `;
+                if (data.jobs_cleaned > 0) {
+                    message += `${data.jobs_cleaned} batch job(s) would be cleaned, `;
+                    message += `${formatNumber(data.objects_deleted)} objects would be deleted, `;
+                    message += `${formatBytes(data.bytes_freed)} would be freed.`;
+                    message += `<br><small class="text-muted">Click "Clean Up" to permanently delete these files.</small>`;
+                } else {
+                    message += 'No completed batch jobs found to clean.';
+                }
+            } else {
+                alertDiv.className = 'alert alert-success';
+                message = `<strong><i class="bi bi-check-circle"></i> Cleanup Complete:</strong> `;
+                message += `${data.jobs_cleaned} batch job(s) cleaned, `;
+                message += `${formatNumber(data.objects_deleted)} objects deleted, `;
+                message += `${formatBytes(data.bytes_freed)} freed.`;
+            }
+
+            if (data.errors && data.errors.length > 0) {
+                message += `<br><small class="text-danger">Errors: ${data.errors.join(', ')}</small>`;
+            }
+
+            messageDiv.innerHTML = message;
+
+            // Refresh storage stats
+            await loadStorageStats();
+
+        } catch (error) {
+            console.error('Cleanup error:', error);
+            alertDiv.className = 'alert alert-danger';
+            messageDiv.innerHTML = `<strong><i class="bi bi-exclamation-triangle"></i> Error:</strong> ${error.message}`;
+        }
+    };
+
+    // Storage management button handlers
+    const refreshStorageBtn = document.getElementById('refreshStorageBtn');
+    if (refreshStorageBtn) {
+        refreshStorageBtn.addEventListener('click', loadStorageStats);
+    }
+
+    const previewCleanupBtn = document.getElementById('previewCleanupBtn');
+    if (previewCleanupBtn) {
+        previewCleanupBtn.addEventListener('click', () => runCleanup(true));
+    }
+
+    const runCleanupBtn = document.getElementById('runCleanupBtn');
+    if (runCleanupBtn) {
+        runCleanupBtn.addEventListener('click', () => {
+            if (confirm('Are you sure you want to delete batch processing files? This cannot be undone.')) {
+                runCleanup(false);
+            }
+        });
+    }
+
+    // Load storage stats on page load
+    loadStorageStats();
+
     // Default to last week
     setQuickRange(7, 'week');
 })();

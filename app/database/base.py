@@ -321,6 +321,25 @@ class DatabaseBase:
                 ON bedrock_batch_jobs(batch_job_arn)
             ''')
 
+            # Add new columns for multi-job batch tracking
+            bedrock_batch_columns = [
+                ('bedrock_batch_jobs', 'parent_batch_id', 'TEXT'),
+                ('bedrock_batch_jobs', 'chunk_index', 'INTEGER'),
+                ('bedrock_batch_jobs', 'total_chunks', 'INTEGER'),
+                ('bedrock_batch_jobs', 's3_folder', 'TEXT'),
+                ('bedrock_batch_jobs', 'cleanup_completed_at', 'TIMESTAMP'),
+            ]
+            for table, column, col_type in bedrock_batch_columns:
+                try:
+                    cursor.execute(f'ALTER TABLE {table} ADD COLUMN {column} {col_type}')
+                except sqlite3.OperationalError:
+                    pass
+
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_bedrock_batch_jobs_parent
+                ON bedrock_batch_jobs(parent_batch_id)
+            ''')
+
             # Rescan jobs table (for folder rescan operations with progress tracking)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS rescan_jobs (

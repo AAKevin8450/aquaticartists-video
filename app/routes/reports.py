@@ -466,3 +466,134 @@ def billing_summary():
     except Exception as e:
         current_app.logger.error(f"Billing summary error: {e}", exc_info=True)
         return jsonify({'error': 'Failed to load billing summary'}), 500
+
+
+@bp.route('/api/storage/batch')
+def batch_storage_stats():
+    """
+    Get storage statistics for batch processing files in S3.
+
+    Returns:
+        {
+            'input_files': {'count': int, 'total_bytes': int},
+            'output_files': {'count': int, 'total_bytes': int},
+            'batch_folders': {'count': int, 'total_bytes': int},
+            'cleanable_jobs': int
+        }
+    """
+    import boto3
+    import os
+    from app.services.batch_cleanup_service import BatchCleanupService
+
+    try:
+        db = get_db()
+
+        s3_client = boto3.client(
+            's3',
+            region_name=current_app.config['AWS_REGION'],
+            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+        )
+
+        cleanup_service = BatchCleanupService(
+            s3_client=s3_client,
+            bucket_name=current_app.config['S3_BUCKET_NAME'],
+            db=db
+        )
+
+        # Get standard storage stats
+        stats = cleanup_service.get_batch_storage_stats()
+
+        # Count nova_batch folders (new multi-chunk format)
+        batch_folder_stats = {'count': 0, 'total_bytes': 0}
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(
+            Bucket=current_app.config['S3_BUCKET_NAME'],
+            Prefix='nova_batch/'
+        ):
+            for obj in page.get('Contents', []):
+                batch_folder_stats['count'] += 1
+                batch_folder_stats['total_bytes'] += obj.get('Size', 0)
+
+        # Count jobs that can be cleaned
+        cleanable_jobs = db.get_cleanable_batch_jobs()
+
+        return jsonify({
+            'input_files': stats['input_files'],
+            'output_files': stats['output_files'],
+            'batch_folders': batch_folder_stats,
+            'cleanable_jobs': len(cleanable_jobs),
+            'total_bytes': (
+                stats['input_files']['total_bytes'] +
+                stats['output_files']['total_bytes'] +
+                batch_folder_stats['total_bytes']
+            )
+        })
+
+    except Exception as e:
+        current_app.logger.error(f"Batch storage stats error: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to load batch storage stats'}), 500
+
+
+@bp.route('/api/storage/batch/cleanup', methods=['POST'])
+def batch_storage_cleanup():
+    """
+    Clean up S3 files from completed batch jobs.
+
+    Request body (optional):
+        {
+            "dry_run": true  # Preview only, don't delete (default: true)
+        }
+
+    Returns:
+        {
+            'jobs_processed': int,
+            'jobs_cleaned': int,
+            'objects_deleted': int,
+            'bytes_freed': int,
+            'errors': [str]
+        }
+    """
+    import boto3
+    import os
+    from app.services.batch_cleanup_service import BatchCleanupService
+    from app.services.batch_s3_manager import BatchS3Manager
+
+    try:
+        data = request.get_json() or {}
+        dry_run = data.get('dry_run', True)
+
+        db = get_db()
+
+        s3_client = boto3.client(
+            's3',
+            region_name=current_app.config['AWS_REGION'],
+            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
+            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
+        )
+        bucket_name = current_app.config['S3_BUCKET_NAME']
+
+        batch_s3_manager = BatchS3Manager(s3_client, bucket_name)
+
+        cleanup_service = BatchCleanupService(
+            s3_client=s3_client,
+            bucket_name=bucket_name,
+            db=db,
+            batch_s3_manager=batch_s3_manager
+        )
+
+        # Run cleanup for completed batch jobs with s3_folder
+        results = cleanup_service.cleanup_completed_batch_jobs(dry_run=dry_run)
+
+        return jsonify({
+            'dry_run': dry_run,
+            'jobs_processed': results['jobs_processed'],
+            'jobs_cleaned': results['jobs_cleaned'],
+            'objects_deleted': results['objects_deleted'],
+            'bytes_freed': results['bytes_freed'],
+            'errors': results['errors']
+        })
+
+    except Exception as e:
+        current_app.logger.error(f"Batch cleanup error: {e}", exc_info=True)
+        return jsonify({'error': f'Cleanup failed: {str(e)}'}), 500

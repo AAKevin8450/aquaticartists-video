@@ -10,8 +10,12 @@ import time
 import logging
 from botocore.exceptions import ClientError
 from botocore.config import Config
-from typing import Dict, Any, Optional, List, Tuple, Callable
+from typing import Dict, Any, Optional, List, Tuple, Callable, TYPE_CHECKING
 from datetime import datetime
+
+if TYPE_CHECKING:
+    from app.services.batch_splitter_service import BatchChunk
+    from app.services.batch_s3_manager import BatchS3Manager
 
 # Import from submodules - centralized functionality
 from app.services.nova.models import (
@@ -162,12 +166,13 @@ class NovaVideoService:
         return estimate_cost(model, video_duration_seconds, estimated_output_tokens, batch_mode)
 
     def _build_s3_uri(self, s3_key: str) -> str:
-        """Build S3 URI from bucket and key with URL encoding for special characters."""
-        from urllib.parse import quote
-        # URL-encode the S3 key to handle spaces, commas, and other special characters
-        # safe='/' preserves forward slashes in the path
-        encoded_key = quote(s3_key, safe='/')
-        return f"s3://{self.bucket_name}/{encoded_key}"
+        """Build S3 URI from bucket and key.
+
+        Note: URL encoding was removed because Bedrock Batch API cannot handle
+        encoded filenames - it looks for the literal encoded key which doesn't exist.
+        Instead, we now copy files to sanitized names in isolated batch folders.
+        """
+        return f"s3://{self.bucket_name}/{s3_key}"
 
     def _get_video_format(self, s3_key: str) -> str:
         """Extract video format from S3 key."""
@@ -531,6 +536,131 @@ class NovaVideoService:
             'batch_input_s3_key': input_key,
             'batch_output_s3_prefix': output_prefix_key
         }
+
+    def _get_model_id(self, model: str) -> str:
+        """Get the runtime model ID for a given model name."""
+        config = self.get_model_config(model)
+        return config.get('inference_profile_id', config['id'])
+
+    @property
+    def batch_role_arn(self) -> str:
+        """Get the Bedrock batch role ARN from environment."""
+        role_arn = os.getenv('BEDROCK_BATCH_ROLE_ARN')
+        if not role_arn:
+            raise NovaError("BEDROCK_BATCH_ROLE_ARN environment variable is required for batch processing.")
+        return role_arn
+
+    @handle_bedrock_errors
+    def submit_multi_chunk_batch(
+        self,
+        chunks: List['BatchChunk'],
+        model: str,
+        analysis_types: List[str],
+        options: Dict[str, Any],
+        batch_s3_manager: 'BatchS3Manager',
+        file_id_to_proxy_key: Dict[int, str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Submit multiple batch jobs for a set of chunks.
+
+        For each chunk:
+        1. Copy proxy files to isolated S3 folder with sanitized names
+        2. Build batch records using sanitized S3 keys
+        3. Upload JSONL manifest to the chunk's folder
+        4. Submit batch job to Bedrock with InputDataConfig pointing to chunk folder
+
+        Args:
+            chunks: List of BatchChunk objects from batch_splitter_service
+            model: Nova model to use (e.g., "nova-lite")
+            analysis_types: Analysis types to run (e.g., ["combined"])
+            options: Analysis options dict
+            batch_s3_manager: BatchS3Manager instance for S3 operations
+            file_id_to_proxy_key: Mapping of file_id -> original proxy S3 key
+
+        Returns:
+            List of dicts, one per chunk:
+            {
+                'chunk_index': int,
+                'batch_job_arn': str,
+                's3_folder': str,
+                'file_ids': List[int],
+                'file_count': int,
+                'size_bytes': int,
+                'key_mapping': Dict[str, str]  # original_key -> sanitized_key
+            }
+
+        Raises:
+            Exception: If any chunk submission fails (partial submissions may exist)
+        """
+        results = []
+
+        for chunk in chunks:
+            logger.info(
+                f"Processing chunk {chunk.chunk_index}: "
+                f"{len(chunk.file_ids)} files, "
+                f"{chunk.total_size_bytes / 1024 / 1024:.1f} MB"
+            )
+
+            # Step 1: Copy files to batch folder with sanitized names
+            key_mapping = batch_s3_manager.prepare_batch_files(
+                chunk.proxy_s3_keys,
+                chunk.s3_folder
+            )
+
+            # Step 2: Build batch records using sanitized keys
+            all_records = []
+            for file_id, original_key in zip(chunk.file_ids, chunk.proxy_s3_keys):
+                sanitized_key = key_mapping[original_key]
+
+                # Build records for this file using sanitized key
+                records = self._build_batch_records(
+                    s3_key=sanitized_key,
+                    analysis_types=analysis_types,
+                    options=options,
+                    record_prefix=f"file-{file_id}:"
+                )
+                all_records.extend(records)
+
+            # Step 3: Create and upload manifest
+            manifest_lines = [json.dumps(record) for record in all_records]
+            manifest_content = '\n'.join(manifest_lines)
+            manifest_key = batch_s3_manager.upload_manifest(manifest_content, chunk.s3_folder)
+
+            # Step 4: Submit batch job to Bedrock
+            # CRITICAL: InputDataConfig points to the chunk's folder (not bucket root)
+            # This folder contains BOTH the manifest.jsonl AND the files/ subfolder
+            input_s3_uri = f"s3://{self.bucket_name}/{chunk.s3_folder}/"
+            output_s3_uri = f"s3://{self.bucket_name}/nova/batch/output/{chunk.s3_folder}/"
+
+            job_name = f"nova-batch-{chunk.s3_folder.replace('/', '-')}"
+
+            # Use existing _start_batch_job method
+            runtime_model_id = self._get_model_id(model)
+            role_arn = self.batch_role_arn
+
+            batch_job_arn = self._start_batch_job(
+                job_name=job_name,
+                model_id=runtime_model_id,
+                role_arn=role_arn,
+                input_s3_uri=input_s3_uri,
+                output_s3_uri=output_s3_uri
+            )
+
+            results.append({
+                'chunk_index': chunk.chunk_index,
+                'batch_job_arn': batch_job_arn,
+                's3_folder': chunk.s3_folder,
+                'file_ids': chunk.file_ids,
+                'file_count': len(chunk.file_ids),
+                'size_bytes': chunk.total_size_bytes,
+                'key_mapping': key_mapping,
+                'manifest_key': manifest_key,
+                'output_s3_prefix': f"nova/batch/output/{chunk.s3_folder}/"
+            })
+
+            logger.info(f"Submitted chunk {chunk.chunk_index}: {batch_job_arn}")
+
+        return results
 
     @handle_bedrock_errors
     def get_batch_job_status(self, batch_job_arn: str) -> Dict[str, Any]:

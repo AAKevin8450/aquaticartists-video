@@ -9,17 +9,21 @@ class BedrockBatchJobsMixin:
 
     def create_bedrock_batch_job(self, batch_job_arn: str, job_name: str, model: str,
                                   input_s3_key: str, output_s3_prefix: str,
-                                  nova_job_ids: List[int], total_records: int = 0) -> int:
+                                  nova_job_ids: List[int], total_records: int = 0,
+                                  parent_batch_id: str = None, chunk_index: int = None,
+                                  total_chunks: int = None, s3_folder: str = None) -> int:
         """Create a new Bedrock batch job tracking record."""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT INTO bedrock_batch_jobs
                 (batch_job_arn, job_name, model, input_s3_key, output_s3_prefix,
-                 nova_job_ids, total_records, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'SUBMITTED')
+                 nova_job_ids, total_records, status, parent_batch_id, chunk_index,
+                 total_chunks, s3_folder)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', ?, ?, ?, ?)
             ''', (batch_job_arn, job_name, model, input_s3_key, output_s3_prefix,
-                  json.dumps(nova_job_ids), total_records))
+                  json.dumps(nova_job_ids), total_records, parent_batch_id,
+                  chunk_index, total_chunks, s3_folder))
             return cursor.lastrowid
 
     def get_bedrock_batch_job_by_arn(self, batch_job_arn: str) -> Optional[Dict[str, Any]]:
@@ -136,3 +140,51 @@ class BedrockBatchJobsMixin:
             cursor = conn.cursor()
             cursor.execute('DELETE FROM bedrock_batch_jobs WHERE batch_job_arn = ?',
                           (batch_job_arn,))
+
+    def get_batch_jobs_by_parent(self, parent_batch_id: str) -> List[Dict[str, Any]]:
+        """Get all batch jobs belonging to a parent batch group."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM bedrock_batch_jobs
+                WHERE parent_batch_id = ?
+                ORDER BY chunk_index
+            ''', (parent_batch_id,))
+            jobs = []
+            for row in cursor.fetchall():
+                job = dict(row)
+                if job.get('nova_job_ids'):
+                    job['nova_job_ids'] = json.loads(job['nova_job_ids'])
+                if job.get('cached_results'):
+                    job['cached_results'] = json.loads(job['cached_results'])
+                jobs.append(job)
+            return jobs
+
+    def get_cleanable_batch_jobs(self) -> List[Dict[str, Any]]:
+        """Get batch jobs that are completed and ready for S3 cleanup."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM bedrock_batch_jobs
+                WHERE status = 'COMPLETED'
+                AND cleanup_completed_at IS NULL
+                AND s3_folder IS NOT NULL
+            ''')
+            jobs = []
+            for row in cursor.fetchall():
+                job = dict(row)
+                if job.get('nova_job_ids'):
+                    job['nova_job_ids'] = json.loads(job['nova_job_ids'])
+                jobs.append(job)
+            return jobs
+
+    def mark_batch_job_cleaned(self, job_id: int):
+        """Mark a batch job as cleaned up."""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE bedrock_batch_jobs
+                SET cleanup_completed_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (job_id,))
+            conn.commit()

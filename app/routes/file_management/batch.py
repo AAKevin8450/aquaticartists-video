@@ -1140,12 +1140,24 @@ def _run_batch_nova(app, job: BatchJob):
 
 def _run_batch_nova_batch_mode(job: BatchJob, model_key: str, analysis_types, user_options,
                                file_types, image_analysis_types):
-    """Submit Nova batch analysis as shared Bedrock batch jobs (chunked when needed)."""
+    """Submit Nova batch analysis as shared Bedrock batch jobs using multi-chunk architecture.
+
+    This implementation:
+    1. Splits files into chunks based on count (150 max) and size (4.5GB max)
+    2. Copies proxy files to isolated S3 folders with sanitized names
+    3. Submits each chunk as a separate Bedrock batch job
+    4. Tracks jobs with parent_batch_id for grouping
+
+    This fixes issues with special characters in filenames and the 5GB bucket limit.
+    """
     from datetime import datetime
     import json
+    import boto3
     from app.routes.nova_analysis import get_nova_service
     from app.routes.upload import create_proxy_internal
     from app.services.s3_service import S3Service
+    from app.services.batch_splitter_service import split_batch_by_size
+    from app.services.batch_s3_manager import BatchS3Manager
 
     try:
         db = get_db()
@@ -1165,18 +1177,22 @@ def _run_batch_nova_batch_mode(job: BatchJob, model_key: str, analysis_types, us
         else:
             effective_types = requested_types
 
-        records_per_file = max(1, len(effective_types))
-        max_records = int(os.getenv('NOVA_BATCH_MAX_RECORDS', '500'))
-        max_files_per_job = max(1, max_records // records_per_file)
-
         s3_service = S3Service(
             bucket_name=current_app.config['S3_BUCKET_NAME'],
             region=current_app.config['AWS_REGION']
         )
 
-        file_cache = {}
-        video_ids = []
+        # Initialize BatchS3Manager for sanitized file copies
+        s3_client = boto3.client(
+            's3',
+            region_name=current_app.config['AWS_REGION']
+        )
+        batch_s3_manager = BatchS3Manager(s3_client, current_app.config['S3_BUCKET_NAME'])
 
+        file_cache = {}
+        video_files_info = []  # List of {file_id, proxy_s3_key, proxy_size_bytes}
+
+        # Phase 1: Process images immediately, collect video info for batching
         for file_id in job.file_ids:
             if job.status == 'CANCELLED':
                 break
@@ -1195,6 +1211,7 @@ def _run_batch_nova_batch_mode(job: BatchJob, model_key: str, analysis_types, us
             file_type = file_types.get(file_id, file.get('file_type', 'video'))
 
             if file_type == 'image':
+                # Process images immediately (unchanged)
                 job.current_file = file['filename']
                 try:
                     payload = _process_nova_image(
@@ -1233,54 +1250,69 @@ def _run_batch_nova_batch_mode(job: BatchJob, model_key: str, analysis_types, us
                     })
                     current_app.logger.error(f"Batch Nova error for file {file_id}: {e}")
             else:
-                video_ids.append(file_id)
-
-        def _chunk_items(items, size):
-            for index in range(0, len(items), size):
-                yield items[index:index + size]
-
-        for chunk_index, chunk in enumerate(_chunk_items(video_ids, max_files_per_job), start=1):
-            if job.status == 'CANCELLED':
-                break
-
-            batch_records = []
-            batch_jobs = []
-
-            for file_id in chunk:
-                if job.status == 'CANCELLED':
-                    break
-
-                file = file_cache.get(file_id) or db.get_file(file_id)
-                if not file:
-                    job.failed_files += 1
-                    job.errors.append({
-                        'file_id': file_id,
-                        'filename': f'File {file_id}',
-                        'error': f'File {file_id} not found'
-                    })
-                    continue
-
-                job.current_file = file['filename']
-
+                # Collect video info for batch processing
                 try:
                     proxy = db.get_proxy_for_source(file_id)
                     if not proxy:
+                        job.current_file = file['filename']
                         proxy_result = create_proxy_internal(file_id, upload_to_s3=False)
                         proxy = db.get_file(proxy_result['proxy_id'])
                     if not proxy:
                         raise Exception(f'Proxy not found for file {file_id}')
 
                     s3_key = _ensure_s3_key(db, proxy, s3_service)
-                    record_prefix = f"file-{file_id}:"
-                    per_file_options = dict(base_options)
-                    per_file_options['batch_record_prefix'] = record_prefix
 
-                    records = nova_service._build_batch_records(
-                        s3_key=s3_key,
-                        analysis_types=effective_types,
-                        options=per_file_options,
-                        record_prefix=record_prefix
-                    )
+                    # Get proxy file size for splitting by size
+                    proxy_size = 0
+                    try:
+                        head_response = s3_client.head_object(
+                            Bucket=current_app.config['S3_BUCKET_NAME'],
+                            Key=s3_key
+                        )
+                        proxy_size = head_response.get('ContentLength', 0)
+                    except Exception as e:
+                        current_app.logger.warning(f"Could not get size for {s3_key}: {e}")
+
+                    video_files_info.append({
+                        'file_id': file_id,
+                        'proxy_s3_key': s3_key,
+                        'proxy_size_bytes': proxy_size,
+                        'filename': file['filename'],
+                        'estimated_duration_seconds': file.get('metadata', {}).get('duration_seconds', 300)
+                    })
+                except Exception as e:
+                    job.failed_files += 1
+                    job.errors.append({
+                        'file_id': file_id,
+                        'filename': file.get('filename', f'File {file_id}'),
+                        'error': str(e)
+                    })
+                    current_app.logger.error(f"Batch Nova error preparing file {file_id}: {e}")
+
+        # Phase 2: Split videos into chunks and submit batch jobs
+        if video_files_info and job.status != 'CANCELLED':
+            timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            parent_batch_id = f"batch-group-{timestamp}"
+
+            # Split files into chunks (max 150 files OR 4.5GB per chunk)
+            chunks = split_batch_by_size(video_files_info, timestamp)
+
+            current_app.logger.info(
+                f"Split {len(video_files_info)} videos into {len(chunks)} batch jobs "
+                f"(total size: {sum(f['proxy_size_bytes'] for f in video_files_info) / 1024 / 1024:.1f} MB)"
+            )
+
+            # Track nova_job_ids by chunk for database records
+            nova_job_ids_by_chunk = {}
+            file_id_to_jobs = {}  # file_id -> {analysis_job_id, nova_job_id}
+
+            # Create database records for all files first
+            for chunk in chunks:
+                chunk_nova_job_ids = []
+                for file_id in chunk.file_ids:
+                    file = file_cache.get(file_id)
+                    per_file_options = dict(base_options)
+                    per_file_options['batch_record_prefix'] = f"file-{file_id}:"
 
                     analysis_job_id = db.create_analysis_job(
                         file_id=file_id,
@@ -1291,7 +1323,8 @@ def _run_batch_nova_batch_mode(job: BatchJob, model_key: str, analysis_types, us
                             'model': model_key,
                             'analysis_types': effective_types,
                             'options': per_file_options,
-                            'processing_mode': 'batch'
+                            'processing_mode': 'batch',
+                            'parent_batch_id': parent_batch_id
                         })
                     )
                     nova_job_id = db.create_nova_job(
@@ -1300,105 +1333,123 @@ def _run_batch_nova_batch_mode(job: BatchJob, model_key: str, analysis_types, us
                         analysis_types=effective_types,
                         user_options=per_file_options
                     )
-
-                    batch_jobs.append({
-                        'file_id': file_id,
-                        'filename': file['filename'],
+                    chunk_nova_job_ids.append(nova_job_id)
+                    file_id_to_jobs[file_id] = {
                         'analysis_job_id': analysis_job_id,
                         'nova_job_id': nova_job_id,
-                        'estimated_duration_seconds': file.get('metadata', {}).get('duration_seconds', 300)
-                    })
-                    batch_records.extend(records)
-                except Exception as e:
-                    job.failed_files += 1
-                    job.errors.append({
-                        'file_id': file_id,
-                        'filename': file.get('filename', f'File {file_id}'),
-                        'error': str(e)
-                    })
-                    current_app.logger.error(f"Batch Nova error for file {file_id}: {e}")
+                        'filename': file['filename'] if file else f'File {file_id}'
+                    }
 
-            if not batch_records:
-                continue
+                nova_job_ids_by_chunk[chunk.chunk_index] = chunk_nova_job_ids
 
-            job_name = f"nova-batch-{job.job_id}-{chunk_index}-{int(datetime.utcnow().timestamp())}"
-
+            # Submit batch jobs using multi-chunk infrastructure
             try:
-                batch_response = nova_service.start_batch_analysis_records(
-                    records=batch_records,
+                file_id_to_proxy_key = {
+                    f['file_id']: f['proxy_s3_key'] for f in video_files_info
+                }
+
+                batch_results = nova_service.submit_multi_chunk_batch(
+                    chunks=chunks,
                     model=model_key,
-                    role_arn=role_arn,
-                    input_prefix=current_app.config.get('NOVA_BATCH_INPUT_PREFIX', 'nova/batch/input'),
-                    output_prefix=current_app.config.get('NOVA_BATCH_OUTPUT_PREFIX', 'nova/batch/output'),
-                    job_name=job_name
+                    analysis_types=effective_types,
+                    options=base_options,
+                    batch_s3_manager=batch_s3_manager,
+                    file_id_to_proxy_key=file_id_to_proxy_key
                 )
 
-                # Create tracking record for the Bedrock batch job
-                nova_job_ids = [entry['nova_job_id'] for entry in batch_jobs]
-                db.create_bedrock_batch_job(
-                    batch_job_arn=batch_response['batch_job_arn'],
-                    job_name=job_name,
-                    model=model_key,
-                    input_s3_key=batch_response['batch_input_s3_key'],
-                    output_s3_prefix=batch_response['batch_output_s3_prefix'],
-                    nova_job_ids=nova_job_ids,
-                    total_records=len(batch_records)
+                # Record batch jobs in database and update nova_jobs
+                for result in batch_results:
+                    chunk_index = result['chunk_index']
+                    chunk_nova_job_ids = nova_job_ids_by_chunk[chunk_index]
+
+                    # Create bedrock_batch_job record with new fields
+                    db.create_bedrock_batch_job(
+                        batch_job_arn=result['batch_job_arn'],
+                        job_name=f"{parent_batch_id}-chunk-{chunk_index:03d}",
+                        model=model_key,
+                        input_s3_key=result['manifest_key'],
+                        output_s3_prefix=result['output_s3_prefix'],
+                        nova_job_ids=chunk_nova_job_ids,
+                        total_records=result['file_count'] * len(effective_types),
+                        parent_batch_id=parent_batch_id,
+                        chunk_index=chunk_index,
+                        total_chunks=len(chunks),
+                        s3_folder=result['s3_folder']
+                    )
+
+                    # Update nova_jobs with batch info
+                    for nova_job_id in chunk_nova_job_ids:
+                        db.update_nova_job(nova_job_id, {
+                            'status': 'IN_PROGRESS',
+                            'progress_percent': 0,
+                            'batch_mode': 1,
+                            'batch_job_arn': result['batch_job_arn'],
+                            'batch_status': 'SUBMITTED',
+                            'batch_input_s3_key': result['manifest_key'],
+                            'batch_output_s3_prefix': result['output_s3_prefix']
+                        })
+                        db.update_nova_job_started_at(nova_job_id)
+
+                    # Find file_ids for this chunk
+                    chunk_obj = next(c for c in chunks if c.chunk_index == chunk_index)
+                    for file_id in chunk_obj.file_ids:
+                        jobs_info = file_id_to_jobs.get(file_id)
+                        if jobs_info:
+                            db.update_analysis_job(jobs_info['analysis_job_id'], status='IN_PROGRESS')
+
+                            # Estimate cost
+                            file_info = next((f for f in video_files_info if f['file_id'] == file_id), None)
+                            est_duration = file_info.get('estimated_duration_seconds', 300) if file_info else 300
+                            cost_estimate = nova_service.estimate_cost(
+                                model=model_key,
+                                video_duration_seconds=est_duration,
+                                batch_mode=True
+                            )
+                            estimated_cost = cost_estimate.get('total_cost_usd', 0.0)
+                            if estimated_cost > 0:
+                                job.total_cost_usd += estimated_cost
+                                job.processed_files_costs.append(estimated_cost)
+
+                            job.completed_files += 1
+                            job.results.append({
+                                'file_id': file_id,
+                                'filename': jobs_info['filename'],
+                                'file_type': 'video',
+                                'success': True,
+                                'nova_job_id': jobs_info['nova_job_id'],
+                                'analysis_job_id': jobs_info['analysis_job_id'],
+                                'status': 'SUBMITTED',
+                                'batch_job_arn': result['batch_job_arn'],
+                                'chunk_index': chunk_index,
+                                'parent_batch_id': parent_batch_id
+                            })
+
+                current_app.logger.info(
+                    f"Successfully submitted {len(batch_results)} batch jobs for parent batch {parent_batch_id}"
                 )
+
             except Exception as e:
                 error_msg = str(e)
-                for entry in batch_jobs:
-                    db.update_nova_job(entry['nova_job_id'], {
+                current_app.logger.error(f"Batch submission failed: {error_msg}", exc_info=True)
+
+                # Mark all nova_jobs as failed
+                for file_id, jobs_info in file_id_to_jobs.items():
+                    db.update_nova_job(jobs_info['nova_job_id'], {
                         'status': 'FAILED',
                         'error_message': error_msg,
                         'batch_status': 'FAILED'
                     })
                     db.update_analysis_job(
-                        entry['analysis_job_id'],
+                        jobs_info['analysis_job_id'],
                         status='FAILED',
                         error_message=error_msg
                     )
                     job.failed_files += 1
                     job.errors.append({
-                        'file_id': entry['file_id'],
-                        'filename': entry['filename'],
+                        'file_id': file_id,
+                        'filename': jobs_info['filename'],
                         'error': error_msg
                     })
-                continue
-
-            for entry in batch_jobs:
-                db.update_nova_job(entry['nova_job_id'], {
-                    'status': 'IN_PROGRESS',
-                    'progress_percent': 0,
-                    'batch_mode': 1,
-                    'batch_job_arn': batch_response['batch_job_arn'],
-                    'batch_status': 'SUBMITTED',
-                    'batch_input_s3_key': batch_response['batch_input_s3_key'],
-                    'batch_output_s3_prefix': batch_response['batch_output_s3_prefix']
-                })
-                db.update_nova_job_started_at(entry['nova_job_id'])
-                db.update_analysis_job(entry['analysis_job_id'], status='IN_PROGRESS')
-
-                cost_estimate = nova_service.estimate_cost(
-                    model=model_key,
-                    video_duration_seconds=entry.get('estimated_duration_seconds', 300),
-                    batch_mode=True
-                )
-                estimated_cost = cost_estimate.get('total_cost_usd', 0.0)
-                if estimated_cost > 0:
-                    job.total_cost_usd += estimated_cost
-                    job.processed_files_costs.append(estimated_cost)
-
-                job.completed_files += 1
-                job.results.append({
-                    'file_id': entry['file_id'],
-                    'filename': entry['filename'],
-                    'file_type': 'video',
-                    'success': True,
-                    'nova_job_id': entry['nova_job_id'],
-                    'analysis_job_id': entry['analysis_job_id'],
-                    'status': 'SUBMITTED',
-                    'batch_job_arn': batch_response['batch_job_arn']
-                })
 
         # IMPORTANT: Don't mark as COMPLETED - Bedrock batch jobs take hours to process
         # Keep job IN_PROGRESS so UI shows the batch is still running
