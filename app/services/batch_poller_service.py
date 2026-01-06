@@ -319,8 +319,10 @@ class BatchPollerService:
             return False
 
         try:
-            # Initialize Nova service
-            nova_service = NovaVideoService()
+            # Initialize Nova service with required parameters
+            bucket_name = os.getenv('S3_BUCKET_NAME')
+            region = os.getenv('AWS_REGION', 'us-east-1')
+            nova_service = NovaVideoService(bucket_name=bucket_name, region=region)
 
             # Get S3 output location
             s3_folder = batch_job.get('s3_folder')
@@ -347,36 +349,92 @@ class BatchPollerService:
                         fail_count += 1
                         continue
 
-                    # Get associated analysis_job
-                    analysis_job = db.get_analysis_job(nova_job['analysis_job_id'])
-                    if not analysis_job:
-                        logger.error(f"Analysis job {nova_job['analysis_job_id']} not found")
-                        fail_count += 1
+                    # Skip if already completed
+                    if nova_job.get('status') == 'COMPLETED':
+                        logger.debug(f"Nova job {nova_job_id} already completed, skipping")
+                        success_count += 1
                         continue
 
-                    file_id = analysis_job['file_id']
+                    # Parse options and analysis types
+                    import json as json_module
 
-                    # Fetch and process batch results
-                    # This will update nova_jobs and analysis_jobs tables
-                    result = nova_service.fetch_batch_results(
-                        file_id=file_id,
-                        nova_job_id=nova_job_id,
-                        batch_output_s3_prefix=output_s3_prefix,
-                        record_prefix=f"file-{file_id}:"
+                    # Handle both string and already-parsed values
+                    analysis_types = nova_job.get('analysis_types', [])
+                    if isinstance(analysis_types, str):
+                        analysis_types = json_module.loads(analysis_types)
+
+                    user_options = nova_job.get('user_options', {})
+                    if isinstance(user_options, str):
+                        user_options = json_module.loads(user_options)
+
+                    # Fetch batch results from S3
+                    results = nova_service.fetch_batch_results(
+                        s3_prefix=nova_job['batch_output_s3_prefix'],
+                        model=nova_job['model'],
+                        analysis_types=analysis_types,
+                        options=user_options,
+                        record_prefix=user_options.get('batch_record_prefix')
                     )
 
-                    if result:
-                        success_count += 1
-                        logger.debug(f"Successfully fetched results for nova_job {nova_job_id}")
-                    else:
-                        fail_count += 1
-                        logger.warning(f"Failed to fetch results for nova_job {nova_job_id}")
+                    # Update nova_job with results
+                    update_data = {
+                        'status': 'COMPLETED',
+                        'progress_percent': 100,
+                        'tokens_total': results['totals']['tokens_total'],
+                        'processing_time_seconds': results['totals']['processing_time_seconds'],
+                        'cost_usd': results['totals']['cost_total_usd'],
+                        'batch_status': 'COMPLETED',
+                        'completed_at': datetime.utcnow().isoformat()
+                    }
+
+                    if 'summary' in results:
+                        update_data['summary_result'] = json_module.dumps(results['summary'])
+                        update_data['tokens_input'] = results['summary'].get('tokens_input', 0)
+                        update_data['tokens_output'] = results['summary'].get('tokens_output', 0)
+
+                    if 'chapters' in results:
+                        update_data['chapters_result'] = json_module.dumps(results['chapters'])
+
+                    if 'elements' in results:
+                        update_data['elements_result'] = json_module.dumps(results['elements'])
+
+                    if 'waterfall_classification' in results:
+                        update_data['waterfall_classification_result'] = json_module.dumps(results['waterfall_classification'])
+
+                    if 'search_metadata' in results:
+                        update_data['search_metadata'] = json_module.dumps(results['search_metadata'])
+
+                    db.update_nova_job(nova_job_id, update_data)
+
+                    # Update analysis_job
+                    db.update_analysis_job(
+                        nova_job['analysis_job_id'],
+                        status='COMPLETED',
+                        results=results
+                    )
+
+                    success_count += 1
+                    logger.debug(f"Successfully processed results for nova_job {nova_job_id}")
 
                 except Exception as e:
                     logger.error(
                         f"Error fetching results for nova_job {nova_job_id}: {e}",
                         exc_info=True
                     )
+                    # Update job as failed
+                    try:
+                        db.update_nova_job(nova_job_id, {
+                            'status': 'FAILED',
+                            'error_message': f'Failed to fetch batch results: {str(e)}',
+                            'batch_status': 'RESULT_FETCH_FAILED'
+                        })
+                        db.update_analysis_job(
+                            nova_job.get('analysis_job_id') if 'nova_job' in locals() and nova_job else None,
+                            status='FAILED',
+                            error_message=f'Failed to fetch batch results: {str(e)}'
+                        )
+                    except Exception as update_error:
+                        logger.error(f"Failed to update job status: {update_error}")
                     fail_count += 1
 
             logger.info(

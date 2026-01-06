@@ -1,3 +1,86 @@
+2026-01-05 21:05:25 - Updated by Claude Code
+
+[Category: Bug Fix - Critical]
+Fix Three Critical Bugs in Batch Processing Workflow Preventing Result Fetching
+
+[Purpose]
+Resolved complete batch processing failure where 464 videos showed successful Bedrock completion but all analysis jobs failed. The bugs prevented the batch poller from fetching and storing results from S3, leaving jobs stuck in IN_PROGRESS state indefinitely.
+
+[Root Cause Analysis]
+1. **Status Endpoint Premature Completion** (batch.py:568-571)
+   - Frontend status polling endpoint directly updated bedrock_batch_jobs.status to COMPLETED
+   - Batch poller only processes jobs with status IN_PROGRESS or SUBMITTED
+   - Once marked COMPLETED prematurely, poller ignored jobs and never fetched results
+   - Impact: 100% of batch jobs failed silently after Bedrock completion
+
+2. **NovaVideoService Initialization Failure** (batch_poller_service.py:323)
+   - Called NovaVideoService() without required bucket_name and region parameters
+   - TypeError prevented any result fetching from S3
+   - Impact: All result fetch attempts failed with "missing 2 required positional arguments"
+
+3. **Incorrect fetch_batch_results Signature** (batch_poller_service.py:363-370)
+   - Called with wrong parameters (file_id, nova_job_id, batch_output_s3_prefix, record_prefix)
+   - Actual signature requires (s3_prefix, model, analysis_types, options, record_prefix)
+   - Even if called, would fail due to parameter mismatch
+   - Additionally: analysis_types was already parsed list, json.loads() failed with TypeError
+
+[Implementation]
+
+**File: app/routes/file_management/batch.py**
+- Modified get_batch_status() endpoint (lines 563-592)
+- BEFORE: Unconditionally updated bedrock_batch_jobs.status with Bedrock status
+- AFTER: Intelligent status management:
+  - IN_PROGRESS states: Update to 'IN_PROGRESS' only
+  - FAILED states: Update to 'FAILED' with failure_message
+  - COMPLETED state: Do NOT update status, wait for poller to fetch results first
+  - Check results_fetched_at to determine if safe to mark complete
+- Purpose: Prevent premature COMPLETED status, ensure poller processes all jobs
+
+**File: app/services/batch_poller_service.py**
+- Fixed NovaVideoService initialization (lines 322-325):
+  - Added bucket_name = os.getenv('S3_BUCKET_NAME')
+  - Added region = os.getenv('AWS_REGION', 'us-east-1')
+  - Pass parameters: NovaVideoService(bucket_name=bucket_name, region=region)
+
+- Rewrote _fetch_and_store_results() logic (lines 343-431):
+  - Parse analysis_types and user_options from nova_job with type checking
+  - Handle both string (JSON) and already-parsed (list/dict) values
+  - Call fetch_batch_results() with correct signature:
+    - s3_prefix: nova_job['batch_output_s3_prefix']
+    - model: nova_job['model']
+    - analysis_types: parsed list
+    - options: parsed dict
+    - record_prefix: user_options.get('batch_record_prefix')
+  - Store all result fields in nova_jobs table:
+    - summary_result, chapters_result, elements_result
+    - waterfall_classification_result, search_metadata
+    - tokens_input, tokens_output, tokens_total
+    - cost_usd, processing_time_seconds
+  - Update both nova_jobs and analysis_jobs tables to COMPLETED
+  - Enhanced error handling: Mark jobs as FAILED on exception
+
+[Technical Details]
+- Bug #1 was the primary blocker: jobs marked COMPLETED bypassed poller entirely
+- Bug #2 prevented service initialization even if poller ran
+- Bug #3 prevented result parsing even if service initialized
+- All three bugs needed fixing for batch processing to work
+- Tested with 464 video batch across 3 chunks (146 + 150 + 168 files)
+
+[Files Modified]
+- app/routes/file_management/batch.py (status endpoint logic)
+- app/services/batch_poller_service.py (initialization + result fetching)
+
+[Breaking Changes]
+None - fixes restore intended functionality
+
+[Testing Verification]
+- Reset 3 bedrock_batch_jobs to IN_PROGRESS
+- Reset 464 nova_jobs and analysis_jobs to IN_PROGRESS
+- Batch poller successfully processes all jobs after Flask restart
+- All results fetched from S3 and stored in database correctly
+
+---
+
 2026-01-05 16:40:42 - Updated by Claude Code
 
 [Category: Infrastructure / Feature]

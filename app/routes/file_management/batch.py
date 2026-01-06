@@ -565,12 +565,30 @@ def get_batch_status(job_id: str):
                         status = batch_status.get('status', '').upper()
 
                         db.mark_bedrock_batch_checked(bedrock_job['batch_job_arn'])
-                        db.update_bedrock_batch_job(bedrock_job['batch_job_arn'], {
-                            'status': status,
-                            'failure_message': batch_status.get('failure_message')
-                        })
 
-                        if status not in ('COMPLETED', 'SUCCEEDED', 'FAILED'):
+                        # Only update to IN_PROGRESS, never to COMPLETED
+                        # The batch poller is responsible for fetching results and marking as COMPLETED
+                        if status in ('Submitted', 'Validating', 'Scheduled', 'InProgress'):
+                            db.update_bedrock_batch_job(bedrock_job['batch_job_arn'], {
+                                'status': 'IN_PROGRESS'
+                            })
+                            all_bedrock_complete = False
+                        elif status in ('Failed', 'Stopped', 'Expired'):
+                            db.update_bedrock_batch_job(bedrock_job['batch_job_arn'], {
+                                'status': 'FAILED',
+                                'failure_message': batch_status.get('failure_message')
+                            })
+                        elif status in ('Completed',):
+                            # Job is complete in Bedrock, but don't mark as COMPLETED yet
+                            # Let the batch poller fetch results and then mark as COMPLETED
+                            # Check if results have already been fetched
+                            if bedrock_job.get('results_fetched_at'):
+                                # Results already fetched, safe to count as complete
+                                pass
+                            else:
+                                # Results not fetched yet, still waiting for poller
+                                all_bedrock_complete = False
+                        else:
                             all_bedrock_complete = False
                     except Exception as e:
                         current_app.logger.error(f"Error checking Bedrock batch status: {e}")

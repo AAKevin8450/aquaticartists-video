@@ -154,6 +154,11 @@ python -m scripts.cleanup_batch_folders --no-dry-run  # Clean completed batch jo
 4. **Background Batch Poller** (app/services/batch_poller_service.py):
    - **Automatic polling**: Background thread checks pending Bedrock jobs every 60s
    - **Auto result fetching**: When jobs complete, results are fetched and stored automatically
+     - ⚠️ **Critical**: NovaVideoService initialized with bucket_name and region from env vars
+     - Calls fetch_batch_results() with correct signature: (s3_prefix, model, analysis_types, options, record_prefix)
+     - Parses analysis_types/user_options with type checking (handles both string JSON and parsed values)
+     - Stores all result fields: summary/chapters/elements/waterfall_classification/search_metadata
+     - Updates both nova_jobs (raw results) and analysis_jobs (compiled results) to COMPLETED
    - **Auto cleanup**: S3 proxy files deleted after successful result storage
    - **Crash recovery**: On startup, checks for orphaned jobs that completed while app was down
    - **Configuration**: Environment variables in .env
@@ -174,6 +179,10 @@ python -m scripts.cleanup_batch_folders --no-dry-run  # Clean completed batch jo
 
 5. **Status Caching** (app/routes/file_management/batch.py, nova_analysis.py):
    - get_batch_status() checks Bedrock job completion with intelligent caching
+   - ⚠️ **Critical**: Only updates status to IN_PROGRESS or FAILED, never COMPLETED
+     - COMPLETED status reserved for batch poller after results are fetched
+     - Checks results_fetched_at to determine if job can be marked complete
+     - Prevents premature COMPLETED status that would bypass result fetching
    - Bedrock status cache: 30s for in-progress, permanent for completed/failed
    - Reduces Bedrock GetBatchJob API calls by ~95%
 
