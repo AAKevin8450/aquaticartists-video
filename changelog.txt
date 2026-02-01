@@ -1,3 +1,27 @@
+2026-02-01 18:39:33 - Updated by Codex
+
+[Category: Infrastructure]
+Move Flask dev server to port 5800 to avoid conflicts with WSL services.
+
+[Category: Documentation]
+Document the new localhost port and CORS origin example.
+
+[Purpose]
+Avoid startup failures when port 5700 is already in use.
+
+[Impact]
+Local development now serves on `http://localhost:5800`; existing scripts or bookmarks using 5700 must be updated.
+
+[Technical Notes]
+- Changed `app.run` port in `run.py`.
+- Updated README port references and CORS example.
+
+[Files Updated]
+- run.py: set Flask dev server port to 5800.
+- README.md: update localhost URLs and CORS example to 5800.
+- AGENTS.md: refresh runtime note for dev server port.
+- changelog.txt: add entry for port update.
+
 2026-01-05 21:05:25 - Updated by Claude Code
 
 [Category: Bug Fix - Critical]
@@ -483,4 +507,3 @@ These fixes enable accurate file filtering, proper status tracking for long-runn
 - Verified has_nova_analysis filter with pending/failed batch jobs
 - Tested batch status polling with 300-video batch (accurate status updates)
 - Confirmed S3 verification prevents batch failures (re-uploads missing files)
-
