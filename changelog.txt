@@ -1,3 +1,28 @@
+2026-02-01 18:58:10 - Updated by Codex
+
+[Category: Infrastructure]
+Move Flask dev server to port 5501 to avoid Windows service conflicts on common 5xxx ports.
+
+[Category: Documentation]
+Update localhost URLs and the CORS origin example to match port 5501.
+
+[Purpose]
+Restore local server startup by selecting a non-conflicting port.
+
+[Impact]
+Local development now serves on `http://localhost:5501`; update bookmarks, scripts, and CORS settings accordingly.
+
+[Technical Notes]
+- Changed `app.run` port in `run.py`.
+- Updated README localhost URLs and CORS example.
+- Refreshed AGENTS runtime port guidance and timestamp.
+
+[Files Updated]
+- run.py: set Flask dev server port to 5501.
+- README.md: update localhost URLs and CORS example to 5501.
+- AGENTS.md: refresh runtime note and Last Updated timestamp for the dev server port.
+- changelog.txt: add entry for port update.
+
 2026-02-01 18:39:33 - Updated by Codex
 
 [Category: Infrastructure]

@@ -1,6 +1,6 @@
 # AGENTS
 
-Last Updated: 2026-02-01 18:39:33
+Last Updated: 2026-02-01 18:58:10
 
 Nova batch processing
 - Enable async batch mode by setting `BEDROCK_BATCH_ROLE_ARN`, `NOVA_BATCH_INPUT_PREFIX`, `NOVA_BATCH_OUTPUT_PREFIX` in `.env`.
@@ -52,7 +52,7 @@ Transcriptions UI
 - Transcription routes now live under `/transcriptions`; File Management opens transcript details in a modal with download actions.
 
 Runtime & operations
-- Flask dev server runs on port 5800; database is SQLite at `data/app.db`.
+- Flask dev server runs on port 5501; database is SQLite at `data/app.db`.
 - Local transcription requires FFmpeg available in PATH (GPU optional for speed).
 - Rekognition Person Tracking may fail with AccessDenied despite correct IAM permissions (AWS account-level restriction).
 - Batch proxy processing runs inside the Flask app context for background workers.

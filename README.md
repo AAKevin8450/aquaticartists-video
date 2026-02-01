@@ -73,7 +73,7 @@ A Flask-based web application for analyzing videos and images using **Amazon Rek
      {
        "AllowedHeaders": ["*"],
        "AllowedMethods": ["GET", "POST", "PUT"],
-       "AllowedOrigins": ["http://localhost:5800"],
+       "AllowedOrigins": ["http://localhost:5501"],
        "ExposeHeaders": ["ETag"]
      }
    ]
@@ -85,7 +85,7 @@ A Flask-based web application for analyzing videos and images using **Amazon Rek
    ```
 
 7. **Access the application**:
-   Open your browser to http://localhost:5800
+   Open your browser to http://localhost:5501
 
 ## Project Structure
 
