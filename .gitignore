@@ -154,6 +154,8 @@ Thumbs.db
 *.flv
 *.wmv
 *.webm
+planning/
+prompts/
 videos/
 uploads/
 output/
